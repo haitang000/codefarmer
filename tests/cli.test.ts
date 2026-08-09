@@ -5,12 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const CLI_ENTRY = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 const require = createRequire(import.meta.url);
 const TSX_CLI = path.join(path.dirname(require.resolve('tsx/package.json')), 'dist', 'cli.mjs');
-import { SessionStore } from '../src/core/session-store.js';
+import type { SessionStore } from '../src/core/session-store.js';
 const temporaryDirectories: string[] = [];
 
 interface CliResult {
@@ -77,7 +77,10 @@ async function runCli(
  * callback, using the same layout as `isolatedEnvironment` so that session
  * files written here are visible to the spawned CLI process.
  */
-async function withIsolatedEnv<T>(root: string, fn: () => Promise<T>): Promise<T> {
+async function withIsolatedEnv<T>(
+  root: string,
+  fn: (sessionStore: typeof SessionStore) => Promise<T>,
+): Promise<T> {
   const previous = { ...process.env };
   try {
     Object.assign(process.env, {
@@ -90,7 +93,12 @@ async function withIsolatedEnv<T>(root: string, fn: () => Promise<T>): Promise<T
       XDG_CACHE_HOME: path.join(root, 'xdg-cache'),
       XDG_STATE_HOME: path.join(root, 'xdg-state'),
     });
-    return await fn();
+    // env-paths 在模块加载时缓存 os.homedir()（macOS/Windows 分支），
+    // 必须重置模块缓存让 SessionStore 重新读取 stub 后的环境变量，
+    // 否则测试进程内写入的 session 会落到真实用户目录，与 CLI 子进程不一致。
+    vi.resetModules();
+    const reloaded = await import('../src/core/session-store.js');
+    return await fn(reloaded.SessionStore);
   } finally {
     for (const [name, value] of Object.entries(previous)) {
       if (value === undefined) Reflect.deleteProperty(process.env, name);
@@ -287,8 +295,8 @@ describe('CodeFarmer CLI', () => {
   it('lists auto-titled sessions and renames them through subcommands', async () => {
     const workspace = await temporaryDirectory();
     const environmentRoot = await temporaryDirectory();
-    const sessionId = await withIsolatedEnv(environmentRoot, async () => {
-      const store = await SessionStore.create(workspace);
+    const sessionId = await withIsolatedEnv(environmentRoot, async (SessionStoreRef) => {
+      const store = await SessionStoreRef.create(workspace);
       const session = await store.createSession('fake', 'test-model');
       await store.appendMessage(session, 'user', 'Investigate the flaky test');
       return session.id;
@@ -326,8 +334,8 @@ describe('CodeFarmer CLI', () => {
   it('rejects an empty session title with exit code 2', async () => {
     const workspace = await temporaryDirectory();
     const environmentRoot = await temporaryDirectory();
-    const sessionId = await withIsolatedEnv(environmentRoot, async () => {
-      const store = await SessionStore.create(workspace);
+    const sessionId = await withIsolatedEnv(environmentRoot, async (SessionStoreRef) => {
+      const store = await SessionStoreRef.create(workspace);
       const session = await store.createSession('fake', 'test-model');
       return session.id;
     });

@@ -2,7 +2,8 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import { ConflictError, PersistenceError } from '../infra/errors.js';
-import { ensureWorkspaceDirectories, getWorkspacePaths } from '../infra/paths.js';
+import { canonicalWorkspace, ensureWorkspaceDirectories, getWorkspacePaths } from '../infra/paths.js';
+import type { AppPaths } from '../infra/paths.js';
 import { readJsonFile, writeJsonAtomic } from '../infra/persistence.js';
 import { restoreMutation } from '../tools/apply-patch.js';
 import { ToolError } from '../tools/errors.js';
@@ -20,14 +21,21 @@ export class TransactionStore {
     private readonly directory: string,
   ) {}
 
-  public static async create(workspace: string): Promise<TransactionStore> {
-    const paths = await getWorkspacePaths(workspace);
+  public static async create(
+    workspace: string,
+    appPaths?: AppPaths,
+  ): Promise<TransactionStore> {
+    const paths = await getWorkspacePaths(workspace, appPaths);
     await ensureWorkspaceDirectories(paths);
     return new TransactionStore(paths.workspace, paths.transactions);
   }
 
   public async record(transaction: MutationTransaction): Promise<void> {
-    if (path.resolve(transaction.workspace) !== path.resolve(this.workspace)) {
+    // 事务路径与当前工作区都做 canonical 归一化再比较：
+    // macOS 的 /var、/tmp 是 symlink，realpath 后可能变为 /private/var、/private/tmp，
+    // 直接比较原始字符串在 macOS/Windows 上会误判"不属于当前工作区"。
+    const canonical = await canonicalWorkspace(transaction.workspace);
+    if (canonical !== this.workspace) {
       throw new PersistenceError('变更事务不属于当前工作区');
     }
     await writeJsonAtomic(transactionFile(this.directory, transaction), transaction);

@@ -3,6 +3,7 @@ import { readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import { getWorkspacePaths, ensureWorkspaceDirectories } from '../infra/paths.js';
+import type { AppPaths } from '../infra/paths.js';
 import { readJsonFile, writeJsonAtomic } from '../infra/persistence.js';
 import type { SessionMessage, SessionRecord, SessionStatus, TokenUsage } from '../types.js';
 
@@ -33,8 +34,11 @@ export class SessionStore {
     private readonly directory: string,
   ) {}
 
-  public static async create(workspace: string): Promise<SessionStore> {
-    const paths = await getWorkspacePaths(workspace);
+  public static async create(
+    workspace: string,
+    appPaths?: AppPaths,
+  ): Promise<SessionStore> {
+    const paths = await getWorkspacePaths(workspace, appPaths);
     await ensureWorkspaceDirectories(paths);
     return new SessionStore(paths.workspace, paths.sessions);
   }
