@@ -1,0 +1,76 @@
+{
+  "name": "codefarmer",
+  "version": "0.1.0",
+  "description": "A safe, interactive coding agent CLI powered by the OpenAI Responses API.",
+  "type": "module",
+  "bin": {
+    "codefarmer": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "docs",
+    "schemas",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "prepack": "pnpm check"
+  },
+  "keywords": [
+    "coding-agent",
+    "cli",
+    "openai",
+    "developer-tools"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@clack/prompts": "^0.11.0",
+    "chalk": "^5.4.1",
+    "commander": "^14.0.0",
+    "env-paths": "^3.0.0",
+    "execa": "^9.6.0",
+    "ignore": "^7.0.5",
+    "ink": "^7.1.1",
+    "openai": "^6.48.0",
+    "pino": "^9.7.0",
+    "react": "^19.2.7",
+    "wrap-ansi": "10.0.0",
+    "zod": "^4.0.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.31.0",
+    "@types/node": "^24.0.15",
+    "@types/react": "^19.2.17",
+    "eslint": "^9.31.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.6.2",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.38.0",
+    "vitest": "^3.2.4"
+  }
+}

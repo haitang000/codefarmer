@@ -1,0 +1,1555 @@
+import { access } from 'node:fs/promises';
+import { constants } from 'node:fs';
+
+import { execa } from 'execa';
+import wrapAnsi from 'wrap-ansi';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
+
+import type { ApprovalRequest } from '../core/approval.js';
+import type { AgentRuntime } from '../cli/runtime.js';
+import { detectGitAvailability } from '../tools/git-tools.js';
+import type { ProviderEvent, ReasoningEffort, TokenUsage } from '../types.js';
+import { MarkdownView } from './markdown.js';
+import { formatToolResult, type TuiInteractionBridge, type TuiRuntimeFactory } from './runtime.js';
+import {
+  parseTuiCommand,
+  TUI_HELP,
+  type ApprovalView,
+  type ToolView,
+  type TranscriptEntry,
+  type TuiCommand,
+  type TuiToolEvent,
+} from './types.js';
+
+const EMPTY_USAGE: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+// Reasoning effort levels offered by the /effort picker; the array order is
+// also the left/right navigation order. 'auto' 不是具体强度，而是让模型自行
+// 决定思考深度，排在最左侧作为默认入口。
+const EFFORT_CHOICES = ['auto', 'none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+// 每个思考深度有专属颜色，沿冷到暖的渐变递进（档位越高颜色越“热”），
+// 滑轨上一眼可辨当前所处位置；auto 用蓝色与具体档位区分。
+const EFFORT_COLORS: Record<ReasoningEffort, string> = {
+  auto: 'blue',
+  none: 'gray',
+  low: 'green',
+  medium: 'cyan',
+  high: 'yellow',
+  xhigh: 'magenta',
+  max: 'red',
+};
+// Slash commands that stay available while a turn is running; plain prompts
+// typed meanwhile are queued and run after the active turn instead of being
+// silently dropped.
+const READ_ONLY_COMMANDS: ReadonlySet<TuiCommand['kind']> = new Set([
+  'help',
+  'context',
+  'effort',
+  'plan',
+  'status',
+  'config',
+  'sessions',
+  'diff',
+]);
+
+export interface TuiAppProps {
+  initialRuntime: AgentRuntime;
+  runtimeFactory: TuiRuntimeFactory;
+  bridge: TuiInteractionBridge;
+  initialPlanMode?: boolean;
+  /** 初始是否展示思考过程（Ctrl+O 切换）。 */
+  initialShowThinking?: boolean;
+}
+
+interface PendingApproval {
+  request: ApprovalRequest;
+  resolve: (approved: boolean) => void;
+}
+
+function id(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+const TOOL_OUTPUT_PREVIEW_LIMIT = 160;
+
+// Tool outputs (file contents, command streams) can span thousands of lines;
+// the transcript only needs a compact single-line preview.
+function toolOutputPreview(output: string): string {
+  const flat = output.replace(/\s+/gu, ' ').trim();
+  if (flat.length <= TOOL_OUTPUT_PREVIEW_LIMIT) return flat;
+  return `${flat.slice(0, TOOL_OUTPUT_PREVIEW_LIMIT)}…`;
+}
+
+const TOOL_ARGUMENT_PREVIEW_LIMIT = 60;
+// Tool call arguments arrive as JSON; these keys carry the most meaningful
+// detail (usually the path or the command) for a compact one-line preview.
+const ARGUMENT_PREVIEW_KEYS = [
+  'path',
+  'file',
+  'cwd',
+  'executable',
+  'command',
+  'query',
+  'name',
+  'dir',
+  'target',
+  'sessionId',
+] as const;
+
+export function toolArgumentPreview(args: string | undefined): string | undefined {
+  if (args === undefined || args.length === 0) return undefined;
+  try {
+    const parsed = JSON.parse(args) as Record<string, unknown>;
+    for (const key of ARGUMENT_PREVIEW_KEYS) {
+      const value = parsed[key];
+      if (typeof value === 'string' && value.length > 0) {
+        return value.length > TOOL_ARGUMENT_PREVIEW_LIMIT
+          ? `${value.slice(0, TOOL_ARGUMENT_PREVIEW_LIMIT - 1)}…`
+          : value;
+      }
+    }
+  } catch {
+    // Not JSON; fall through to the raw clipped text below.
+  }
+  const flat = args.replace(/\s+/gu, ' ').trim();
+  if (flat.length <= TOOL_ARGUMENT_PREVIEW_LIMIT) return flat;
+  return `${flat.slice(0, TOOL_ARGUMENT_PREVIEW_LIMIT - 1)}…`;
+}
+
+export function formatDuration(ms: number): string {
+  return ms < 1000 ? `${String(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+}
+
+function runtimeEntries(runtime: AgentRuntime): TranscriptEntry[] {
+  const entries: TranscriptEntry[] = [];
+  for (const message of runtime.session?.messages ?? []) {
+    entries.push({
+      id: message.id,
+      kind: message.role === 'user' ? 'user' : 'assistant',
+      content: message.content,
+    });
+  }
+  for (const call of runtime.session?.toolCalls ?? []) {
+    const tool: ToolView = {
+      callId: call.callId,
+      name: call.toolName,
+      status: call.success ? 'succeeded' : 'failed',
+      ...(call.outputSummary === undefined ? {} : { output: call.outputSummary }),
+    };
+    entries.push({ id: `tool-${call.callId}`, kind: 'tool', content: call.toolName, tool });
+  }
+  return entries;
+}
+
+function welcomeEntries(): TranscriptEntry[] {
+  return [
+    {
+      id: id('system'),
+      kind: 'system',
+      content: `欢迎使用 CodeFarmer — 交互式编码代理。
+输入任务后按回车开始；/help 查看全部命令；Shift+Tab 切换计划模式（只读探索，不修改文件）；Ctrl+O 切换思考过程显示。`,
+    },
+  ];
+}
+
+function runtimeEntriesWithWelcome(runtime: AgentRuntime): TranscriptEntry[] {
+  const entries = runtimeEntries(runtime);
+  return entries.length === 0 ? welcomeEntries() : entries;
+}
+
+function displayError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function previewLine(text: string, maximumLength = 60): string {
+  const first = text.trimStart().split(/\r?\n/u, 1)[0] ?? '';
+  return first.length > maximumLength ? `${first.slice(0, maximumLength - 1)}…` : first;
+}
+
+// CodeFarmer's own loading animation — a farm day, not a chef's kitchen.
+// The rotating glyph is the sun rising over the fields ("日出而作"), and the
+// copy draws on the farm metaphor at the heart of this project's name: code
+// is the field, and each step is a chore in the harvest. Tool-call labels
+// (e.g. "Preparing read_file") still take over verbatim when present.
+const SPINNER_FRAMES = ['◐', '◓', '◑', '◒'];
+
+const THINKING_PHRASES = [
+  '正在播种',
+  '深耕上下文',
+  '灌溉数据流',
+  'Sowing',
+  '翻土重构',
+  '除草除 bug',
+  '施肥优化',
+  'Tilling',
+  '嫁接新特性',
+  '修建冗余枝叶',
+  '温室编译',
+  'Watering',
+  '开垦新模块',
+  '轮作调度任务',
+  '晾晒运行日志',
+  'Harvesting',
+  '收割答案',
+  '储粮归档',
+  'Mulching',
+  '望天等模型',
+];
+
+function Spinner({ label }: { label: string }): React.ReactElement {
+  const [frame, setFrame] = useState(0);
+  const [phraseIndex, setPhraseIndex] = useState(() =>
+    Math.floor(Math.random() * THINKING_PHRASES.length),
+  );
+  useEffect(() => {
+    const frameTimer = setInterval(() => {
+      setFrame((previous) => (previous + 1) % SPINNER_FRAMES.length);
+    }, 90);
+    const phraseTimer = setInterval(() => {
+      setPhraseIndex((previous) => (previous + 1) % THINKING_PHRASES.length);
+    }, 1500);
+    return () => {
+      clearInterval(frameTimer);
+      clearInterval(phraseTimer);
+    };
+  }, []);
+  const text = label === 'Thinking' ? (THINKING_PHRASES[phraseIndex] ?? '正在播种') : label;
+  return (
+    <Text color="yellow">
+      {SPINNER_FRAMES[frame] ?? '◐'} {text}…
+    </Text>
+  );
+}
+
+// File mutation tools report their scope as a "(+A -R)" suffix in their
+// output; surfacing it on the compact tool line keeps the change size visible
+// without adding another row to the transcript.
+export function mutationStats(output: string | undefined): string | undefined {
+  if (output === undefined) return undefined;
+  const match = /\(([+-]\d+(?: [+-]\d+)?)\)$/u.exec(output);
+  return match === null ? undefined : match[1];
+}
+
+// Tool calls render as compact single lines so long tool chains do not flood
+// the transcript; failures keep their full error output below the header.
+// Prefix (status glyph) and body (name + duration) are styled separately so
+// the glyph stays crisp even when the body is dimmed.
+function toolLine(tool: ToolView): {
+  prefix: string;
+  name: string;
+  detail: string | undefined;
+  stats: string | undefined;
+  color: 'green' | 'red' | 'yellow';
+} {
+  const duration = tool.durationMs === undefined ? '' : ` ${formatDuration(tool.durationMs)}`;
+  const detail = toolArgumentPreview(tool.arguments);
+  if (tool.status === 'failed') {
+    return { prefix: '✗', name: `${tool.name}${duration}`, detail, stats: undefined, color: 'red' };
+  }
+  if (tool.status === 'succeeded') {
+    return {
+      prefix: '✓',
+      name: `${tool.name}${duration}`,
+      detail,
+      stats: mutationStats(tool.output),
+      color: 'green',
+    };
+  }
+  return {
+    prefix: '▸',
+    name: `${tool.name}${duration}…`,
+    detail,
+    stats: undefined,
+    color: 'yellow',
+  };
+}
+
+function clipApprovalDetail(detail: string, width: number, maximumLines: number): string {
+  const lineWidth = Math.max(8, width - 6);
+  const lines: string[] = [];
+  for (const sourceLine of detail.slice(0, 3000).split(/\r?\n/u)) {
+    if (sourceLine.length === 0) {
+      lines.push('');
+    } else {
+      for (let offset = 0; offset < sourceLine.length; offset += lineWidth) {
+        lines.push(sourceLine.slice(offset, offset + lineWidth));
+      }
+    }
+  }
+  const truncated = detail.length > 3000 || lines.length > maximumLines;
+  const visible = lines.slice(0, maximumLines);
+  if (truncated) {
+    const marker = '...[truncated]';
+    if (visible.length === 0) return marker;
+    const last = visible.length - 1;
+    visible[last] =
+      `${visible[last]?.slice(0, Math.max(0, lineWidth - marker.length)) ?? ''}${marker}`;
+  }
+  return visible.join('\n');
+}
+
+// 思考过程以暗色块渲染在助手正文之前；行数估算与裁剪渲染共用同一份
+// 行数据，保证滚动裁剪位置与实际布局一致。
+function thinkingLines(reasoning: string, width: number): string[] {
+  return ['✦ Thinking', ...wrapToLines(reasoning, width)];
+}
+
+export function EntryView({
+  entry,
+  trailingGap = true,
+  showThinking = false,
+  width,
+}: {
+  entry: TranscriptEntry;
+  trailingGap?: boolean;
+  showThinking?: boolean;
+  /** 转录区宽度；思考块按与行数估算相同的宽度预换行。 */
+  width: number;
+}): React.ReactElement {
+  const marginBottom = trailingGap ? 1 : 0;
+  if (entry.kind === 'user') {
+    return (
+      <Box key={entry.id} flexDirection="column" marginBottom={marginBottom}>
+        <Text color="cyan" bold>
+          {'❯ you'}
+        </Text>
+        <Box paddingLeft={2}>
+          <Text wrap="wrap">{entry.content}</Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  if (entry.kind === 'assistant') {
+    return (
+      <Box key={entry.id} flexDirection="column" marginBottom={marginBottom}>
+        <Text color="green" bold>
+          {'◆ codefarmer'}
+        </Text>
+        {showThinking && entry.reasoning !== undefined && entry.reasoning.length > 0 ? (
+          <Box paddingLeft={2} flexDirection="column">
+            {thinkingLines(entry.reasoning, Math.max(1, width - 2)).map((line, index) => (
+              <Text
+                key={index}
+                dimColor={index > 0}
+                {...(index === 0 ? { color: 'magenta' as const } : {})}
+                wrap="truncate-end"
+              >
+                {line}
+              </Text>
+            ))}
+          </Box>
+        ) : null}
+        {entry.content.length === 0 ? (
+          <Text dimColor>{'  …'}</Text>
+        ) : (
+          // Markdown 块是多个并排的 Text 组件，row 布局会把它们拼接成同一文本流换行；
+          // column 布局让每个块独立成行，换行位置与源文本一致。
+          <Box paddingLeft={2} flexDirection="column">
+            <MarkdownView content={entry.content} />
+          </Box>
+        )}
+      </Box>
+    );
+  }
+
+  if (entry.kind === 'tool' && entry.tool !== undefined) {
+    const tool = entry.tool;
+    const line = toolLine(tool);
+    return (
+      <Box key={entry.id} flexDirection="column" marginBottom={marginBottom} paddingLeft={1}>
+        <Text>
+          <Text color={line.color} bold={tool.status === 'failed'}>
+            {line.prefix}
+          </Text>
+          <Text color={line.color} dimColor={tool.status === 'succeeded'}>
+            {` ${line.name}`}
+          </Text>
+          {line.detail === undefined ? null : <Text dimColor>{`  ${line.detail}`}</Text>}
+          {line.stats === undefined
+            ? null
+            : line.stats.split(' ').map((part, index) => (
+                <Text key={part} color={part.startsWith('+') ? 'green' : 'red'}>
+                  {`${index === 0 ? '  ' : ' '}${part}`}
+                </Text>
+              ))}
+        </Text>
+        {tool.error !== undefined ? (
+          <Box paddingLeft={2}>
+            <Text color="red" wrap="wrap">
+              {tool.error}
+            </Text>
+          </Box>
+        ) : null}
+      </Box>
+    );
+  }
+
+  return (
+    <Box key={entry.id} marginBottom={marginBottom}>
+      <Text color={entry.kind === 'error' ? 'red' : 'yellow'} wrap="wrap">
+        {entry.content}
+      </Text>
+    </Box>
+  );
+}
+
+// Line-based scrolling helpers. Scrolling by entry count made long messages
+// jump past the viewport in one step and left it half-empty; counting the
+// rendered lines instead keeps the viewport full and the steps predictable.
+//
+// Ink wraps Text with wrap-ansi using `{ trim: false, hard: true }`; the same
+// options here keep the estimates and the clipped rendering aligned with the
+// real layout: display-width aware (CJK characters count as two columns) and
+// breaking at spaces instead of splitting words mid-way.
+
+export function wrapToLines(text: string, width: number): string[] {
+  if (width <= 0) return [];
+  return wrapAnsi(text, width, { trim: false, hard: true }).split('\n');
+}
+
+export function assistantLines(content: string, width: number): string[] {
+  const lines: string[] = [];
+  let inCode = false;
+  for (const raw of content.split(/\r?\n/u)) {
+    const line = raw.replace(/\s+$/u, '');
+    if (inCode) {
+      if (line.trimStart().startsWith('```')) {
+        inCode = false;
+        lines.push('└────────');
+      } else {
+        lines.push(...wrapToLines(line, width));
+      }
+      continue;
+    }
+    if (/^\s*```/u.test(line)) {
+      inCode = true;
+      lines.push('┌────────');
+      continue;
+    }
+    if (line.length === 0) {
+      lines.push('');
+      continue;
+    }
+    lines.push(...wrapToLines(line, width));
+  }
+  if (inCode) lines.push('└────────');
+  return lines;
+}
+
+function estimateEntryLines(
+  entry: TranscriptEntry,
+  width: number,
+  trailingGap = true,
+  showThinking = false,
+): number {
+  const margin = trailingGap ? 1 : 0;
+  // user/assistant bodies render inside a paddingLeft={2} box, so their
+  // content area is two columns narrower than the transcript width; the
+  // clipped renderer uses the same narrowed width to keep wrap positions
+  // identical between the full view and the scrolled view.
+  const bodyWidth = Math.max(1, width - 2);
+  if (entry.kind === 'user') {
+    return margin + 1 + wrapToLines(entry.content, bodyWidth).length;
+  }
+  if (entry.kind === 'assistant') {
+    let body = entry.content.length === 0 ? 1 : assistantLines(entry.content, bodyWidth).length;
+    if (showThinking && entry.reasoning !== undefined && entry.reasoning.length > 0) {
+      body += thinkingLines(entry.reasoning, bodyWidth).length;
+    }
+    return margin + 1 + body;
+  }
+  if (entry.kind === 'tool' && entry.tool !== undefined) {
+    let lines = 1;
+    if (entry.tool.error !== undefined) {
+      lines += wrapToLines(entry.tool.error, Math.max(1, width - 3)).length;
+    }
+    return margin + lines;
+  }
+  return margin + wrapToLines(entry.content, width).length;
+}
+
+// Consecutive tool entries stack without blank lines between them; the helper
+// keeps the line counts for scrolling in sync with that layout.
+function entryTrailingGap(entries: TranscriptEntry[], index: number): boolean {
+  const entry = entries[index];
+  const next = entries[index + 1];
+  return !(entry?.kind === 'tool' && next?.kind === 'tool');
+}
+
+function estimateEntriesLines(
+  entries: TranscriptEntry[],
+  width: number,
+  showThinking = false,
+): number {
+  let total = 0;
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (entry === undefined) continue;
+    total += estimateEntryLines(entry, width, entryTrailingGap(entries, index), showThinking);
+  }
+  return total;
+}
+
+function ClippedEntry({
+  entry,
+  skip,
+  take,
+  width,
+  trailingGap = true,
+  showThinking = false,
+}: {
+  entry: TranscriptEntry;
+  skip: number;
+  take: number;
+  width: number;
+  trailingGap?: boolean;
+  showThinking?: boolean;
+}): React.ReactElement | null {
+  if (take <= 0) return null;
+
+  // Full render keeps markdown styling whenever the entry fits untouched.
+  if (skip === 0) {
+    const fullHeight = estimateEntryLines(entry, width, trailingGap, showThinking);
+    if (take >= fullHeight)
+      return <EntryView entry={entry} trailingGap={trailingGap} showThinking={showThinking} width={width} />;
+  }
+
+  let remainingSkip = skip;
+  let remainingTake = take;
+  const rows: React.ReactElement[] = [];
+  const takeLines = (
+    lines: string[],
+    render: (line: string, index: number) => React.ReactElement,
+  ): void => {
+    for (const line of lines) {
+      if (remainingSkip > 0) {
+        remainingSkip -= 1;
+        continue;
+      }
+      if (remainingTake <= 0) return;
+      rows.push(render(line, rows.length));
+      remainingTake -= 1;
+    }
+  };
+
+  if (entry.kind === 'user') {
+    takeLines(['❯ you'], (line, index) => (
+      <Text key={index} color="cyan" bold>
+        {line}
+      </Text>
+    ));
+    takeLines(wrapToLines(entry.content, Math.max(1, width - 2)), (line, index) => (
+      <Text key={index} wrap="truncate-end">
+        {`  ${line}`}
+      </Text>
+    ));
+  } else if (entry.kind === 'assistant') {
+    takeLines(['◆ codefarmer'], (line, index) => (
+      <Text key={index} color="green" bold>
+        {line}
+      </Text>
+    ));
+    if (showThinking && entry.reasoning !== undefined && entry.reasoning.length > 0) {
+      takeLines(thinkingLines(entry.reasoning, Math.max(1, width - 2)), (line, index) => (
+        <Text
+          key={`thinking-${String(index)}`}
+          dimColor={index > 0}
+          {...(index === 0 ? { color: 'magenta' as const } : {})}
+          wrap="truncate-end"
+        >
+          {`  ${line}`}
+        </Text>
+      ));
+    }
+    if (entry.content.length === 0) {
+      takeLines(['  …'], (line, index) => (
+        <Text key={index} dimColor>
+          {line}
+        </Text>
+      ));
+    } else {
+      takeLines(assistantLines(entry.content, Math.max(1, width - 2)), (line, index) => (
+        <Text key={index} wrap="truncate-end">
+          {`  ${line}`}
+        </Text>
+      ));
+    }
+  } else if (entry.kind === 'tool' && entry.tool !== undefined) {
+    const tool = entry.tool;
+    const line = toolLine(tool);
+    const stats = line.stats === undefined ? '' : `  ${line.stats}`;
+    takeLines(
+      [`${line.prefix} ${line.name}${line.detail === undefined ? '' : `  ${line.detail}`}${stats}`],
+      (text, index) => (
+        <Text key={index} color={line.color} dimColor={tool.status === 'succeeded'}>
+          {text}
+        </Text>
+      ),
+    );
+    if (tool.error !== undefined) {
+      takeLines(wrapToLines(tool.error, Math.max(1, width - 3)), (line, index) => (
+        <Text key={index} color="red" wrap="truncate-end">
+          {`  ${line}`}
+        </Text>
+      ));
+    }
+  } else {
+    takeLines(wrapToLines(entry.content, width), (line, index) => (
+      <Text key={index} color={entry.kind === 'error' ? 'red' : 'yellow'} wrap="truncate-end">
+        {line}
+      </Text>
+    ));
+  }
+
+  if (rows.length === 0) return null;
+  return (
+    <Box
+      flexDirection="column"
+      marginBottom={trailingGap ? 1 : 0}
+      paddingLeft={entry.kind === 'tool' ? 1 : 0}
+    >
+      {rows}
+    </Box>
+  );
+}
+
+function ApprovalModal({
+  approval,
+  columns,
+  rows,
+}: {
+  approval: ApprovalView;
+  columns: number;
+  rows: number;
+}): React.ReactElement {
+  const width = Math.max(1, Math.min(96, columns - 4));
+  const maximumLines = Math.max(2, rows - 11);
+  const clipped = clipApprovalDetail(approval.request.detail, width, maximumLines);
+  return (
+    <Box
+      position="absolute"
+      top={2}
+      left={2}
+      width={width}
+      maxHeight={Math.max(6, rows - 4)}
+      overflow="hidden"
+      flexDirection="column"
+      borderStyle="double"
+      borderColor="yellow"
+      paddingX={2}
+      paddingY={1}
+    >
+      <Text color="yellow" bold>
+        Approval required
+      </Text>
+      <Text bold wrap="wrap">
+        {approval.request.title}
+      </Text>
+      <Text dimColor wrap="wrap">
+        {clipped}
+      </Text>
+      <Box marginTop={1}>
+        <Text color="green">[y] allow </Text>
+        <Text color="red">[Enter/n/Esc] deny</Text>
+      </Box>
+    </Box>
+  );
+}
+
+// Interactive picker summoned by a bare `/effort` (no argument): the user
+// adjusts the effort level with ←/→, confirms with Enter, and closes with
+// Esc (Ctrl+C works too) without changing anything.
+//
+// Claude Code 式横向滑轨：渲染在输入框上方的文档流中，选项标签排成一行，
+// ▲ 游标精确落在选中项正下方，不悬浮遮挡内容，也不会跑出可视区域。
+export function EffortPicker({
+  current,
+  selected,
+}: {
+  current: ReasoningEffort;
+  selected: number;
+}): React.ReactElement {
+  const gap = '   ';
+  // 选项名均为 ASCII，字符串长度即显示宽度；累加前序选项宽度算出 ▲ 的
+  // 前导缩进，使游标对准选中标签的中点。
+  let markerPad = 0;
+  for (let index = 0; index < selected; index += 1) {
+    markerPad += (EFFORT_CHOICES[index] ?? '').length + gap.length;
+  }
+  const chosen = EFFORT_CHOICES[selected] ?? 'none';
+  markerPad += Math.floor(chosen.length / 2);
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      <Box flexDirection="row">
+        <Text color="cyan" bold>
+          思考深度
+        </Text>
+        <Text dimColor>
+          （当前 <Text color={EFFORT_COLORS[current]}>{current}</Text>）
+        </Text>
+      </Box>
+      <Box flexDirection="row">
+        {EFFORT_CHOICES.map((choice, index) => (
+          <Text
+            key={choice}
+            color={EFFORT_COLORS[choice]}
+            dimColor={index !== selected}
+            bold={index === selected}
+          >
+            {choice + (index < EFFORT_CHOICES.length - 1 ? gap : '')}
+          </Text>
+        ))}
+      </Box>
+      <Text color={EFFORT_COLORS[chosen]}>{' '.repeat(markerPad)}▲</Text>
+      <Text dimColor>←/→ 调整 · Enter 确认 · Esc 取消</Text>
+    </Box>
+  );
+}
+
+export function TuiApp({
+  initialRuntime,
+  runtimeFactory,
+  bridge,
+  initialPlanMode = false,
+  initialShowThinking = false,
+}: TuiAppProps): React.ReactElement {
+  const { exit } = useApp();
+  const { columns, rows } = useWindowSize();
+  const [runtime, setRuntime] = useState(initialRuntime);
+  const runtimeRef = useRef(initialRuntime);
+  const [entries, setEntries] = useState<TranscriptEntry[]>(() =>
+    runtimeEntriesWithWelcome(initialRuntime),
+  );
+  const [draft, setDraft] = useState('');
+  const [cursor, setCursor] = useState(0);
+  // Refs are the source of truth for the input buffer: Ink can deliver
+  // several key events between renders, and state captured in the useInput
+  // closure would be stale, dropping characters when typing fast.
+  const draftRef = useRef('');
+  const cursorRef = useRef(0);
+  const applyDraft = useCallback((value: string, position: number): void => {
+    draftRef.current = value;
+    cursorRef.current = position;
+    setDraft(value);
+    setCursor(position);
+  }, []);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState('Ready');
+  const [planMode, setPlanMode] = useState(initialPlanMode);
+  // Ctrl+O 切换：是否在助手消息上方展示推理摘要（思考过程）。
+  const [showThinking, setShowThinking] = useState(initialShowThinking);
+  const [usage, setUsage] = useState<TokenUsage>(initialRuntime.session?.usage ?? EMPTY_USAGE);
+  const [approval, setApproval] = useState<ApprovalView | null>(null);
+  // Effort picker state: null when closed, otherwise the index of the
+  // highlighted effort level. Opened by a bare `/effort`, adjusted with
+  // ←/→, confirmed with Enter, dismissed with Esc (or Ctrl+C).
+  const [effortPicker, setEffortPicker] = useState<number | null>(null);
+  const controllerRef = useRef<AbortController | undefined>(undefined);
+  const approvalQueueRef = useRef<PendingApproval[]>([]);
+  const currentApprovalRef = useRef<PendingApproval | undefined>(undefined);
+  const historyRef = useRef<string[]>([]);
+  const historyIndexRef = useRef(-1);
+  // Transcript scroll position in rendered lines from the top; -1 = pinned to the latest message.
+  const [topLine, setTopLine] = useState(-1);
+  // Stream deltas arrive many times per second; batching them into one state
+  // update per interval keeps Ink from re-rendering on every single delta.
+  // Text deltas and reasoning (thinking) deltas share the same buffer flush.
+  const deltaBufferRef = useRef('');
+  const reasoningBufferRef = useRef('');
+  const deltaFlushTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const flushDeltaBuffer = useCallback((assistantId: string): void => {
+    if (deltaFlushTimerRef.current !== undefined) {
+      clearInterval(deltaFlushTimerRef.current);
+      deltaFlushTimerRef.current = undefined;
+    }
+    const buffered = deltaBufferRef.current;
+    const reasoning = reasoningBufferRef.current;
+    if (buffered.length === 0 && reasoning.length === 0) return;
+    deltaBufferRef.current = '';
+    reasoningBufferRef.current = '';
+    setEntries((previous) =>
+      previous.map((entry) =>
+        entry.id === assistantId
+          ? {
+              ...entry,
+              ...(buffered.length === 0 ? {} : { content: `${entry.content}${buffered}` }),
+              ...(reasoning.length === 0
+                ? {}
+                : { reasoning: `${entry.reasoning ?? ''}${reasoning}` }),
+            }
+          : entry,
+      ),
+    );
+  }, []);
+
+  const pumpApproval = useCallback(() => {
+    if (currentApprovalRef.current !== undefined) return;
+    const next = approvalQueueRef.current.shift();
+    if (next === undefined) return;
+    currentApprovalRef.current = next;
+    setApproval({ request: next.request });
+  }, []);
+
+  const requestApproval = useCallback(
+    (request: ApprovalRequest): Promise<boolean> =>
+      new Promise((resolve) => {
+        approvalQueueRef.current.push({ request, resolve });
+        pumpApproval();
+      }),
+    [pumpApproval],
+  );
+
+  const resolveApproval = useCallback(
+    (approved: boolean): void => {
+      const current = currentApprovalRef.current;
+      if (current === undefined) return;
+      currentApprovalRef.current = undefined;
+      setApproval(null);
+      current.resolve(approved);
+      pumpApproval();
+    },
+    [pumpApproval],
+  );
+
+  useEffect(() => {
+    bridge.setApprovalHandler(requestApproval);
+    return () => {
+      bridge.setApprovalHandler(undefined);
+      const current = currentApprovalRef.current;
+      currentApprovalRef.current = undefined;
+      current?.resolve(false);
+      for (const pending of approvalQueueRef.current.splice(0)) pending.resolve(false);
+    };
+  }, [bridge, requestApproval]);
+
+  const handleToolEvent = useCallback((event: TuiToolEvent): void => {
+    if (event.type === 'tool_start' && event.call !== undefined) {
+      const call = event.call;
+      const tool: ToolView = {
+        callId: call.callId,
+        name: call.name,
+        status: 'running',
+        arguments: call.arguments,
+      };
+      setEntries((previous) => {
+        const index = previous.findIndex((entry) => entry.tool?.callId === call.callId);
+        if (index < 0) {
+          return [
+            ...previous,
+            { id: `tool-${call.callId}`, kind: 'tool', content: call.name, tool },
+          ];
+        }
+        const next = [...previous];
+        const existing = next[index];
+        if (existing === undefined) return previous;
+        next[index] = { ...existing, tool, content: call.name };
+        return next;
+      });
+      setStatus(`Running ${call.name}`);
+      return;
+    }
+    if (event.type === 'tool_result' && event.call !== undefined && event.result !== undefined) {
+      const callId = event.call.callId;
+      const result = event.result;
+      setEntries((previous) => {
+        const index = previous.findIndex((entry) => entry.tool?.callId === callId);
+        const old = index < 0 ? undefined : previous[index]?.tool;
+        const tool: ToolView = {
+          callId,
+          name: event.call?.name ?? result.toolName,
+          status: result.success ? 'succeeded' : 'failed',
+          ...(old?.arguments === undefined ? {} : { arguments: old.arguments }),
+          ...(result.success
+            ? { output: toolOutputPreview(formatToolResult(result)) }
+            : { error: formatToolResult(result) }),
+          ...(result.durationMs === undefined ? {} : { durationMs: result.durationMs }),
+        };
+        if (index < 0) {
+          return [...previous, { id: `tool-${callId}`, kind: 'tool', content: tool.name, tool }];
+        }
+        const next = [...previous];
+        const existing = next[index];
+        if (existing === undefined) return previous;
+        next[index] = { ...existing, tool, content: tool.name };
+        return next;
+      });
+      setStatus(result.success ? 'Tool completed' : 'Tool failed');
+    }
+  }, []);
+
+  useEffect(() => {
+    bridge.setToolEventHandler(handleToolEvent);
+    return () => bridge.setToolEventHandler(undefined);
+  }, [bridge, handleToolEvent]);
+
+  const appendSystem = useCallback((content: string, kind: 'system' | 'error' = 'system'): void => {
+    setEntries((previous) => [...previous, { id: id(kind), kind, content }]);
+  }, []);
+
+  const togglePlanMode = useCallback((): void => {
+    const next = !planMode;
+    setPlanMode(next);
+    appendSystem(next ? 'Plan mode enabled: read-only research, no edits.' : 'Plan mode disabled.');
+  }, [appendSystem, planMode]);
+
+  const swapRuntime = useCallback((next: AgentRuntime): void => {
+    runtimeRef.current = next;
+    setRuntime(next);
+    setEntries(runtimeEntries(next));
+    setUsage(next.session?.usage ?? EMPTY_USAGE);
+    setStatus('Ready');
+    setTopLine(-1);
+  }, []);
+
+  const runPrompt = useCallback(
+    async (prompt: string): Promise<void> => {
+      if (busy) return;
+      const assistantId = id('assistant');
+      setEntries((previous) => [
+        ...previous,
+        { id: id('user'), kind: 'user', content: prompt },
+        { id: assistantId, kind: 'assistant', content: '' },
+      ]);
+      setBusy(true);
+      setStatus('Thinking');
+      const controller = new AbortController();
+      controllerRef.current = controller;
+      const activeRuntime = runtimeRef.current;
+      try {
+        const result = await activeRuntime.runner.run(prompt, {
+          ...(activeRuntime.session === undefined ? {} : { session: activeRuntime.session }),
+          history: true,
+          signal: controller.signal,
+          ...(planMode ? { plan: true } : {}),
+          onEvent: (event: ProviderEvent) => {
+            if (event.type === 'text_delta') {
+              deltaBufferRef.current += event.delta;
+              deltaFlushTimerRef.current ??= setInterval(() => flushDeltaBuffer(assistantId), 60);
+            } else if (event.type === 'reasoning_delta') {
+              reasoningBufferRef.current += event.delta;
+              deltaFlushTimerRef.current ??= setInterval(() => flushDeltaBuffer(assistantId), 60);
+            } else if (event.type === 'usage') {
+              setUsage(event.usage);
+            } else if (event.type === 'tool_call') {
+              const call = event.call;
+              const tool: ToolView = {
+                callId: call.callId,
+                name: call.name,
+                status: 'requested',
+                arguments: call.arguments,
+              };
+              setEntries((previous) =>
+                previous.some((entry) => entry.tool?.callId === call.callId)
+                  ? previous
+                  : [
+                      ...previous,
+                      {
+                        id: `tool-${call.callId}`,
+                        kind: 'tool',
+                        content: call.name,
+                        tool,
+                      },
+                    ],
+              );
+              setStatus(`Preparing ${call.name}`);
+            }
+          },
+        });
+        flushDeltaBuffer(assistantId);
+        setUsage(result.usage);
+        setEntries((previous) =>
+          previous.map((entry) =>
+            entry.id === assistantId && result.message.length > 0
+              ? { ...entry, content: result.message }
+              : entry,
+          ),
+        );
+        setStatus(result.status === 'cancelled' ? 'Cancelled' : 'Ready');
+      } catch (error) {
+        flushDeltaBuffer(assistantId);
+        appendSystem(displayError(error), 'error');
+        setStatus('Error');
+      } finally {
+        if (deltaFlushTimerRef.current !== undefined) {
+          clearInterval(deltaFlushTimerRef.current);
+          deltaFlushTimerRef.current = undefined;
+        }
+        controllerRef.current = undefined;
+        setBusy(false);
+      }
+    },
+    [appendSystem, busy, flushDeltaBuffer, planMode],
+  );
+
+  const runCommand = useCallback(
+    async (command: TuiCommand): Promise<void> => {
+      if (command.kind === 'prompt') {
+        if (command.value.length > 0) await runPrompt(command.value);
+        return;
+      }
+      if (command.kind === 'quit') {
+        controllerRef.current?.abort();
+        exit();
+        return;
+      }
+      if (command.kind === 'cancel') {
+        if (controllerRef.current !== undefined) {
+          controllerRef.current.abort();
+          setStatus('Cancelling');
+        } else {
+          appendSystem('No active turn.');
+        }
+        return;
+      }
+      // 只读命令在思考期间也可用；输入框不再被占用。
+      if (busy && !READ_ONLY_COMMANDS.has(command.kind)) return;
+      const commandName = command.kind === 'delete-session' ? 'delete' : command.kind;
+      setEntries((previous) => [
+        ...previous,
+        { id: id('command'), kind: 'user', content: `/${commandName}` },
+      ]);
+      setBusy(true);
+      try {
+        if (command.kind === 'help') {
+          appendSystem(TUI_HELP);
+        } else if (command.kind === 'new') {
+          const next = await runtimeFactory();
+          swapRuntime(next);
+          appendSystem(`New session ${next.session?.id ?? ''}`);
+        } else if (command.kind === 'resume') {
+          if (command.id.length === 0) appendSystem('Usage: /resume <session-id>', 'error');
+          else {
+            const next = await runtimeFactory(command.id);
+            swapRuntime(next);
+            appendSystem(`Resumed session ${next.session?.id ?? command.id}`);
+          }
+        } else if (command.kind === 'status') {
+          const active = runtimeRef.current;
+          const availability = await detectGitAvailability();
+          let gitLine = 'not installed (optional; Git tools disabled)';
+          if (availability.available) {
+            const git = await execa(
+              'git',
+              ['-c', 'core.fsmonitor=false', 'status', '--short', '--branch', '--', '.'],
+              {
+                cwd: active.workspace,
+                reject: false,
+                env: { GIT_OPTIONAL_LOCKS: '0' },
+              },
+            );
+            gitLine = git.exitCode === 0 ? git.stdout || 'clean' : 'not a Git workspace';
+          }
+          appendSystem(
+            [
+              `Workspace  ${active.workspace}`,
+              `Session    ${active.session?.id ?? 'none'}`,
+              `Model      ${active.config.model} (${active.config.reasoning})`,
+              `Approval   ${active.config.approval}`,
+              `Base URL   ${active.config.baseURL}`,
+              `Git        ${gitLine}`,
+            ].join('\n'),
+          );
+        } else if (command.kind === 'context') {
+          const active = runtimeRef.current;
+          const session = active.session;
+          const lines: string[] = [
+            `Session    ${session?.id ?? 'none'}`,
+            `Model      ${active.config.model} (${active.config.reasoning})`,
+            `Messages   ${String(session?.messages.length ?? 0)} | Tool calls ${String(session?.toolCalls.length ?? 0)}`,
+            `Tokens     in ${String(usage.inputTokens)} / out ${String(usage.outputTokens)} / total ${String(usage.totalTokens)}`,
+          ];
+          if (usage.cachedInputTokens !== undefined) {
+            lines.push(`           cached ${String(usage.cachedInputTokens)}`);
+          }
+          if (usage.reasoningTokens !== undefined) {
+            lines.push(`           reasoning ${String(usage.reasoningTokens)}`);
+          }
+          const messages = session?.messages ?? [];
+          if (messages.length === 0) {
+            lines.push('Context    empty');
+          } else {
+            lines.push('Context');
+            messages.forEach((message, index) => {
+              lines.push(
+                `  ${String(index + 1).padStart(2, ' ')}. ${message.role.padEnd(9, ' ')} ${String(message.content.length).padStart(6, ' ')} chars  ${previewLine(message.content)}`,
+              );
+            });
+          }
+          appendSystem(lines.join('\n'));
+        } else if (command.kind === 'effort') {
+          // Open the interactive picker; the selected level is applied on
+          // Enter (see the effortPicker branch in useInput).
+          const index = EFFORT_CHOICES.indexOf(runtimeRef.current.config.reasoning);
+          setEffortPicker(index < 0 ? 0 : index);
+        } else if (command.kind === 'plan') {
+          if (command.value.length === 0) {
+            togglePlanMode();
+          } else if (command.value === 'on') {
+            setPlanMode(true);
+            appendSystem('Plan mode enabled: read-only research, no edits.');
+          } else if (command.value === 'off') {
+            setPlanMode(false);
+            appendSystem('Plan mode disabled.');
+          } else {
+            appendSystem(`Invalid plan mode "${command.value}". Choices: on | off`, 'error');
+          }
+        } else if (command.kind === 'config') {
+          appendSystem(JSON.stringify(runtimeRef.current.config, null, 2));
+        } else if (command.kind === 'doctor') {
+          const active = runtimeRef.current;
+          const checks: string[] = [];
+          const major = Number(process.versions.node.split('.')[0]);
+          checks.push(`${major >= 22 ? 'OK ' : 'ERR'} Node.js ${process.version}`);
+          try {
+            await access(active.workspace, constants.R_OK | constants.W_OK);
+            checks.push(`OK  Workspace ${active.workspace}`);
+          } catch (error) {
+            checks.push(`ERR Workspace ${displayError(error)}`);
+          }
+          try {
+            const git = await detectGitAvailability();
+            checks.push(
+              git.available
+                ? `OK  Git ${git.version ?? ''} (optional)`
+                : 'WARN Git is not available on PATH (optional; Git tools are disabled)',
+            );
+          } catch {
+            checks.push('WARN Git is not available on PATH (optional; Git tools are disabled)');
+          }
+          checks.push(
+            `OK  OPENAI_API_KEY ${
+              process.env.OPENAI_API_KEY
+                ? 'is set via environment'
+                : 'is resolved from local credentials'
+            }`,
+          );
+          checks.push(`INFO Model ${active.config.model}`);
+          checks.push(`INFO Base URL ${active.config.baseURL}`);
+          appendSystem(checks.join('\n'));
+        } else if (command.kind === 'sessions') {
+          const sessions = await runtimeRef.current.sessions.list();
+          appendSystem(
+            sessions.length === 0
+              ? 'No saved sessions.'
+              : sessions
+                  .slice(0, 12)
+                  .map(
+                    (session) =>
+                      `${session.id}  ${session.status}  ${session.title ?? '(untitled)'}  ${session.updatedAt}  ${String(session.messages.length)} messages`,
+                  )
+                  .join('\n'),
+          );
+        } else if (command.kind === 'delete-session') {
+          if (command.id.length === 0) {
+            appendSystem('Usage: /delete <session-id>', 'error');
+          } else if (command.id === runtimeRef.current.session?.id) {
+            appendSystem('The active session cannot be deleted.', 'error');
+          } else {
+            await runtimeRef.current.sessions.delete(command.id);
+            appendSystem(`Deleted session ${command.id}`);
+          }
+        } else if (command.kind === 'diff') {
+          if (!(await detectGitAvailability()).available) {
+            appendSystem(
+              'Git is not installed or not on PATH; /diff is unavailable (Git is optional).',
+            );
+          } else {
+            const result = await execa(
+              'git',
+              [
+                '--no-pager',
+                '-c',
+                'core.fsmonitor=false',
+                'diff',
+                '--no-ext-diff',
+                '--no-textconv',
+                '--',
+                '.',
+              ],
+              {
+                cwd: runtimeRef.current.workspace,
+                reject: false,
+                env: { GIT_EXTERNAL_DIFF: '', GIT_OPTIONAL_LOCKS: '0', GIT_PAGER: 'cat' },
+              },
+            );
+            if (result.exitCode !== 0) {
+              appendSystem(result.stderr.trim() || 'Unable to show the Git diff.');
+            } else {
+              appendSystem(result.stdout || '(no diff)');
+            }
+          }
+        } else if (command.kind === 'undo') {
+          const transaction = await runtimeRef.current.transactions.undoLatest(
+            runtimeRef.current.session?.id,
+          );
+          appendSystem(`Undid ${transaction.operation}: ${transaction.path}`);
+        } else {
+          appendSystem(`Unknown command: /${command.name}. Try /help.`, 'error');
+        }
+      } catch (error) {
+        appendSystem(displayError(error), 'error');
+      } finally {
+        setBusy(false);
+        setStatus('Ready');
+      }
+    },
+    [appendSystem, busy, exit, runPrompt, runtimeFactory, swapRuntime, togglePlanMode, usage],
+  );
+
+  const submitDraft = useCallback((): void => {
+    const value = draftRef.current.trim();
+    if (value.length === 0 || busy) return;
+    historyRef.current = [...historyRef.current.filter((entry) => entry !== value), value].slice(
+      -50,
+    );
+    historyIndexRef.current = -1;
+    applyDraft('', 0);
+    void runCommand(parseTuiCommand(value));
+  }, [applyDraft, busy, runCommand]);
+
+  const contentWidth = Math.max(10, columns - 2);
+  const visibleHeight = Math.max(4, rows - 11);
+
+  useInput(
+    (input, key) => {
+      // Mouse reports (SGR sequences like `ESC[<0;x;yM`) reach the handler
+      // with the escape prefix stripped; guard them before any key handling
+      // so a scroll can never turn into an accidental cancel or typed text.
+      if (input.startsWith('[<')) return;
+      if (approval !== null) {
+        if (key.ctrl && input.toLowerCase() === 'c') {
+          resolveApproval(false);
+          controllerRef.current?.abort();
+          setStatus('Cancelling');
+        } else if (input.toLowerCase() === 'y') {
+          resolveApproval(true);
+        } else if (key.return || key.escape || input.toLowerCase() === 'n') {
+          resolveApproval(false);
+        }
+        return;
+      }
+      if (effortPicker !== null) {
+        if (key.escape || (key.ctrl && input.toLowerCase() === 'c')) {
+          setEffortPicker(null);
+        } else if (key.return) {
+          const choice = EFFORT_CHOICES[effortPicker];
+          if (choice !== undefined) {
+            // runner 每轮读取同一配置对象，原地更新即可在下一轮生效。
+            const active = runtimeRef.current;
+            active.config.reasoning = choice;
+            setRuntime({ ...active });
+            appendSystem(`Reasoning effort set to ${choice} for this session.`);
+          }
+          setEffortPicker(null);
+        } else if (key.leftArrow) {
+          setEffortPicker((selected) =>
+            selected === null
+              ? selected
+              : (selected - 1 + EFFORT_CHOICES.length) % EFFORT_CHOICES.length,
+          );
+        } else if (key.rightArrow) {
+          setEffortPicker((selected) =>
+            selected === null ? selected : (selected + 1) % EFFORT_CHOICES.length,
+          );
+        }
+        return;
+      }
+      if (key.ctrl && input.toLowerCase() === 'c') {
+        if (controllerRef.current !== undefined) {
+          controllerRef.current.abort();
+          setStatus('Cancelling');
+        } else {
+          exit();
+        }
+        return;
+      }
+      if (key.ctrl && input.toLowerCase() === 'd') {
+        exit();
+        return;
+      }
+      // Ctrl+O: 切换思考过程（推理摘要）的显示/隐藏。
+      if (key.ctrl && input.toLowerCase() === 'o') {
+        setShowThinking((previous) => !previous);
+        return;
+      }
+      // Shift+Tab: Ink's parseKeypress resolves the reverse-tab escape
+      // sequence (\x1b[Z) into key.tab + key.shift and clears the raw input
+      // (non-alphanumeric keys arrive as ''), so the sequence must be matched
+      // on the Key object, not on `input`.
+      if (key.tab && key.shift) {
+        togglePlanMode();
+        return;
+      }
+      if (key.escape) {
+        // ESC 只退出滚动视图或清空输入框，绝不中止正在运行的任务：
+        // 运行期间按 ESC（例如想清空输入，或中文输入法关闭候选框时
+        // 透传的 ESC）不应让长任务"自动中断"；取消任务请使用
+        // Ctrl+C 或 /cancel。
+        if (topLine >= 0) {
+          setTopLine(-1);
+        } else if (draftRef.current.length > 0) {
+          applyDraft('', 0);
+        }
+        return;
+      }
+      if (key.pageUp) {
+        setTopLine((previous) => {
+          const max = Math.max(
+            0,
+            estimateEntriesLines(entries, contentWidth, showThinking) - visibleHeight,
+          );
+          const current = previous < 0 ? max : previous;
+          return Math.max(0, current - Math.max(1, visibleHeight - 2));
+        });
+        return;
+      }
+      if (key.pageDown) {
+        setTopLine((previous) => {
+          if (previous <= 0) return -1;
+          const next = previous - Math.max(1, visibleHeight - 2);
+          return next <= 0 ? -1 : next;
+        });
+        return;
+      }
+      if (key.return) {
+        submitDraft();
+        return;
+      }
+      if (key.backspace) {
+        const current = draftRef.current;
+        const position = cursorRef.current;
+        if (position > 0) {
+          applyDraft(`${current.slice(0, position - 1)}${current.slice(position)}`, position - 1);
+        }
+        return;
+      }
+      if (key.delete) {
+        const current = draftRef.current;
+        const position = cursorRef.current;
+        if (position < current.length) {
+          applyDraft(`${current.slice(0, position)}${current.slice(position + 1)}`, position);
+        }
+        return;
+      }
+      if (key.leftArrow) {
+        applyDraft(draftRef.current, Math.max(0, cursorRef.current - 1));
+        return;
+      }
+      if (key.rightArrow) {
+        applyDraft(draftRef.current, Math.min(draftRef.current.length, cursorRef.current + 1));
+        return;
+      }
+      if (key.home || (key.ctrl && input.toLowerCase() === 'a')) {
+        applyDraft(draftRef.current, 0);
+        return;
+      }
+      if (key.end || (key.ctrl && input.toLowerCase() === 'e')) {
+        applyDraft(draftRef.current, draftRef.current.length);
+        return;
+      }
+      if (key.upArrow && draftRef.current.length === 0 && historyRef.current.length > 0) {
+        const next = Math.min(historyRef.current.length - 1, historyIndexRef.current + 1);
+        historyIndexRef.current = next;
+        const value = historyRef.current[historyRef.current.length - 1 - next] ?? '';
+        applyDraft(value, value.length);
+        return;
+      }
+      if (key.downArrow && historyIndexRef.current >= 0) {
+        const next = historyIndexRef.current - 1;
+        historyIndexRef.current = next;
+        const value =
+          next < 0 ? '' : (historyRef.current[historyRef.current.length - 1 - next] ?? '');
+        applyDraft(value, value.length);
+        return;
+      }
+      if (input.length > 0 && !key.ctrl && !key.meta) {
+        const inserted = input.replace(/[\r\n]+/gu, ' ');
+        const current = draftRef.current;
+        const position = cursorRef.current;
+        applyDraft(
+          `${current.slice(0, position)}${inserted}${current.slice(position)}`,
+          position + inserted.length,
+        );
+      }
+    },
+    { isActive: true },
+  );
+
+  useEffect(
+    () => () => {
+      controllerRef.current?.abort();
+      if (deltaFlushTimerRef.current !== undefined) {
+        clearInterval(deltaFlushTimerRef.current);
+        deltaFlushTimerRef.current = undefined;
+      }
+    },
+    [],
+  );
+
+  // Line estimates are recomputed on every render; memoising per entry keeps
+  // long transcripts from re-wrapping thousands of characters on each update.
+  const lineEstimatesRef = useRef(
+    new Map<
+      string,
+      { entry: TranscriptEntry; width: number; gap: boolean; thinking: boolean; lines: number }
+    >(),
+  );
+  const estimateEntryLinesCached = useCallback(
+    (entry: TranscriptEntry, width: number, trailingGap: boolean, thinking: boolean): number => {
+      const cached = lineEstimatesRef.current.get(entry.id);
+      if (
+        cached?.entry === entry &&
+        cached.width === width &&
+        cached.gap === trailingGap &&
+        cached.thinking === thinking
+      ) {
+        return cached.lines;
+      }
+      const lines = estimateEntryLines(entry, width, trailingGap, thinking);
+      lineEstimatesRef.current.set(entry.id, { entry, width, gap: trailingGap, thinking, lines });
+      return lines;
+    },
+    [],
+  );
+
+  // The wheel listener mounts once, so it reads the latest scroll bounds from a ref.
+  const scrollBoundsRef = useRef({ maximumTop: 0, visibleHeight: 0 });
+
+  // Enable SGR mouse tracking so the wheel can scroll the transcript. Wheel
+  // events arrive as `ESC[<64/65;...M` sequences on raw stdin; we intercept
+  // them on our own listener before they are treated as typing.
+  useEffect(() => {
+    const { stdin, stdout } = process;
+    if (!stdin.isTTY || !stdout.isTTY) return;
+    try {
+      stdout.write('\u001B[?1000h\u001B[?1006h');
+    } catch {
+      return;
+    }
+    const onData = (chunk: Buffer): void => {
+      const text = chunk.toString('utf8');
+      const wheelUp = text.includes('\u001B[<64;');
+      const wheelDown = text.includes('\u001B[<65;');
+      if (wheelUp || wheelDown) {
+        setTopLine((previous) => {
+          const { maximumTop } = scrollBoundsRef.current;
+          const current = previous < 0 ? maximumTop : previous;
+          const next = current + (wheelUp ? -3 : 3);
+          if (next >= maximumTop) return -1;
+          return Math.max(0, next);
+        });
+      }
+    };
+    stdin.on('data', onData);
+    return () => {
+      stdin.off('data', onData);
+      try {
+        stdout.write('\u001B[?1000l\u001B[?1006l');
+      } catch {
+        // The terminal may already be gone; nothing to restore.
+      }
+    };
+  }, []);
+
+  const totalLines = entries.reduce(
+    (sum, entry, index) =>
+      sum +
+      estimateEntryLinesCached(entry, contentWidth, entryTrailingGap(entries, index), showThinking),
+    0,
+  );
+  const maximumTop = Math.max(0, totalLines - visibleHeight);
+  scrollBoundsRef.current = { maximumTop, visibleHeight };
+  const clampedTop = topLine < 0 ? maximumTop : Math.min(topLine, maximumTop);
+  const atBottom = topLine < 0;
+  const sessionId = runtime.session?.id ?? 'pending';
+  const cursorDraft = `${draft.slice(0, cursor)}|${draft.slice(cursor)}`;
+  const approvalView = approval;
+
+  return (
+    <Box flexDirection="column" height="100%" width="100%" paddingX={1}>
+      <Box justifyContent="space-between" borderBottom borderColor="gray">
+        <Text bold color="cyan">
+          CodeFarmer
+        </Text>
+        <Text dimColor wrap="truncate-middle">
+          {sessionId.slice(0, 12)} | {runtime.workspace}
+        </Text>
+      </Box>
+      <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingTop={1}>
+        {entries.length === 0 ? (
+          <Text dimColor>No messages yet.</Text>
+        ) : (
+          (() => {
+            const rendered: React.ReactElement[] = [];
+            let position = 0;
+            let budget = visibleHeight;
+            for (let index = 0; index < entries.length; index += 1) {
+              const entry = entries[index];
+              if (entry === undefined) continue;
+              const trailingGap = entryTrailingGap(entries, index);
+              const height = estimateEntryLinesCached(
+                entry,
+                contentWidth,
+                trailingGap,
+                showThinking,
+              );
+              const end = position + height;
+              position = end;
+              if (budget <= 0) break;
+              if (end <= clampedTop) continue;
+              const skip = Math.max(0, clampedTop - (end - height));
+              rendered.push(
+                <ClippedEntry
+                  key={entry.id}
+                  entry={entry}
+                  skip={skip}
+                  take={budget}
+                  width={contentWidth}
+                  trailingGap={trailingGap}
+                  showThinking={showThinking}
+                />,
+              );
+              budget -= Math.min(height - skip, budget);
+            }
+            return rendered;
+          })()
+        )}
+        {busy ? <Spinner label={status} /> : null}
+      </Box>
+      {effortPicker === null ? null : (
+        <EffortPicker current={runtime.config.reasoning} selected={effortPicker} />
+      )}
+      <Box
+        borderStyle="round"
+        borderColor={busy ? 'yellow' : planMode ? 'magenta' : 'cyan'}
+        paddingX={1}
+      >
+        <Text color={planMode ? 'magenta' : 'cyan'}>&gt; </Text>
+        {draft.length === 0 ? (
+          <Text dimColor wrap="truncate-end">
+            {busy
+              ? '可随时输入下一条指令…'
+              : planMode
+                ? '计划模式：只读探索，Shift+Tab 退出'
+                : '输入任务，/help 查看命令（Shift+Tab 计划模式 · Ctrl+O 思考过程）'}
+          </Text>
+        ) : (
+          <Text wrap="truncate-end">{cursorDraft}</Text>
+        )}
+      </Box>
+      <Box justifyContent="space-between">
+        <Text dimColor wrap="truncate-end">
+          {status} | {planMode ? 'plan mode' : 'code mode'}
+          {showThinking ? ' | thinking' : ''} | {runtime.config.model} | approval:
+          {runtime.config.approval}
+          {atBottom ? '' : ` | ↑${String(clampedTop)}/${String(maximumTop)} 行 (PgDn 回到底部)`}
+        </Text>
+        <Text dimColor>{String(usage.totalTokens)} tokens</Text>
+      </Box>
+      {approvalView === null ? null : (
+        <ApprovalModal approval={approvalView} columns={columns} rows={rows} />
+      )}
+    </Box>
+  );
+}

@@ -1,0 +1,77 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import { TuiInteractionBridge } from '../src/tui/runtime.js';
+import { parseTuiCommand, TUI_HELP } from '../src/tui/types.js';
+
+describe('TUI command parser', () => {
+  it('keeps normal input as a prompt and recognises local commands', () => {
+    expect(parseTuiCommand('  inspect this workspace  ')).toEqual({
+      kind: 'prompt',
+      value: 'inspect this workspace',
+    });
+    expect(parseTuiCommand('/sessions')).toEqual({ kind: 'sessions' });
+    expect(parseTuiCommand('/status')).toEqual({ kind: 'status' });
+    expect(parseTuiCommand('/context')).toEqual({ kind: 'context' });
+    expect(parseTuiCommand('/ctx')).toEqual({ kind: 'context' });
+    expect(parseTuiCommand('/effort')).toEqual({ kind: 'effort' });
+    expect(parseTuiCommand('/reasoning')).toEqual({ kind: 'effort' });
+    expect(parseTuiCommand('/plan')).toEqual({ kind: 'plan', value: '' });
+    expect(parseTuiCommand('/plan ON')).toEqual({ kind: 'plan', value: 'on' });
+    expect(parseTuiCommand('/plan off')).toEqual({ kind: 'plan', value: 'off' });
+    expect(parseTuiCommand('/config')).toEqual({ kind: 'config' });
+    expect(parseTuiCommand('/doctor')).toEqual({ kind: 'doctor' });
+    expect(parseTuiCommand('/resume session-1')).toEqual({
+      kind: 'resume',
+      id: 'session-1',
+    });
+    expect(parseTuiCommand('/delete session-2')).toEqual({
+      kind: 'delete-session',
+      id: 'session-2',
+    });
+    expect(parseTuiCommand('/exit')).toEqual({ kind: 'quit' });
+    expect(TUI_HELP).toContain('/undo');
+    expect(TUI_HELP).toContain('/context');
+    expect(TUI_HELP).toContain('/effort');
+    expect(TUI_HELP).toContain('/plan');
+  });
+
+  it('returns unknown commands without discarding their arguments', () => {
+    expect(parseTuiCommand('/missing one two')).toEqual({
+      kind: 'unknown',
+      name: 'missing',
+      args: ['one', 'two'],
+    });
+  });
+});
+
+describe('TUI interaction bridge', () => {
+  it('denies approval before the UI attaches and then delegates to its handler', async () => {
+    const bridge = new TuiInteractionBridge();
+    const request = { kind: 'patch' as const, title: 'modify: file.ts', detail: 'diff' };
+
+    await expect(bridge.approvalPrompt(request)).resolves.toBe(false);
+    bridge.setApprovalHandler(() => Promise.resolve(true));
+    await expect(bridge.approvalPrompt(request)).resolves.toBe(true);
+  });
+
+  it('converts tool hooks into UI events', async () => {
+    const bridge = new TuiInteractionBridge();
+    const handler = vi.fn();
+    bridge.setToolEventHandler(handler);
+
+    await bridge.toolHooks.onToolStart?.({
+      callId: 'call-1',
+      name: 'read_file',
+      arguments: { path: 'src/index.ts' },
+    });
+
+    expect(handler).toHaveBeenCalledWith({
+      type: 'tool_start',
+      call: {
+        callId: 'call-1',
+        name: 'read_file',
+        arguments: JSON.stringify({ path: 'src/index.ts' }),
+      },
+    });
+  });
+});
