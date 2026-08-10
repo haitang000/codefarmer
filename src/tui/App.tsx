@@ -7,11 +7,21 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
 
 import type { ApprovalRequest } from '../core/approval.js';
+import type { AgentRunResult } from '../core/runtime-types.js';
 import type { AgentRuntime } from '../cli/runtime.js';
-import { commitWorkspaceChanges, detectGitAvailability } from '../tools/git-tools.js';
+import {
+  commitWorkspaceChanges,
+  detectGitAvailability,
+  inspectWorkingTree,
+} from '../tools/git-tools.js';
 import type { ProviderEvent, ReasoningEffort, TokenUsage } from '../types.js';
 import { MarkdownView } from './markdown.js';
-import { formatToolResult, type TuiInteractionBridge, type TuiRuntimeFactory } from './runtime.js';
+import {
+  extractCommitMessage,
+  formatToolResult,
+  type TuiInteractionBridge,
+  type TuiRuntimeFactory,
+} from './runtime.js';
 import {
   parseTuiCommand,
   TUI_HELP,
@@ -71,6 +81,20 @@ Then write AGENT.md using write_file (or apply_patch) with a concise Markdown su
 agents. Include only facts you verified in the workspace. Prefer sections such as Project Overview,
 Repository Layout, Development Commands, Coding Conventions, Testing, and Important Constraints.
 Do not modify any other file. Finish by reporting the path and a short summary of what was documented.`;
+
+const COMMIT_SUMMARY_PROMPT = `Write a concise Git commit message that summarizes the uncommitted changes in this workspace.
+
+Inspect the working tree with the read-only Git tools (git_status, git_diff, and git_log when useful)
+and base the message only on facts you verify from the diff. The changes will be staged and committed
+exactly as you describe.
+
+Requirements:
+- Output ONLY the commit message, with no preamble, explanation, markdown code fences, or bullet markers.
+- Prefer a conventional-commit subject line (for example "feat: ...", "fix: ...", "refactor: ...") of
+  at most 72 characters.
+- When the change is non-trivial, follow the subject with a blank line and a few short bullet points
+  describing what changed and why.
+- Do not modify, stage, or commit anything; this turn is read-only research.`;
 
 export interface TuiAppProps {
   initialRuntime: AgentRuntime;
@@ -933,27 +957,47 @@ export function TuiApp({
     setTopLine(-1);
   }, []);
 
+  interface RunPromptOptions {
+    /** Run against an ephemeral session so the turn is not recorded in history. */
+    ephemeral?: boolean;
+    /** Force plan (read-only) mode for this turn. */
+    plan?: boolean;
+    /** Called from inside `runCommand`, which already manages the busy state. */
+    nested?: boolean;
+  }
+
+  // Returns the agent run result, or undefined when the turn failed to run
+  // (the error is already surfaced as a transcript entry by the catch path).
   const runPrompt = useCallback(
-    async (prompt: string, displayPrompt = prompt): Promise<void> => {
-      if (busyRef.current) return;
+    async (
+      prompt: string,
+      displayPrompt = prompt,
+      options?: RunPromptOptions,
+    ): Promise<AgentRunResult | undefined> => {
+      const nested = options?.nested === true;
+      if (busyRef.current && !nested) return undefined;
       const assistantId = id('assistant');
       setEntries((previous) => [
         ...previous,
         { id: id('user'), kind: 'user', content: displayPrompt },
         { id: assistantId, kind: 'assistant', content: '' },
       ]);
-      busyRef.current = true;
-      setBusy(true);
+      if (!nested) {
+        busyRef.current = true;
+        setBusy(true);
+      }
       setStatus('Thinking');
       const controller = new AbortController();
       controllerRef.current = controller;
       const activeRuntime = runtimeRef.current;
       try {
         const result = await activeRuntime.runner.run(prompt, {
-          ...(activeRuntime.session === undefined ? {} : { session: activeRuntime.session }),
-          history: true,
+          ...(options?.ephemeral === true || activeRuntime.session === undefined
+            ? {}
+            : { session: activeRuntime.session }),
+          history: options?.ephemeral === true ? false : true,
           signal: controller.signal,
-          ...(planMode ? { plan: true } : {}),
+          ...(options?.plan === true || planMode ? { plan: true } : {}),
           onEvent: (event: ProviderEvent) => {
             if (event.type === 'text_delta') {
               deltaBufferRef.current += event.delta;
@@ -998,18 +1042,22 @@ export function TuiApp({
           ),
         );
         setStatus(result.status === 'cancelled' ? 'Cancelled' : 'Ready');
+        return result;
       } catch (error) {
         flushDeltaBuffer(assistantId);
         appendSystem(displayError(error), 'error');
         setStatus('Error');
+        return undefined;
       } finally {
         if (deltaFlushTimerRef.current !== undefined) {
           clearInterval(deltaFlushTimerRef.current);
           deltaFlushTimerRef.current = undefined;
         }
         controllerRef.current = undefined;
-        busyRef.current = false;
-        setBusy(false);
+        if (!nested) {
+          busyRef.current = false;
+          setBusy(false);
+        }
       }
     },
     [appendSystem, flushDeltaBuffer, planMode],
@@ -1223,9 +1271,32 @@ export function TuiApp({
             }
           }
         } else if (command.kind === 'commit') {
+          const workspace = runtimeRef.current.workspace;
+          let message = command.message.trim();
+          if (message.length === 0) {
+            // 没有显式提交信息时，先让 agent 基于工作区差异自己总结提交信息；
+            // 总结轮次只读（plan）且不入会话历史，只把结果用于 commit。
+            const inspection = await inspectWorkingTree(workspace);
+            if (inspection.status === 'dirty') {
+              const summary = await runPrompt(
+                COMMIT_SUMMARY_PROMPT,
+                '/commit — agent 总结提交信息',
+                { ephemeral: true, plan: true, nested: true },
+              );
+              if (summary === undefined) {
+                appendSystem('Commit skipped: the agent could not summarize the changes.', 'error');
+                return;
+              }
+              if (summary.status === 'cancelled') {
+                appendSystem('Commit cancelled.', 'error');
+                return;
+              }
+              message = extractCommitMessage(summary.message);
+            }
+          }
           const result = await commitWorkspaceChanges({
-            workspace: runtimeRef.current.workspace,
-            message: command.message,
+            workspace,
+            message,
           });
           if (result.status === 'committed') {
             appendSystem(

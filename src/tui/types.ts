@@ -77,7 +77,7 @@ export const TUI_HELP = [
   '/resume ID  resume a saved session',
   '/delete ID  delete a saved session',
   '/diff       show the current Git diff',
-  '/commit     stage and commit the current changes',
+  '/commit     stage and commit; without a message, the agent summarizes the changes',
   '/undo       undo the latest file mutation',
   '/cancel     cancel the active turn',
   '/quit       exit CodeFarmer',

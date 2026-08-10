@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { TuiInteractionBridge } from '../src/tui/runtime.js';
+import { extractCommitMessage, TuiInteractionBridge } from '../src/tui/runtime.js';
 import {
   completeTuiCommand,
   parseTuiCommand,
@@ -91,5 +91,36 @@ describe('TUI interaction bridge', () => {
         arguments: JSON.stringify({ path: 'src/index.ts' }),
       },
     });
+  });
+});
+
+describe('commit message extraction', () => {
+  it('keeps a plain commit message and collapses blank-line runs', () => {
+    expect(extractCommitMessage('fix: resolve the login redirect\n\n- clear the stale token')).toBe(
+      'fix: resolve the login redirect\n\n- clear the stale token',
+    );
+    expect(extractCommitMessage('feat: add status command\n\n\n\n\n- first\n\n\n- second')).toBe(
+      'feat: add status command\n\n- first\n\n- second',
+    );
+  });
+
+  it('prefers a fenced code block and trims surrounding prose', () => {
+    const reply = [
+      'Here is the summary I came up with:',
+      '```',
+      'refactor: extract the git status check',
+      '',
+      '- reuse the inspection in the TUI commit flow',
+      '```',
+      'Let me know if you want any changes.',
+    ].join('\n');
+    expect(extractCommitMessage(reply)).toBe(
+      'refactor: extract the git status check\n\n- reuse the inspection in the TUI commit flow',
+    );
+  });
+
+  it('returns an empty string for unusable replies', () => {
+    expect(extractCommitMessage('   \n  ')).toBe('');
+    expect(extractCommitMessage('```\n\n```')).toBe('');
   });
 });

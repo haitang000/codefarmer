@@ -24,6 +24,9 @@ All notable changes to CodeFarmer are documented here. This project follows
   boundary like the other Git tools.
 - `completions <bash|zsh|fish>` prints generated shell completion scripts
   built from the live command tree, so they never drift from the CLI.
+- `/commit` without a message asks the agent to summarize the working-tree
+  diff (read-only, kept out of session history) and uses the summary as the
+  commit message; an explicit message still commits directly.
 
 ### Fixed
 

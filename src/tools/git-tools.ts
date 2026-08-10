@@ -373,14 +373,20 @@ function defaultCommitMessage(files: string[]): string {
   return subject.length <= MAX_SUBJECT_LENGTH ? subject : `Update ${String(files.length)} files`;
 }
 
+export type WorkingTreeInspection =
+  | { status: 'dirty'; files: string[] }
+  | { status: 'clean' }
+  | { status: 'not-a-repository' }
+  | { status: 'git-unavailable' };
+
 /**
- * Stage and commit every change inside the workspace directory.
+ * Inspect the working tree without staging or committing anything.
  *
- * Used by the user-invoked TUI `/commit` command; this is not an agent tool.
+ * This is the same status check `commitWorkspaceChanges` performs, exposed so
+ * callers (for example the TUI `/commit` command) can decide whether an agent
+ * summary is worth running before any mutation happens.
  */
-export async function commitWorkspaceChanges(
-  options: CommitWorkspaceChangesOptions,
-): Promise<CommitWorkspaceChangesResult> {
+export async function inspectWorkingTree(workspace: string): Promise<WorkingTreeInspection> {
   const availability = await detectGitAvailability();
   if (!availability.available) return { status: 'git-unavailable' };
 
@@ -397,7 +403,7 @@ export async function commitWorkspaceChanges(
       '.',
     ],
     {
-      cwd: options.workspace,
+      cwd: workspace,
       timeoutMs: 30_000,
       maximumBufferBytes: 1_048_576,
       environment: COMMIT_GIT_ENV,
@@ -411,12 +417,24 @@ export async function commitWorkspaceChanges(
   }
 
   const files = changedPaths(status.stdout);
-  if (files.length === 0) return { status: 'clean' };
+  return files.length === 0 ? { status: 'clean' } : { status: 'dirty', files };
+}
+
+/**
+ * Stage and commit every change inside the workspace directory.
+ *
+ * Used by the user-invoked TUI `/commit` command; this is not an agent tool.
+ */
+export async function commitWorkspaceChanges(
+  options: CommitWorkspaceChangesOptions,
+): Promise<CommitWorkspaceChangesResult> {
+  const inspection = await inspectWorkingTree(options.workspace);
+  if (inspection.status !== 'dirty') return { status: inspection.status };
 
   const message =
     options.message !== undefined && options.message.trim().length > 0
       ? options.message.trim()
-      : defaultCommitMessage(files);
+      : defaultCommitMessage(inspection.files);
 
   const add = await executeProcess('git', ['add', '-A', '--', '.'], {
     cwd: options.workspace,
@@ -448,5 +466,5 @@ export async function commitWorkspaceChanges(
     throw new Error(hashResult.stderr.trim() || 'Unable to resolve the new commit hash.');
   }
 
-  return { status: 'committed', hash: hashResult.stdout.trim(), message, files };
+  return { status: 'committed', hash: hashResult.stdout.trim(), message, files: inspection.files };
 }

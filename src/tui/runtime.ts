@@ -105,3 +105,20 @@ export function formatToolResult(result: ToolResult): string {
   if (result.success) return result.output.length > 0 ? result.output : 'completed';
   return result.error?.message ?? 'tool failed';
 }
+
+/**
+ * Turn the agent's summary reply into a usable `git commit -m` message.
+ *
+ * Models occasionally wrap their answer in a fenced code block or pad it
+ * with extra blank lines; strip those and collapse runs of blank lines so a
+ * subject/body separator stays a single blank line. Returns '' when the
+ * reply contains nothing usable, in which case callers fall back to the
+ * message derived from the changed paths.
+ */
+export function extractCommitMessage(text: string): string {
+  let content = text.trim();
+  // Prefer the first fenced code block when the model wraps its answer.
+  const fenced = /```[^\n]*\n([\s\S]*?)```/u.exec(content)?.[1];
+  if (fenced !== undefined) content = fenced.trim();
+  return content.replace(/\n{3,}/gu, '\n\n').trim();
+}

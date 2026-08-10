@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   commitWorkspaceChanges,
   detectGitAvailability,
+  inspectWorkingTree,
   resetGitAvailabilityCache,
 } from '../../src/tools/git-tools.js';
 import { createToolRegistry } from '../../src/tools/registry.js';
@@ -254,6 +255,46 @@ describe('Git tools', () => {
     }
   });
 
+  it('inspects the working tree without staging or committing', async () => {
+    const { root, workspace } = await repository();
+    await commit(root, 'baseline');
+
+    expect(await inspectWorkingTree(workspace)).toEqual({ status: 'clean' });
+
+    await writeFile(path.join(workspace, 'inside.txt'), 'inside changed\n');
+    await writeFile(path.join(workspace, 'new.txt'), 'new file\n');
+    const dirty = await inspectWorkingTree(workspace);
+    expect(dirty.status).toBe('dirty');
+    if (dirty.status === 'dirty') {
+      expect(dirty.files).toEqual(expect.arrayContaining(['inside.txt', 'new.txt']));
+    }
+
+    // Nothing was staged or committed by the inspection itself.
+    const log = await execa('git', ['log', '--oneline'], { cwd: root });
+    expect(log.stdout).toContain('baseline');
+    expect(log.stdout).not.toContain('inside changed');
+  });
+
+  it('reports repository and Git availability from inspectWorkingTree', async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), 'codefarmer-nogit-'));
+    temporaryDirectories.push(workspace);
+    resetGitAvailabilityCache();
+    expect(await inspectWorkingTree(workspace)).toEqual({ status: 'not-a-repository' });
+
+    const { workspace: repositoryWorkspace } = await repository();
+    const originalPath = process.env.PATH;
+    resetGitAvailabilityCache();
+    process.env.PATH = '';
+    try {
+      expect(await inspectWorkingTree(repositoryWorkspace)).toEqual({
+        status: 'git-unavailable',
+      });
+    } finally {
+      process.env.PATH = originalPath;
+      resetGitAvailabilityCache();
+    }
+  });
+
   it('fails gracefully when Git is not available', async () => {
     const { workspace } = await repository();
     const registry = await createToolRegistry({ workspace });
@@ -263,6 +304,7 @@ describe('Git tools', () => {
     try {
       expect((await detectGitAvailability()).available).toBe(false);
       expect(await commitWorkspaceChanges({ workspace })).toEqual({ status: 'git-unavailable' });
+      expect(await inspectWorkingTree(workspace)).toEqual({ status: 'git-unavailable' });
       const status = await registry.execute({
         callId: 'status',
         name: 'git_status',

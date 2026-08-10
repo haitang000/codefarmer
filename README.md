@@ -143,23 +143,23 @@ session actions in one alternate-screen interface. It streams model output and
 shows each tool as it moves from running to succeeded or failed. Mutating tools
 pause in an approval modal; only an explicit `y` accepts the operation.
 
-| TUI command    | Action                                         |
-| -------------- | ---------------------------------------------- |
-| `/help`        | Show local commands                            |
-| `/init`        | Inspect the workspace and create or update `AGENT.md` |
-| `/status`      | Show session, workspace, Git, and runtime      |
-| `/context`     | Show context messages and token usage          |
-| `/effort`      | Open the reasoning effort picker (↑/↓ + Enter) |
-| `/config`      | Show effective configuration                   |
-| `/sessions`    | List saved sessions                            |
-| `/resume <id>` | Switch to a saved session                      |
-| `/delete <id>` | Delete a non-active local session              |
-| `/diff`        | Show current Git diff                          |
-| `/commit <msg>` | Stage and commit all workspace changes        |
-| `/undo`        | Undo the most recent eligible file mutation    |
-| `/new`         | Start a fresh session                          |
-| `/cancel`      | Cancel the active request or tool              |
-| `/quit`        | Leave the TUI and restore the terminal         |
+| TUI command     | Action                                                                                  |
+| --------------- | --------------------------------------------------------------------------------------- |
+| `/help`         | Show local commands                                                                     |
+| `/init`         | Inspect the workspace and create or update `AGENT.md`                                   |
+| `/status`       | Show session, workspace, Git, and runtime                                               |
+| `/context`      | Show context messages and token usage                                                   |
+| `/effort`       | Open the reasoning effort picker (↑/↓ + Enter)                                          |
+| `/config`       | Show effective configuration                                                            |
+| `/sessions`     | List saved sessions                                                                     |
+| `/resume <id>`  | Switch to a saved session                                                               |
+| `/delete <id>`  | Delete a non-active local session                                                       |
+| `/diff`         | Show current Git diff                                                                   |
+| `/commit [msg]` | Stage and commit all workspace changes; without a message the agent summarizes the diff |
+| `/undo`         | Undo the most recent eligible file mutation                                             |
+| `/new`          | Start a fresh session                                                                   |
+| `/cancel`       | Cancel the active request or tool                                                       |
+| `/quit`         | Leave the TUI and restore the terminal                                                  |
 
 Read-only slash commands, `/cancel`, and `/quit` remain available while the
 model is generating; ordinary prompts stay in the input buffer until it is
