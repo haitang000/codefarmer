@@ -2,7 +2,11 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import { ConflictError, PersistenceError } from '../infra/errors.js';
-import { canonicalWorkspace, ensureWorkspaceDirectories, getWorkspacePaths } from '../infra/paths.js';
+import {
+  canonicalWorkspace,
+  ensureWorkspaceDirectories,
+  getWorkspacePaths,
+} from '../infra/paths.js';
 import type { AppPaths } from '../infra/paths.js';
 import { readJsonFile, writeJsonAtomic } from '../infra/persistence.js';
 import { restoreMutation } from '../tools/apply-patch.js';
@@ -21,10 +25,7 @@ export class TransactionStore {
     private readonly directory: string,
   ) {}
 
-  public static async create(
-    workspace: string,
-    appPaths?: AppPaths,
-  ): Promise<TransactionStore> {
+  public static async create(workspace: string, appPaths?: AppPaths): Promise<TransactionStore> {
     const paths = await getWorkspacePaths(workspace, appPaths);
     await ensureWorkspaceDirectories(paths);
     return new TransactionStore(paths.workspace, paths.transactions);
@@ -38,7 +39,13 @@ export class TransactionStore {
     if (canonical !== this.workspace) {
       throw new PersistenceError('变更事务不属于当前工作区');
     }
-    await writeJsonAtomic(transactionFile(this.directory, transaction), transaction);
+    // Persist the canonical path too. Undo runs in a later process, where a
+    // Windows long path can otherwise compare differently from its 8.3 alias.
+    const normalizedTransaction = { ...transaction, workspace: canonical };
+    await writeJsonAtomic(
+      transactionFile(this.directory, normalizedTransaction),
+      normalizedTransaction,
+    );
   }
 
   public async list(): Promise<MutationTransaction[]> {

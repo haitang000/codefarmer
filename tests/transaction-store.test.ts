@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { TransactionStore } from '../src/core/transaction-store.js';
 import { ConflictError } from '../src/infra/errors.js';
+import { canonicalWorkspace } from '../src/infra/paths.js';
 import type { MutationTransaction } from '../src/types.js';
 
 const temporaryDirectories: string[] = [];
@@ -53,6 +54,8 @@ describe('TransactionStore', () => {
     await writeFile(path.join(root, 'file.txt'), after);
     const store = await TransactionStore.create(root);
     await store.record(transaction(root, before, after));
+
+    expect((await store.list())[0]?.workspace).toBe(await canonicalWorkspace(root));
 
     const undone = await store.undoLatest();
 

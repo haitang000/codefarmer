@@ -4,6 +4,7 @@ import type { ProviderToolCall, TokenUsage, ToolResult } from '../types.js';
 export type TuiCommand =
   | { kind: 'prompt'; value: string }
   | { kind: 'help' }
+  | { kind: 'init' }
   | { kind: 'new' }
   | { kind: 'status' }
   | { kind: 'context' }
@@ -62,6 +63,7 @@ export interface TuiUsage {
 
 export const TUI_HELP = [
   '/help       show this help',
+  '/init       summarize this workspace into AGENT.md',
   'Ctrl+O      toggle the reasoning (thinking) display',
   '/new        start a new session',
   '/status     show workspace and runtime status',
@@ -79,6 +81,47 @@ export const TUI_HELP = [
   '/quit       exit CodeFarmer',
 ].join('\n');
 
+/** Commands offered by the interactive prompt, in display/completion order. */
+export const TUI_COMMANDS = [
+  'help',
+  'init',
+  'new',
+  'status',
+  'context',
+  'effort',
+  'plan',
+  'config',
+  'doctor',
+  'sessions',
+  'resume',
+  'delete',
+  'diff',
+  'undo',
+  'cancel',
+  'quit',
+] as const;
+
+/**
+ * Returns the suffix of the unique slash command matching the current draft.
+ * Suggestions are intentionally limited to a bare command token so ordinary
+ * prompts and command arguments are never rewritten behind the user's back.
+ */
+export function tuiCommandAdvice(input: string): string {
+  if (!input.startsWith('/') || /\s/u.test(input)) return '';
+  const typed = input.slice(1).toLowerCase();
+  if (typed.length === 0) return TUI_COMMANDS[0];
+  const matches = TUI_COMMANDS.filter((command) => command.startsWith(typed));
+  const match = matches.length === 1 ? matches[0] : undefined;
+  return match === undefined ? '' : match.slice(typed.length);
+}
+
+/** Accept the current unique command suggestion, returning the unchanged draft
+ * when there is no suggestion to accept. */
+export function completeTuiCommand(input: string): string {
+  const advice = tuiCommandAdvice(input);
+  return advice.length === 0 ? input : `${input}${advice}`;
+}
+
 export function parseTuiCommand(input: string): TuiCommand {
   const value = input.trim();
   if (value.length === 0) return { kind: 'prompt', value: '' };
@@ -90,6 +133,8 @@ export function parseTuiCommand(input: string): TuiCommand {
     case 'help':
     case '?':
       return { kind: 'help' };
+    case 'init':
+      return { kind: 'init' };
     case 'new':
       return { kind: 'new' };
     case 'status':

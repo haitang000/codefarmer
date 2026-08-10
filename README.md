@@ -146,6 +146,7 @@ pause in an approval modal; only an explicit `y` accepts the operation.
 | TUI command    | Action                                         |
 | -------------- | ---------------------------------------------- |
 | `/help`        | Show local commands                            |
+| `/init`        | Inspect the workspace and create or update `AGENT.md` |
 | `/status`      | Show session, workspace, Git, and runtime      |
 | `/context`     | Show context messages and token usage          |
 | `/effort`      | Open the reasoning effort picker (↑/↓ + Enter) |

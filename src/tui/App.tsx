@@ -15,6 +15,8 @@ import { formatToolResult, type TuiInteractionBridge, type TuiRuntimeFactory } f
 import {
   parseTuiCommand,
   TUI_HELP,
+  completeTuiCommand,
+  tuiCommandAdvice,
   type ApprovalView,
   type ToolView,
   type TranscriptEntry,
@@ -51,6 +53,18 @@ const READ_ONLY_COMMANDS: ReadonlySet<TuiCommand['kind']> = new Set([
   'sessions',
   'diff',
 ]);
+
+const INIT_AGENT_PROMPT = `Initialize this workspace by creating or updating a root-level AGENT.md.
+
+First inspect the repository with the available read-only tools. Identify the actual project purpose,
+languages and frameworks, package and build/test/lint commands, important source directories, and any
+local conventions that are evidenced by the files. If AGENT.md already exists, read it and preserve
+useful project-specific guidance while refreshing stale sections.
+
+Then write AGENT.md using write_file (or apply_patch) with a concise Markdown summary for future coding
+agents. Include only facts you verified in the workspace. Prefer sections such as Project Overview,
+Repository Layout, Development Commands, Coding Conventions, Testing, and Important Constraints.
+Do not modify any other file. Finish by reporting the path and a short summary of what was documented.`;
 
 export interface TuiAppProps {
   initialRuntime: AgentRuntime;
@@ -512,7 +526,14 @@ function ClippedEntry({
   if (skip === 0) {
     const fullHeight = estimateEntryLines(entry, width, trailingGap, showThinking);
     if (take >= fullHeight)
-      return <EntryView entry={entry} trailingGap={trailingGap} showThinking={showThinking} width={width} />;
+      return (
+        <EntryView
+          entry={entry}
+          trailingGap={trailingGap}
+          showThinking={showThinking}
+          width={width}
+        />
+      );
   }
 
   let remainingSkip = skip;
@@ -903,12 +924,12 @@ export function TuiApp({
   }, []);
 
   const runPrompt = useCallback(
-    async (prompt: string): Promise<void> => {
+    async (prompt: string, displayPrompt = prompt): Promise<void> => {
       if (busy) return;
       const assistantId = id('assistant');
       setEntries((previous) => [
         ...previous,
-        { id: id('user'), kind: 'user', content: prompt },
+        { id: id('user'), kind: 'user', content: displayPrompt },
         { id: assistantId, kind: 'assistant', content: '' },
       ]);
       setBusy(true);
@@ -1000,6 +1021,12 @@ export function TuiApp({
         } else {
           appendSystem('No active turn.');
         }
+        return;
+      }
+      if (command.kind === 'init') {
+        // /init delegates the workspace summary to the agent so AGENT.md is
+        // based on verified repository facts and uses normal write approvals.
+        await runPrompt(INIT_AGENT_PROMPT, '/init');
         return;
       }
       // 只读命令在思考期间也可用；输入框不再被占用。
@@ -1281,6 +1308,13 @@ export function TuiApp({
         togglePlanMode();
         return;
       }
+      if (key.tab) {
+        const completed = completeTuiCommand(draftRef.current);
+        if (completed !== draftRef.current) {
+          applyDraft(completed, completed.length);
+        }
+        return;
+      }
       if (key.escape) {
         // ESC 只退出滚动视图或清空输入框，绝不中止正在运行的任务：
         // 运行期间按 ESC（例如想清空输入，或中文输入法关闭候选框时
@@ -1464,6 +1498,7 @@ export function TuiApp({
   const atBottom = topLine < 0;
   const sessionId = runtime.session?.id ?? 'pending';
   const cursorDraft = `${draft.slice(0, cursor)}|${draft.slice(cursor)}`;
+  const advice = cursor === draft.length ? tuiCommandAdvice(draft) : '';
   const approvalView = approval;
 
   return (
@@ -1535,7 +1570,10 @@ export function TuiApp({
                 : '输入任务，/help 查看命令（Shift+Tab 计划模式 · Ctrl+O 思考过程）'}
           </Text>
         ) : (
-          <Text wrap="truncate-end">{cursorDraft}</Text>
+          <Text wrap="truncate-end">
+            {cursorDraft}
+            {advice.length === 0 ? null : <Text dimColor>{advice}</Text>}
+          </Text>
         )}
       </Box>
       <Box justifyContent="space-between">

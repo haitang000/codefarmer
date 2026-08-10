@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { TuiInteractionBridge } from '../src/tui/runtime.js';
-import { parseTuiCommand, TUI_HELP } from '../src/tui/types.js';
+import {
+  completeTuiCommand,
+  parseTuiCommand,
+  TUI_HELP,
+  tuiCommandAdvice,
+} from '../src/tui/types.js';
 
 describe('TUI command parser', () => {
   it('keeps normal input as a prompt and recognises local commands', () => {
@@ -10,6 +15,7 @@ describe('TUI command parser', () => {
       value: 'inspect this workspace',
     });
     expect(parseTuiCommand('/sessions')).toEqual({ kind: 'sessions' });
+    expect(parseTuiCommand('/init')).toEqual({ kind: 'init' });
     expect(parseTuiCommand('/status')).toEqual({ kind: 'status' });
     expect(parseTuiCommand('/context')).toEqual({ kind: 'context' });
     expect(parseTuiCommand('/ctx')).toEqual({ kind: 'context' });
@@ -33,6 +39,7 @@ describe('TUI command parser', () => {
     expect(TUI_HELP).toContain('/context');
     expect(TUI_HELP).toContain('/effort');
     expect(TUI_HELP).toContain('/plan');
+    expect(TUI_HELP).toContain('/init');
   });
 
   it('returns unknown commands without discarding their arguments', () => {
@@ -41,6 +48,17 @@ describe('TUI command parser', () => {
       name: 'missing',
       args: ['one', 'two'],
     });
+  });
+
+  it('provides a unique advice suffix and accepts it with completion', () => {
+    expect(tuiCommandAdvice('/hel')).toBe('p');
+    expect(completeTuiCommand('/hel')).toBe('/help');
+    expect(tuiCommandAdvice('/')).toBe('help');
+    expect(tuiCommandAdvice('/st')).toBe('atus');
+    expect(tuiCommandAdvice('/in')).toBe('it');
+    expect(tuiCommandAdvice('/s')).toBe('');
+    expect(tuiCommandAdvice('/help ')).toBe('');
+    expect(completeTuiCommand('inspect this workspace')).toBe('inspect this workspace');
   });
 });
 
