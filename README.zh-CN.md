@@ -92,6 +92,7 @@ CodeFarmer 启动时所在的目录；它不会自动扩大到上层 Git 仓库�
 | `codefarmer sessions list`                      | 列出当前工作区的本地会话                              |
 | `codefarmer sessions show <id>`                 | 显示会话和审计摘要                                    |
 | `codefarmer sessions rename <id> <title>`       | 重命名会话（设置或覆盖标题）                          |
+| `codefarmer sessions compact <id>`              | 压缩长会话：将早期消息折叠为摘要                      |
 | `codefarmer sessions export <id>`               | 导出会话为 Markdown 或 JSON（`--format`/`--output`）  |
 | `codefarmer sessions resume <id>`               | 使用响应 ID 恢复会话                                  |
 | `codefarmer sessions delete <id>`               | 删除本地会话记录                                      |
@@ -145,6 +146,7 @@ TUI 在同一个备用屏幕中承载对话、工具状态、审批、工作区�
 | `/init`         | 检查工作区并创建或更新 `AGENT.md`                                   |
 | `/status`       | 显示会话、工作区、Git 和运行状态                                    |
 | `/context`      | 查看当前上下文消息与 Token 用量                                     |
+| `/compact`      | 把当前会话的早期消息压缩为摘要（长会话时自动提示）                  |
 | `/effort`       | 打开推理强度选择器（↑/↓ 选择，Enter 确认）                          |
 | `/config`       | 显示有效配置                                                        |
 | `/doctor`       | 检查本地运行环境                                                    |

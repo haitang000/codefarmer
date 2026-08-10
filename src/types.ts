@@ -133,10 +133,12 @@ export type SessionStatus = 'active' | 'completed' | 'cancelled' | 'failed';
 
 export interface SessionMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   createdAt: string;
   responseId?: string;
+  /** True for the synthetic summary message produced by a context compaction. */
+  compressed?: boolean;
 }
 
 export interface SessionToolCall {
@@ -163,6 +165,8 @@ export interface SessionRecord {
   createdAt: string;
   updatedAt: string;
   previousResponseId?: string;
+  /** ISO timestamp of the last context compaction (`/compact`). */
+  compactedAt?: string;
   messages: SessionMessage[];
   toolCalls: SessionToolCall[];
   usage?: TokenUsage;

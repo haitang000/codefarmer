@@ -17,8 +17,15 @@ import chalk from 'chalk';
 import { execa } from 'execa';
 
 import type { AgentRunResult } from '../core/runtime-types.js';
+import { compactSession, sessionContextChars } from '../core/session-compact.js';
 import { getCredentialsPath, resolveApiKey, saveApiKey } from '../infra/credentials.js';
-import { ApprovalError, ConfigError, ConflictError, toAppError } from '../infra/errors.js';
+import {
+  ApprovalError,
+  AuthenticationError,
+  ConfigError,
+  ConflictError,
+  toAppError,
+} from '../infra/errors.js';
 import {
   DEFAULT_CONFIG,
   loadConfigDetails,
@@ -619,6 +626,38 @@ export async function sessionsRenameAction(
   const runtime = await createBaseRuntime(globalOptions);
   await runtime.sessions.rename(id, trimmed);
   process.stdout.write(`已重命名会话 ${id} 为 "${trimmed}"\n`);
+}
+
+export async function sessionsCompactAction(
+  globalOptions: GlobalOptions,
+  id: string,
+): Promise<void> {
+  const apiKey = await resolveApiKey();
+  if (!apiKey) {
+    throw new AuthenticationError(
+      '缺少 OPENAI_API_KEY；请设置环境变量，或运行 codefarmer setup 保存密钥到本地凭据',
+    );
+  }
+  const runtime = await createBaseRuntime(globalOptions);
+  const session = await runtime.sessions.get(id);
+  const provider = new OpenAIProvider({
+    apiKey,
+    baseURL: session.baseURL ?? runtime.config.baseURL,
+    connectionModel: runtime.config.model,
+  });
+  const beforeChars = sessionContextChars(session);
+  const result = await compactSession({
+    session,
+    provider,
+    config: runtime.config,
+  });
+  await runtime.sessions.save(session);
+  const afterChars = sessionContextChars(session);
+  process.stdout.write(
+    `已压缩会话 ${id}：${String(result.compressedMessageCount)} 条早期消息折叠为 ` +
+      `摘要（${String(result.summary.length)} 字符），保留最近 ${String(result.keptMessageCount)} 条；` +
+      `上下文由约 ${String(beforeChars)} 字符降至约 ${String(afterChars)} 字符。\n`,
+  );
 }
 
 export async function sessionsExportAction(

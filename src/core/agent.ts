@@ -15,6 +15,7 @@ import type {
 import { buildAgentInstructions } from './prompt.js';
 import type { AgentRunResult } from './runtime-types.js';
 import { deriveSessionTitle, type SessionStore } from './session-store.js';
+import { compactSession, type CompactResult } from './session-compact.js';
 
 const EMPTY_USAGE: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
@@ -659,5 +660,32 @@ export class AgentRunner {
       }
       throw error;
     }
+  }
+
+  /**
+   * Compress the early part of the conversation into a summary `system`
+   * message and keep only the most recent turns verbatim. The stored-response
+   * chain is cleared, so the next `run` replays "summary + recent turns" as
+   * explicit history — the same path that keeps gateway compatibility — and
+   * every subsequent turn consumes far less context.
+   *
+   * The session is only mutated after the summary request succeeds.
+   */
+  public async compact(
+    session: SessionRecord,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<CompactResult> {
+    const result = await compactSession({
+      session,
+      provider: this.options.provider,
+      config: this.options.config,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+    const store = this.options.sessionStore;
+    if (store !== undefined) {
+      store.saveQueued(session);
+      await store.flush().catch(() => undefined);
+    }
+    return result;
   }
 }

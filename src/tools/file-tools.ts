@@ -153,7 +153,9 @@ async function collectFiles(
     visitedDirectories.add(directoryKey);
 
     const entries = await readdir(directory, { withFileTypes: true });
-    entries.sort((left, right) => left.name.localeCompare(right.name));
+    // Plain code-unit comparison: faster than localeCompare and stable across
+    // host locales, which keeps directory listing deterministic everywhere.
+    entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
     for (const entry of entries) {
       if (files.length >= maximumResults) {
         limitReached = true;
@@ -309,7 +311,7 @@ export async function searchText(
   const files: ListedFile[] = pathInfo.isFile()
     ? [{ path: guard.toRelative(resolvedPath), size: pathInfo.size }]
     : (await collectFiles(guard, resolvedPath, 20, 5000)).files;
-  const needle = caseSensitive ? query : query.toLocaleLowerCase();
+  const needle = caseSensitive ? query : query.toLowerCase();
   const matches: { path: string; line: number; column: number; text: string }[] = [];
 
   // collectFiles already validated every path inside the workspace, so the
@@ -325,11 +327,17 @@ export async function searchText(
         false,
         file.size,
       );
-      const lines = content.split(/\r?\n/u);
-      for (let index = 0; index < lines.length; index += 1) {
-        const line = lines.at(index);
+      // Lowercasing the whole file once (instead of per line) turns O(lines)
+      // allocations into one per file, which adds up when scanning thousands
+      // of files; toLowerCase is locale-independent and stays consistent with
+      // the lowercased needle above.
+      const sourceLines = content.split(/\r?\n/u);
+      const searchLines =
+        caseSensitive ? sourceLines : content.toLowerCase().split(/\r?\n/u);
+      for (let index = 0; index < sourceLines.length; index += 1) {
+        const line = sourceLines.at(index);
         if (line === undefined) continue;
-        const haystack = caseSensitive ? line : line.toLocaleLowerCase();
+        const haystack = caseSensitive ? line : (searchLines.at(index) ?? line);
         const column = haystack.indexOf(needle);
         if (column >= 0) {
           matches.push({

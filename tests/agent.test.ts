@@ -9,7 +9,13 @@ import { DEFAULT_CONFIG } from '../src/infra/config.js';
 import { ProviderError } from '../src/infra/errors.js';
 import { ScriptedProvider } from '../src/providers/fake.js';
 import { createToolRegistry } from '../src/tools/registry.js';
-import type { CodeFarmerConfig, ProviderEvent, ProviderRequest } from '../src/types.js';
+import type {
+  CodeFarmerConfig,
+  ProviderEvent,
+  ProviderRequest,
+  SessionMessage,
+  SessionRecord,
+} from '../src/types.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -33,6 +39,32 @@ function config(overrides: Partial<CodeFarmerConfig> = {}): CodeFarmerConfig {
     ...DEFAULT_CONFIG,
     ignoredPaths: [...DEFAULT_CONFIG.ignoredPaths],
     ...overrides,
+  };
+}
+
+function sessionRecord(messageCount: number): SessionRecord {
+  const messages: SessionMessage[] = [];
+  for (let index = 0; index < messageCount; index += 1) {
+    const role: SessionMessage['role'] = index % 2 === 0 ? 'user' : 'assistant';
+    messages.push({
+      id: `msg-${role}-${String(index)}`,
+      role,
+      content: `${role} turn ${String(index)}`,
+      createdAt: new Date(1 + index).toISOString(),
+    });
+  }
+  return {
+    version: 1,
+    id: 'session-compact-agent',
+    workspace: '/workspace',
+    provider: 'fake',
+    model: 'test-model',
+    status: 'active',
+    createdAt: '2025-01-01T00:00:00.000Z',
+    updatedAt: '2025-01-01T00:00:00.000Z',
+    previousResponseId: 'response-old',
+    messages,
+    toolCalls: [],
   };
 }
 
@@ -774,5 +806,59 @@ describe('AgentRunner', () => {
     expect(outputCount).toBe(6);
     const outputs = finalInput.filter((item) => item.type === 'function_call_output');
     expect(outputs.every((item) => item.output.length <= 12_500)).toBe(true);
+  });
+
+  it('compacts a session and replays the summary as explicit history on the next run', async () => {
+    const workspace = await temporaryWorkspace();
+    const provider = new RecordingScriptedProvider([
+      [
+        { type: 'text_delta', delta: 'Early context summary.' },
+        {
+          type: 'response_completed',
+          responseId: 'response-compact',
+          outputText: 'Early context summary.',
+        },
+        { type: 'usage', usage: { inputTokens: 50, outputTokens: 3, totalTokens: 53 } },
+      ],
+      [
+        { type: 'text_delta', delta: 'Next turn answer.' },
+        {
+          type: 'response_completed',
+          responseId: 'response-next',
+          outputText: 'Next turn answer.',
+        },
+      ],
+    ]);
+    const agent = await runner(workspace, provider);
+    const record = sessionRecord(20);
+
+    const result = await agent.compact(record);
+
+    expect(result.summary).toBe('Early context summary.');
+    expect(result.compressedMessageCount).toBeGreaterThan(0);
+    expect(record.previousResponseId).toBeUndefined();
+    expect(record.messages[0]).toMatchObject({ role: 'system', compressed: true });
+    expect(record.compactedAt).toBeDefined();
+
+    const runResult = await agent.run('Continue the work', { session: record });
+
+    expect(runResult.status).toBe('completed');
+    expect(runResult.message).toBe('Next turn answer.');
+    expect(provider.requests).toHaveLength(2);
+    const second = provider.requests[1];
+    expect(second?.previousResponseId).toBeUndefined();
+    expect(Array.isArray(second?.input)).toBe(true);
+    if (!Array.isArray(second?.input)) throw new Error('Expected explicit history input');
+    expect(second.input[0]).toMatchObject({
+      type: 'message',
+      role: 'system',
+      content: expect.stringContaining('Early context summary.') as string,
+    });
+    // The newest turn is appended after the replayed summary.
+    expect(second.input[second.input.length - 1]).toMatchObject({
+      type: 'message',
+      role: 'user',
+      content: 'Continue the work',
+    });
   });
 });

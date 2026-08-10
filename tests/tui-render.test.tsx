@@ -8,6 +8,7 @@ import {
   ApprovalModal,
   EffortPicker,
   EntryView,
+  runtimeEntries,
   TuiApp,
   assistantLines,
   wrapToLines,
@@ -40,6 +41,34 @@ function mockRuntime(): AgentRuntime {
 }
 
 describe('TUI rendering', () => {
+  it('places tool results before the assistant response in a restored session', () => {
+    const runtime = mockRuntime();
+    const session = runtime.session;
+    if (session === undefined) throw new Error('expected a mock session');
+    session.messages = [
+      { id: 'user-1', role: 'user', content: 'inspect', createdAt: '2026-01-01T00:00:00.000Z' },
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        content: 'The inspection is complete.',
+        createdAt: '2026-01-01T00:00:00.003Z',
+      },
+    ];
+    session.toolCalls = [
+      {
+        callId: 'tool-1',
+        toolName: 'read_file',
+        arguments: { path: 'README.md' },
+        success: true,
+        startedAt: '2026-01-01T00:00:00.001Z',
+        completedAt: '2026-01-01T00:00:00.002Z',
+      },
+    ];
+
+    const entries = runtimeEntries(runtime);
+    expect(entries.map((entry) => entry.kind)).toEqual(['user', 'tool', 'assistant']);
+  });
+
   it('renders approval in flow between transcript content and the input', () => {
     const output = renderToString(
       <Box flexDirection="column">

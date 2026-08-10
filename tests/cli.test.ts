@@ -308,10 +308,12 @@ describe('CodeFarmer CLI', () => {
     expect(bash.stderr).toBe('');
     expect(bash.stdout).toContain('complete -F _codefarmer codefarmer');
     expect(bash.stdout).toContain("'sessions export'");
+    expect(bash.stdout).toContain("'sessions compact'");
     expect(zsh.code).toBe(0);
     expect(zsh.stderr).toBe('');
     expect(zsh.stdout).toContain('#compdef codefarmer');
     expect(zsh.stdout).toContain("'sessions export:导出会话为 Markdown 或 JSON");
+    expect(zsh.stdout).toContain("'sessions compact:压缩长会话");
     expect(fish.code).toBe(0);
     expect(fish.stderr).toBe('');
     expect(fish.stdout).toContain('complete -c codefarmer');

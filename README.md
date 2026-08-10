@@ -96,6 +96,7 @@ parent Git repository.
 | `codefarmer sessions list`                      | List saved sessions for the workspace                                    |
 | `codefarmer sessions show <id>`                 | Show a saved session and audit summary                                   |
 | `codefarmer sessions rename <id> <title>`       | Rename a saved session (set or override its title)                       |
+| `codefarmer sessions compact <id>`              | Compress a long session: fold early messages into a summary              |
 | `codefarmer sessions export <id>`               | Export a session as Markdown or JSON (`--format`/`--output`)             |
 | `codefarmer sessions resume <id>`               | Resume a session using its response ID                                   |
 | `codefarmer sessions delete <id>`               | Delete local session records                                             |
@@ -151,6 +152,7 @@ pause in an approval modal; only an explicit `y` accepts the operation.
 | `/init`         | Inspect the workspace and create or update `AGENT.md`                                   |
 | `/status`       | Show session, workspace, Git, and runtime                                               |
 | `/context`      | Show context messages and token usage                                                   |
+| `/compact`      | Compress early messages of the current session into a summary (suggested on long sessions) |
 | `/effort`       | Open the reasoning effort picker (↑/↓ + Enter)                                          |
 | `/config`       | Show effective configuration                                                            |
 | `/sessions`     | List saved sessions                                                                     |

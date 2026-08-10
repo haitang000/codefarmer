@@ -18,6 +18,7 @@ import {
   initAction,
   pushAction,
   runAction,
+  sessionsCompactAction,
   sessionsDeleteAction,
   sessionsExportAction,
   sessionsListAction,
@@ -237,6 +238,13 @@ sessions
   .argument('<title>')
   .action(async (id: string, title: string, _options: unknown, command: Command) =>
     sessionsRenameAction(globals(command), id, title),
+  );
+sessions
+  .command('compact')
+  .description('压缩长会话：将早期消息折叠为摘要，保留最近若干条原文')
+  .argument('<id>')
+  .action(async (id: string, _options: unknown, command: Command) =>
+    sessionsCompactAction(globals(command), id),
   );
 
 sessions

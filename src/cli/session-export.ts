@@ -5,6 +5,7 @@ export type SessionExportFormat = 'markdown' | 'json';
 const ROLE_LABELS: Record<SessionMessage['role'], string> = {
   user: '用户',
   assistant: '助手',
+  system: '上下文摘要',
 };
 
 /** Wrap content in a fenced code block whose fence is longer than any backtick run inside. */

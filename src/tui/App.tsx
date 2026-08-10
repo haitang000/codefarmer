@@ -16,6 +16,12 @@ import {
 } from '../tools/git-tools.js';
 import { sanitiseEnvironment } from '../tools/run-command.js';
 import type { ProviderEvent, ReasoningEffort, TokenUsage } from '../types.js';
+import {
+  COMPACT_HINT_MIN_CHARS,
+  COMPACT_HINT_MIN_MESSAGES,
+  COMPACT_KEEP_RECENT_MESSAGES,
+  sessionContextChars,
+} from '../core/session-compact.js';
 import { MarkdownLine, MarkdownView } from './markdown.js';
 import {
   extractCommitMessage,
@@ -236,13 +242,20 @@ export function formatDuration(ms: number): string {
   return ms < 1000 ? `${String(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
 }
 
-function runtimeEntries(runtime: AgentRuntime): TranscriptEntry[] {
-  const entries: TranscriptEntry[] = [];
+export function runtimeEntries(runtime: AgentRuntime): TranscriptEntry[] {
+  const timeline: { entry: TranscriptEntry; timestamp: string; priority: number }[] = [];
   for (const message of runtime.session?.messages ?? []) {
-    entries.push({
-      id: message.id,
-      kind: message.role === 'user' ? 'user' : 'assistant',
-      content: message.content,
+    timeline.push({
+      entry: {
+        id: message.id,
+        kind:
+          message.role === 'user' ? 'user' : message.role === 'system' ? 'system' : 'assistant',
+        content: message.content,
+      },
+      timestamp: message.createdAt,
+      // If two events share the same millisecond, retain the natural turn
+      // order: prompt, tool result, then the model's response.
+      priority: message.role === 'user' ? 0 : 2,
     });
   }
   for (const call of runtime.session?.toolCalls ?? []) {
@@ -252,9 +265,18 @@ function runtimeEntries(runtime: AgentRuntime): TranscriptEntry[] {
       status: call.success ? 'succeeded' : 'failed',
       ...(call.outputSummary === undefined ? {} : { output: call.outputSummary }),
     };
-    entries.push({ id: `tool-${call.callId}`, kind: 'tool', content: call.toolName, tool });
+    timeline.push({
+      entry: { id: `tool-${call.callId}`, kind: 'tool', content: call.toolName, tool },
+      timestamp: call.completedAt ?? call.startedAt,
+      priority: 1,
+    });
   }
-  return entries;
+  return timeline
+    .sort((left, right) => {
+      const timeOrder = left.timestamp.localeCompare(right.timestamp);
+      return timeOrder === 0 ? left.priority - right.priority : timeOrder;
+    })
+    .map(({ entry }) => entry);
 }
 
 function welcomeEntries(): TranscriptEntry[] {
@@ -262,8 +284,8 @@ function welcomeEntries(): TranscriptEntry[] {
     {
       id: id('system'),
       kind: 'system',
-      content: `欢迎使用 CodeFarmer — 交互式编码代理。
-输入任务后按回车开始；/help 查看全部命令；Shift+Tab 切换计划模式（只读探索，不修改文件）；Ctrl+O 切换思考过程显示。`,
+      content: `欢迎使用 CodeFarmer · 交互式编码工作台。
+描述要完成的任务后按回车开始；/help 查看命令，Shift+Tab 切换计划模式，Ctrl+O 显示思考过程。`,
     },
   ];
 }
@@ -282,34 +304,18 @@ function previewLine(text: string, maximumLength = 60): string {
   return first.length > maximumLength ? `${first.slice(0, maximumLength - 1)}…` : first;
 }
 
-// CodeFarmer's own loading animation — a farm day, not a chef's kitchen.
-// The rotating glyph is the sun rising over the fields ("日出而作"), and the
-// copy draws on the farm metaphor at the heart of this project's name: code
-// is the field, and each step is a chore in the harvest. Tool-call labels
-// (e.g. "Preparing read_file") still take over verbatim when present.
+// Keep the active-turn indicator compact; tool-call labels still take over
+// verbatim when present (for example, "Preparing read_file").
 const SPINNER_FRAMES = ['◐', '◓', '◑', '◒'];
 
 const THINKING_PHRASES = [
-  '正在播种',
-  '深耕上下文',
-  '灌溉数据流',
-  'Sowing',
-  '翻土重构',
-  '除草除 bug',
-  '施肥优化',
-  'Tilling',
-  '嫁接新特性',
-  '修建冗余枝叶',
-  '温室编译',
-  'Watering',
-  '开垦新模块',
-  '轮作调度任务',
-  '晾晒运行日志',
-  'Harvesting',
-  '收割答案',
-  '储粮归档',
-  'Mulching',
-  '望天等模型',
+  '分析上下文',
+  '规划下一步',
+  '整理工作区',
+  '检查实现细节',
+  '准备工具调用',
+  '验证执行结果',
+  '生成回复',
 ];
 
 function Spinner({ label }: { label: string }): React.ReactElement {
@@ -329,10 +335,10 @@ function Spinner({ label }: { label: string }): React.ReactElement {
       clearInterval(phraseTimer);
     };
   }, []);
-  const text = label === 'Thinking' ? (THINKING_PHRASES[phraseIndex] ?? '正在播种') : label;
+  const text = label === 'Thinking' ? (THINKING_PHRASES[phraseIndex] ?? '分析上下文') : label;
   return (
-    <Text color="yellow">
-      {SPINNER_FRAMES[frame] ?? '◐'} {text}…
+    <Text color="yellow" bold>
+      {SPINNER_FRAMES[frame] ?? '◐'} {text}
     </Text>
   );
 }
@@ -427,7 +433,7 @@ export function EntryView({
     return (
       <Box key={entry.id} flexDirection="column" marginBottom={marginBottom}>
         <Text color="cyan" bold>
-          {'❯ you'}
+          {'◆ YOU'}
         </Text>
         <Box paddingLeft={2}>
           <Text wrap="wrap">{entry.content}</Text>
@@ -440,7 +446,7 @@ export function EntryView({
     return (
       <Box key={entry.id} flexDirection="column" marginBottom={marginBottom}>
         <Text color="green" bold>
-          {'◆ codefarmer'}
+          {'◆ CODEFARMER'}
         </Text>
         {showThinking && entry.reasoning !== undefined && entry.reasoning.length > 0 ? (
           <Box paddingLeft={2} flexDirection="column">
@@ -457,7 +463,7 @@ export function EntryView({
           </Box>
         ) : null}
         {entry.content.length === 0 ? (
-          <Text dimColor>{'  …'}</Text>
+          <Text dimColor>{'  Waiting for response…'}</Text>
         ) : (
           // Markdown 块是多个并排的 Text 组件，row 布局会把它们拼接成同一文本流换行；
           // column 布局让每个块独立成行，换行位置与源文本一致。
@@ -616,7 +622,11 @@ function estimateEntriesLines(
   return total;
 }
 
-export function ClippedEntry({
+// The transcript re-renders on every stream flush and spinner frame; memoising
+// keeps the expensive wrap-ansi and Markdown re-parsing limited to entries
+// that actually changed (unchanged entries keep their object identity, so the
+// default shallow prop compare short-circuits the render).
+function ClippedEntryImpl({
   entry,
   skip,
   take,
@@ -752,6 +762,8 @@ export function ClippedEntry({
   );
 }
 
+export const ClippedEntry = React.memo(ClippedEntryImpl);
+
 export function ApprovalModal({
   approval,
   columns,
@@ -779,17 +791,20 @@ export function ApprovalModal({
       paddingY={1}
     >
       <Text color="yellow" bold>
-        Approval required
+        {'!  Approval required'}
       </Text>
-      <Text bold wrap="wrap">
+      <Text color="white" bold wrap="wrap">
         {approval.request.title}
       </Text>
       <Text dimColor wrap="wrap">
         {clipped}
       </Text>
       <Box marginTop={1}>
-        <Text color="green">[y] allow </Text>
-        <Text color="red">[Enter/n/Esc] deny</Text>
+        <Text color="green" bold>
+          {'[Y] Allow'}{' '}
+        </Text>
+        <Text dimColor>{'  '}</Text>
+        <Text color="red">{'[Enter / N / Esc] Deny'}</Text>
       </Box>
     </Box>
   );
@@ -818,13 +833,15 @@ export function EffortPicker({
   const chosen = EFFORT_CHOICES[selected] ?? 'none';
   markerPad += Math.floor(chosen.length / 2);
   return (
-    <Box flexDirection="column" paddingX={1}>
+    <Box flexDirection="column" paddingX={1} borderStyle="round" borderColor="blue">
       <Box flexDirection="row">
         <Text color="cyan" bold>
-          思考深度
+          REASONING EFFORT
         </Text>
         <Text dimColor>
-          （当前 <Text color={EFFORT_COLORS[current]}>{current}</Text>）
+          {'  思考深度（当前 '}
+          <Text color={EFFORT_COLORS[current]}>{current}</Text>
+          {'）'}
         </Text>
       </Box>
       <Box flexDirection="row">
@@ -840,7 +857,7 @@ export function EffortPicker({
         ))}
       </Box>
       <Text color={EFFORT_COLORS[chosen]}>{' '.repeat(markerPad)}▲</Text>
-      <Text dimColor>←/→ 调整 · Enter 确认 · Esc 取消</Text>
+      <Text dimColor>{'←/→ 调整 · Enter 确认 · Esc 取消'}</Text>
     </Box>
   );
 }
@@ -1102,33 +1119,62 @@ export function TuiApp({
                 status: 'requested',
                 arguments: call.arguments,
               };
-              setEntries((previous) =>
-                previous.some((entry) => entry.tool?.callId === call.callId)
-                  ? previous
-                  : [
-                      ...previous,
-                      {
-                        id: `tool-${call.callId}`,
-                        kind: 'tool',
-                        content: call.name,
-                        tool,
-                      },
-                    ],
-              );
+              setEntries((previous) => {
+                if (previous.some((entry) => entry.tool?.callId === call.callId)) return previous;
+                const toolEntry: TranscriptEntry = {
+                  id: `tool-${call.callId}`,
+                  kind: 'tool',
+                  content: call.name,
+                  tool,
+                };
+                const assistantIndex = previous.findIndex((entry) => entry.id === assistantId);
+                if (assistantIndex < 0) return [...previous, toolEntry];
+                const assistant = previous[assistantIndex];
+                if (assistant === undefined) return [...previous, toolEntry];
+                // The placeholder is created before the agent decides to use
+                // tools. Keep it after every tool so the eventual response
+                // always reads as the conclusion of that work.
+                return [
+                  ...previous.slice(0, assistantIndex),
+                  ...previous.slice(assistantIndex + 1),
+                  toolEntry,
+                  assistant,
+                ];
+              });
               setStatus(`Preparing ${call.name}`);
             }
           },
         });
         flushDeltaBuffer(assistantId);
         setUsage(result.usage);
-        setEntries((previous) =>
-          previous.map((entry) =>
-            entry.id === assistantId && result.message.length > 0
-              ? { ...entry, content: result.message }
-              : entry,
-          ),
-        );
+        setEntries((previous) => {
+          const assistantIndex = previous.findIndex((entry) => entry.id === assistantId);
+          if (assistantIndex < 0 || result.message.length === 0) return previous;
+          const assistant = previous[assistantIndex];
+          if (assistant === undefined) return previous;
+          // Put the completed answer behind all tool updates, including a
+          // final hook event that arrived while the response was streaming.
+          return [
+            ...previous.slice(0, assistantIndex),
+            ...previous.slice(assistantIndex + 1),
+            { ...assistant, content: result.message },
+          ];
+        });
         setStatus(result.status === 'cancelled' ? 'Cancelled' : 'Ready');
+        if (!nested && activeRuntime.session !== undefined) {
+          const session = activeRuntime.session;
+          const contextChars = sessionContextChars(session);
+          if (
+            contextChars >= COMPACT_HINT_MIN_CHARS ||
+            session.messages.length >= COMPACT_HINT_MIN_MESSAGES
+          ) {
+            appendSystem(
+              `Tip: the conversation is now ${String(session.messages.length)} messages / ` +
+                `${String(contextChars)} chars. Run /compact to compress the early part ` +
+                'into a summary and reduce context cost.',
+            );
+          }
+        }
         return result;
       } catch (error) {
         flushDeltaBuffer(assistantId);
@@ -1232,10 +1278,11 @@ export function TuiApp({
         } else if (command.kind === 'context') {
           const active = runtimeRef.current;
           const session = active.session;
+          const messages = session?.messages ?? [];
           const lines: string[] = [
             `Session    ${session?.id ?? 'none'}`,
             `Model      ${active.config.model} (${active.config.reasoning}, ${active.config.verbosity})`,
-            `Messages   ${String(session?.messages.length ?? 0)} | Tool calls ${String(session?.toolCalls.length ?? 0)}`,
+            `Messages   ${String(messages.length)} | Tool calls ${String(session?.toolCalls.length ?? 0)}`,
             `Tokens     in ${String(usage.inputTokens)} / out ${String(usage.outputTokens)} / total ${String(usage.totalTokens)}`,
           ];
           if (usage.cachedInputTokens !== undefined) {
@@ -1244,18 +1291,54 @@ export function TuiApp({
           if (usage.reasoningTokens !== undefined) {
             lines.push(`           reasoning ${String(usage.reasoningTokens)}`);
           }
-          const messages = session?.messages ?? [];
           if (messages.length === 0) {
             lines.push('Context    empty');
           } else {
-            lines.push('Context');
+            const contextChars = sessionContextChars(session);
+            lines.push(
+              `Context    ${String(contextChars)} chars across ${String(messages.length)} messages`,
+            );
             messages.forEach((message, index) => {
               lines.push(
                 `  ${String(index + 1).padStart(2, ' ')}. ${message.role.padEnd(9, ' ')} ${String(message.content.length).padStart(6, ' ')} chars  ${previewLine(message.content)}`,
               );
             });
+            if (
+              contextChars >= COMPACT_HINT_MIN_CHARS ||
+              messages.length >= COMPACT_HINT_MIN_MESSAGES
+            ) {
+              lines.push('Tip        Run /compact to compress the early messages into a summary.');
+            }
           }
           appendSystem(lines.join('\n'));
+        } else if (command.kind === 'compact') {
+          const active = runtimeRef.current;
+          const session = active.session;
+          if (session === undefined) {
+            appendSystem('No active session; start one with /new or /resume.', 'error');
+          } else if (session.messages.length <= COMPACT_KEEP_RECENT_MESSAGES + 1) {
+            appendSystem(
+              `Session has only ${String(session.messages.length)} messages; nothing to compress ` +
+                `yet (at least ${String(COMPACT_KEEP_RECENT_MESSAGES + 1)} are needed).`,
+              'error',
+            );
+          } else {
+            const beforeChars = sessionContextChars(session);
+            const result = await active.runner.compact(session);
+            // The session was mutated in place; re-render the transcript from
+            // the compressed session so the hidden early turns disappear.
+            setRuntime({ ...active });
+            setEntries(runtimeEntries(active));
+            appendSystem(
+              [
+                `Compacted ${String(result.compressedMessageCount)} of ${String(result.originalMessageCount)} messages into a summary; ` +
+                  `kept the last ${String(result.keptMessageCount)} verbatim.`,
+                `Context ${String(beforeChars)} → ${String(sessionContextChars(session))} chars.`,
+                `Summary ${String(result.summary.length)} chars; ` +
+                  `tokens in ${String(result.usage.inputTokens)} / out ${String(result.usage.outputTokens)}.`,
+              ].join('\n'),
+            );
+          }
         } else if (command.kind === 'effort') {
           // Open the interactive picker; the selected level is applied on
           // Enter (see the effortPicker branch in useInput).
@@ -1493,7 +1576,11 @@ export function TuiApp({
   }, [applyDraft, runCommand]);
 
   const contentWidth = Math.max(10, columns - 2);
-  const visibleHeight = Math.max(4, rows - 11);
+  // Header, command deck, and footer have fixed heights in the normal view.
+  // Reserving the transcript height explicitly lets the latest content anchor
+  // to the command deck instead of relying on terminal flexbox behavior.
+  const transcriptHeight = Math.max(5, rows - 9);
+  const visibleHeight = Math.max(4, transcriptHeight - 1);
 
   useInput(
     (input, key) => {
@@ -1757,27 +1844,49 @@ export function TuiApp({
   const cursorDraft = `${draft.slice(0, cursor)}|${draft.slice(cursor)}`;
   const advice = cursor === draft.length ? tuiCommandAdvice(draft) : '';
   const approvalView = approval;
+  const modeLabel = planMode ? 'PLAN' : 'CODE';
+  const modeColor = planMode ? 'magenta' : 'cyan';
+  const activityLabel = busy ? 'WORKING' : 'READY';
+  const activityColor = busy ? 'yellow' : 'green';
 
   return (
     <Box flexDirection="column" height="100%" width="100%" paddingX={1}>
-      <Box justifyContent="space-between" borderBottom borderColor="gray">
-        <Text bold color="cyan">
-          CodeFarmer
-        </Text>
-        <Text dimColor wrap="truncate-middle">
-          {sessionId.slice(0, 12)} | {runtime.workspace}
-        </Text>
+      <Box flexDirection="column" borderStyle="round" borderColor={modeColor} paddingX={1}>
+        <Box justifyContent="space-between">
+          <Text bold color="cyan">
+            {'CodeFarmer'} <Text dimColor>{'CODING WORKBENCH'}</Text>
+          </Text>
+          <Text color={activityColor} bold>
+            {`● ${activityLabel}`}
+          </Text>
+        </Box>
+        <Box justifyContent="space-between">
+          <Text dimColor wrap="truncate-middle">
+            <Text color="gray">{'WORKSPACE  '}</Text>
+            {runtime.workspace}
+          </Text>
+          <Text dimColor wrap="truncate-start">
+            <Text color="gray">{'SESSION  '}</Text>
+            {sessionId.slice(0, 12)}
+          </Text>
+        </Box>
       </Box>
       <Box
         flexDirection="column"
-        flexGrow={1}
+        justifyContent={atBottom ? 'flex-end' : 'flex-start'}
+        height={transcriptHeight}
         flexShrink={1}
         minHeight={0}
         overflow="hidden"
         paddingTop={1}
       >
         {entries.length === 0 ? (
-          <Text dimColor>No messages yet.</Text>
+          <Box flexDirection="column" paddingLeft={2}>
+            <Text color="cyan" bold>
+              {'Start a task'}
+            </Text>
+            <Text dimColor>{'Describe the change you want to make, or type /help.'}</Text>
+          </Box>
         ) : (
           (() => {
             const rendered: React.ReactElement[] = [];
@@ -1823,34 +1932,46 @@ export function TuiApp({
         <EffortPicker current={runtime.config.reasoning} selected={effortPicker} />
       )}
       <Box
+        flexDirection="column"
         borderStyle="round"
-        borderColor={busy ? 'yellow' : planMode ? 'magenta' : 'cyan'}
+        borderColor={busy ? 'yellow' : modeColor}
         paddingX={1}
       >
-        <Text color={planMode ? 'magenta' : 'cyan'}>&gt; </Text>
-        {draft.length === 0 ? (
-          <Text dimColor wrap="truncate-end">
-            {busy
-              ? '可随时输入下一条指令…'
-              : planMode
-                ? '计划模式：只读探索，Shift+Tab 退出'
-                : '输入任务，/help 查看命令（Shift+Tab 计划模式 · Ctrl+O 思考过程）'}
+        <Text color={modeColor} bold>
+          {`${modeLabel} PROMPT`}
+          <Text dimColor>
+            {busy ? '  Queue a follow-up while this turn runs' : '  Enter to run'}
           </Text>
-        ) : (
-          <Text wrap="truncate-end">
-            {cursorDraft}
-            {advice.length === 0 ? null : <Text dimColor>{advice}</Text>}
+        </Text>
+        <Box>
+          <Text color={modeColor} bold>
+            {'› '}
           </Text>
-        )}
+          {draft.length === 0 ? (
+            <Text dimColor wrap="truncate-end">
+              {busy
+                ? '输入下一条指令…'
+                : planMode
+                  ? '计划模式仅进行只读探索'
+                  : '描述要完成的任务，或输入 /help'}
+            </Text>
+          ) : (
+            <Text wrap="truncate-end">
+              {cursorDraft}
+              {advice.length === 0 ? null : <Text dimColor>{advice}</Text>}
+            </Text>
+          )}
+        </Box>
       </Box>
       <Box justifyContent="space-between">
         <Text dimColor wrap="truncate-end">
-          {status} | {planMode ? 'plan mode' : 'code mode'}
-          {showThinking ? ' | thinking' : ''} | {runtime.config.model} | approval:
-          {runtime.config.approval}
-          {atBottom ? '' : ` | ↑${String(clampedTop)}/${String(maximumTop)} 行 (PgDn 回到底部)`}
+          {status} {' · '}
+          <Text color={modeColor}>{modeLabel}</Text>
+          {showThinking ? ' · thinking' : ''} {' · '}
+          {runtime.config.model}
+          {atBottom ? '' : ` · ↑ ${String(clampedTop)}/${String(maximumTop)} (PgDn latest)`}
         </Text>
-        <Text dimColor>{String(usage.totalTokens)} tokens</Text>
+        <Text dimColor>{`${String(usage.totalTokens)} tokens · ${runtime.config.approval}`}</Text>
       </Box>
     </Box>
   );

@@ -19,6 +19,7 @@ describe('TUI command parser', () => {
     expect(parseTuiCommand('/status')).toEqual({ kind: 'status' });
     expect(parseTuiCommand('/context')).toEqual({ kind: 'context' });
     expect(parseTuiCommand('/ctx')).toEqual({ kind: 'context' });
+    expect(parseTuiCommand('/compact')).toEqual({ kind: 'compact' });
     expect(parseTuiCommand('/effort')).toEqual({ kind: 'effort' });
     expect(parseTuiCommand('/reasoning')).toEqual({ kind: 'effort' });
     expect(parseTuiCommand('/plan')).toEqual({ kind: 'plan', value: '' });
@@ -42,6 +43,7 @@ describe('TUI command parser', () => {
     expect(parseTuiCommand('/exit')).toEqual({ kind: 'quit' });
     expect(TUI_HELP).toContain('/undo');
     expect(TUI_HELP).toContain('/context');
+    expect(TUI_HELP).toContain('/compact');
     expect(TUI_HELP).toContain('/effort');
     expect(TUI_HELP).toContain('/plan');
     expect(TUI_HELP).toContain('/init');
