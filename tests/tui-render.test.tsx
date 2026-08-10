@@ -3,7 +3,14 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentRuntime } from '../src/cli/runtime.js';
 import { DEFAULT_CONFIG } from '../src/infra/config.js';
-import { EffortPicker, EntryView, TuiApp, assistantLines, wrapToLines } from '../src/tui/App.js';
+import {
+  ClippedEntry,
+  EffortPicker,
+  EntryView,
+  TuiApp,
+  assistantLines,
+  wrapToLines,
+} from '../src/tui/App.js';
 import { MarkdownView } from '../src/tui/markdown.js';
 import { TuiInteractionBridge } from '../src/tui/runtime.js';
 
@@ -173,6 +180,27 @@ describe('TUI rendering', () => {
     // "…bounda" tail on one line and a "ry." fragment on the next.
     expect(lines.some((line) => line.endsWith('bounda'))).toBe(false);
     expect(lines.some((line) => line.startsWith('ry.'))).toBe(false);
+  });
+
+  it('preserves Markdown blocks when a transcript entry is clipped', () => {
+    const output = renderToString(
+      <ClippedEntry
+        entry={{
+          id: 'a-1',
+          kind: 'assistant',
+          content: ['# Heading', '- item', '> quote'].join('\n'),
+        }}
+        skip={1}
+        take={3}
+        width={80}
+      />,
+      { columns: 80 },
+    );
+
+    expect(output).toContain('• item');
+    expect(output).toContain('▍ quote');
+    expect(output).not.toContain('- item');
+    expect(output).not.toContain('> quote');
   });
 
   it('shows assistant reasoning only when thinking display is enabled', () => {

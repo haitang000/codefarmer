@@ -14,6 +14,7 @@ export type TuiCommand =
   | { kind: 'doctor' }
   | { kind: 'diff' }
   | { kind: 'commit'; message: string }
+  | { kind: 'push'; args: string[] }
   | { kind: 'undo' }
   | { kind: 'sessions' }
   | { kind: 'resume'; id: string }
@@ -78,6 +79,7 @@ export const TUI_HELP = [
   '/delete ID  delete a saved session',
   '/diff       show the current Git diff',
   '/commit     stage and commit; without a message, the agent summarizes the changes',
+  '/push       push the current branch to its configured upstream',
   '/undo       undo the latest file mutation',
   '/cancel     cancel the active turn',
   '/quit       exit CodeFarmer',
@@ -99,6 +101,7 @@ export const TUI_COMMANDS = [
   'delete',
   'diff',
   'commit',
+  'push',
   'undo',
   'cancel',
   'quit',
@@ -158,6 +161,8 @@ export function parseTuiCommand(input: string): TuiCommand {
       return { kind: 'diff' };
     case 'commit':
       return { kind: 'commit', message: parts.join(' ') };
+    case 'push':
+      return { kind: 'push', args: parts };
     case 'undo':
       return { kind: 'undo' };
     case 'sessions':

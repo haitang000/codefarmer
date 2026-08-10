@@ -24,6 +24,11 @@ describe('TUI command parser', () => {
     expect(parseTuiCommand('/plan')).toEqual({ kind: 'plan', value: '' });
     expect(parseTuiCommand('/plan ON')).toEqual({ kind: 'plan', value: 'on' });
     expect(parseTuiCommand('/plan off')).toEqual({ kind: 'plan', value: 'off' });
+    expect(parseTuiCommand('/push')).toEqual({ kind: 'push', args: [] });
+    expect(parseTuiCommand('/push origin main')).toEqual({
+      kind: 'push',
+      args: ['origin', 'main'],
+    });
     expect(parseTuiCommand('/config')).toEqual({ kind: 'config' });
     expect(parseTuiCommand('/doctor')).toEqual({ kind: 'doctor' });
     expect(parseTuiCommand('/resume session-1')).toEqual({
@@ -40,6 +45,7 @@ describe('TUI command parser', () => {
     expect(TUI_HELP).toContain('/effort');
     expect(TUI_HELP).toContain('/plan');
     expect(TUI_HELP).toContain('/init');
+    expect(TUI_HELP).toContain('/push');
   });
 
   it('returns unknown commands without discarding their arguments', () => {
@@ -56,6 +62,7 @@ describe('TUI command parser', () => {
     expect(tuiCommandAdvice('/')).toBe('help');
     expect(tuiCommandAdvice('/st')).toBe('atus');
     expect(tuiCommandAdvice('/in')).toBe('it');
+    expect(tuiCommandAdvice('/pu')).toBe('sh');
     expect(tuiCommandAdvice('/s')).toBe('');
     expect(tuiCommandAdvice('/help ')).toBe('');
     expect(completeTuiCommand('inspect this workspace')).toBe('inspect this workspace');

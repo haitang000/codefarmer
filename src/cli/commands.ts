@@ -532,7 +532,7 @@ export async function pushAction(
     const slash = upstream.indexOf('/');
     remote = slash > 0 ? upstream.slice(0, slash) : upstream;
   }
-  if (remote === undefined) remote = options.setUpstream === true ? 'origin' : undefined;
+  remote ??= options.setUpstream ? 'origin' : undefined;
   if (remote === undefined) {
     throw new ConfigError(
       `分支 ${branch} 没有上游分支。首次推送请使用: codefarmer push --set-upstream --remote origin`,
@@ -569,7 +569,7 @@ export async function pushAction(
       message: `确认将 ${branch} 推送到 ${remote}？`,
       initialValue: false,
     });
-    if (isCancel(answer) || answer !== true) {
+    if (isCancel(answer) || !answer) {
       cancel('已取消推送。');
       process.exitCode = 130;
       return;

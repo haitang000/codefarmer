@@ -8,8 +8,11 @@ CodeFarmer is a safe, interactive coding-agent CLI (v0.1.0, MIT) powered by the
 OpenAI Responses API. It inspects a workspace, edits files through reviewable
 unified diffs (`apply_patch`), runs approved commands, exposes read-only Git
 tools, and can resume prior sessions. It ships a full-screen Ink TUI and a
-one-shot `run --json` mode. The project is also self-hosting: the TUI `/init`
-command inspects a workspace and creates/updates this `AGENT.md`.
+one-shot `run --json` mode, plus a `push` command that pushes the current
+branch to its remote and always requires explicit confirmation (even under
+`--approval auto`; see Important Constraints). The project is also
+self-hosting: the TUI `/init` command inspects a workspace and creates/updates
+this `AGENT.md`.
 
 Stack: TypeScript (strict), ESM (`"type": "module"`), Node.js >= 22, pnpm
 (10.28.0), React 19 + Ink (TUI), Commander, Clack, Chalk, Zod, Pino, execa,

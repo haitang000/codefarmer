@@ -153,6 +153,7 @@ TUI 在同一个备用屏幕中承载对话、工具状态、审批、工作区�
 | `/delete <id>`  | 删除非当前会话                                                      |
 | `/diff`         | 显示当前 Git 差异                                                   |
 | `/commit [msg]` | 暂存并提交工作区全部更改；不提供信息时由 agent 总结差异生成提交信息 |
+| `/push`         | 确认后将当前分支推送到已配置的上游                                  |
 | `/undo`         | 撤销最近一笔符合条件的文件事务                                      |
 | `/new`          | 开始一个新会话                                                      |
 | `/cancel`       | 取消当前请求或工具                                                  |
@@ -220,7 +221,7 @@ Ctrl+C 会退出 TUI。非交互 shell 中直接运行命令只显示帮助，�
 | `baseURL`            | `CODEFARMER_BASE_URL`              | `https://api.openai.com/v1` |
 | `reasoning`          | `CODEFARMER_REASONING`             | `auto`                      |
 | `verbosity`          | `CODEFARMER_VERBOSITY`             | `low`                       |
-| `reasoningSummary`   | `CODEFARMER_REASONING_SUMMARY`    | `none`                      |
+| `reasoningSummary`   | `CODEFARMER_REASONING_SUMMARY`     | `none`                      |
 | `approval`           | `CODEFARMER_APPROVAL`              | `ask`                       |
 | `stream`             | `CODEFARMER_STREAM`                | `true`                      |
 | `store`              | `CODEFARMER_STORE`                 | `true`（v1 必须）           |
@@ -252,11 +253,11 @@ HTTP(S)，且不能包含账号密码、查询参数或片段；末尾斜杠会�
 
 ## 审批与安全边界
 
-| 策略        | 行为                                                   |
-| ----------- | ------------------------------------------------------ |
-| `ask`       | 自动读取；文件变更展示 diff 后确认；普通命令执行前确认 |
+| 策略        | 行为                                                    |
+| ----------- | ------------------------------------------------------- |
+| `ask`       | 自动读取；文件变更展示 diff 后确认；普通命令执行前确认  |
 | `auto`      | 自动执行允许的工作区补丁和普通命令；`git push` 仍须确认 |
-| `read-only` | 拒绝文件变更和非只读命令                               |
+| `read-only` | 拒绝文件变更和非只读命令                                |
 
 危险系统命令、`sh -c`、`cmd /c`、`powershell -Command` 等 shell 包装绕过，
 以及除经明确确认的 `git push` 外的所有 Git 写操作，在任何策略下都会被拒绝。启动子进程前会移除

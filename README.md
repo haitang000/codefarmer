@@ -158,6 +158,7 @@ pause in an approval modal; only an explicit `y` accepts the operation.
 | `/delete <id>`  | Delete a non-active local session                                                       |
 | `/diff`         | Show current Git diff                                                                   |
 | `/commit [msg]` | Stage and commit all workspace changes; without a message the agent summarizes the diff |
+| `/push`         | Push the current branch to its configured upstream after confirmation                   |
 | `/undo`         | Undo the most recent eligible file mutation                                             |
 | `/new`          | Start a fresh session                                                                   |
 | `/cancel`       | Cancel the active request or tool                                                       |
@@ -232,7 +233,7 @@ Supported environment overrides are:
 | `baseURL`            | `CODEFARMER_BASE_URL`              | `https://api.openai.com/v1`   |
 | `reasoning`          | `CODEFARMER_REASONING`             | `auto`                        |
 | `verbosity`          | `CODEFARMER_VERBOSITY`             | `low`                         |
-| `reasoningSummary`   | `CODEFARMER_REASONING_SUMMARY`    | `none`                        |
+| `reasoningSummary`   | `CODEFARMER_REASONING_SUMMARY`     | `none`                        |
 | `approval`           | `CODEFARMER_APPROVAL`              | `ask`                         |
 | `stream`             | `CODEFARMER_STREAM`                | `true`                        |
 | `store`              | `CODEFARMER_STORE`                 | `true` (required in v1)       |
@@ -266,11 +267,11 @@ embedded credentials, query parameters, or fragments.
 
 ## Approvals and safety
 
-| Policy      | Behavior                                                            |
-| ----------- | ------------------------------------------------------------------- |
-| `ask`       | Reads run automatically; patches show a diff and commands ask first |
+| Policy      | Behavior                                                                                 |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| `ask`       | Reads run automatically; patches show a diff and commands ask first                      |
 | `auto`      | Allowed workspace patches and ordinary commands run automatically; `git push` still asks |
-| `read-only` | Mutations and non-read-only commands are rejected                   |
+| `read-only` | Mutations and non-read-only commands are rejected                                        |
 
 Dangerous system commands, shell-wrapper bypasses such as `sh -c`, `cmd /c`,
 and `powershell -Command`, and all Git writes except explicitly confirmed

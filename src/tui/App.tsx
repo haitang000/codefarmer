@@ -14,8 +14,9 @@ import {
   detectGitAvailability,
   inspectWorkingTree,
 } from '../tools/git-tools.js';
+import { sanitiseEnvironment } from '../tools/run-command.js';
 import type { ProviderEvent, ReasoningEffort, TokenUsage } from '../types.js';
-import { MarkdownView } from './markdown.js';
+import { MarkdownLine, MarkdownView } from './markdown.js';
 import {
   extractCommitMessage,
   formatToolResult,
@@ -115,6 +116,77 @@ function id(prefix: string): string {
 }
 
 const TOOL_OUTPUT_PREVIEW_LIMIT = 160;
+
+const TUI_PUSH_GIT_ENV = {
+  GIT_EXTERNAL_DIFF: '',
+  GIT_OPTIONAL_LOCKS: '0',
+  GIT_PAGER: 'cat',
+  PAGER: 'cat',
+};
+
+interface PushPreview {
+  branch: string;
+  remote: string;
+  upstream: string;
+  ahead: string[];
+}
+
+function pushGitOptions(workspace: string): {
+  cwd: string;
+  reject: false;
+  env: NodeJS.ProcessEnv;
+  extendEnv: false;
+} {
+  return {
+    cwd: workspace,
+    reject: false,
+    env: sanitiseEnvironment({ ...process.env, ...TUI_PUSH_GIT_ENV }),
+    extendEnv: false,
+  };
+}
+
+async function previewCurrentBranchPush(workspace: string): Promise<PushPreview> {
+  const branchResult = await execa('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+    ...pushGitOptions(workspace),
+  });
+  if (branchResult.exitCode !== 0) {
+    throw new Error(branchResult.stderr.trim() || 'Unable to read the current Git branch.');
+  }
+  const branch = branchResult.stdout.trim();
+  if (branch === 'HEAD') {
+    throw new Error('Cannot push from a detached HEAD. Switch to a branch first.');
+  }
+
+  const upstreamResult = await execa(
+    'git',
+    ['rev-parse', '--abbrev-ref', '--symbolic-full-name', `${branch}@{u}`],
+    pushGitOptions(workspace),
+  );
+  if (upstreamResult.exitCode !== 0) {
+    throw new Error(
+      `Branch ${branch} has no upstream. Set it with codefarmer push --set-upstream --remote origin.`,
+    );
+  }
+  const upstream = upstreamResult.stdout.trim();
+  const slash = upstream.indexOf('/');
+  const remote = slash > 0 ? upstream.slice(0, slash) : '';
+  if (remote.length === 0 || remote.startsWith('-') || branch.startsWith('-')) {
+    throw new Error(`Invalid upstream configured for branch ${branch}.`);
+  }
+
+  const aheadResult = await execa('git', ['log', '--oneline', `${branch}@{u}..HEAD`], {
+    ...pushGitOptions(workspace),
+  });
+  if (aheadResult.exitCode !== 0) {
+    throw new Error(aheadResult.stderr.trim() || 'Unable to inspect commits pending push.');
+  }
+  return {
+    branch,
+    remote,
+    upstream,
+    ahead: aheadResult.stdout.split('\n').filter((line) => line.length > 0),
+  };
+}
 
 // Tool outputs (file contents, command streams) can span thousands of lines;
 // the transcript only needs a compact single-line preview.
@@ -453,32 +525,41 @@ export function wrapToLines(text: string, width: number): string[] {
 }
 
 export function assistantLines(content: string, width: number): string[] {
-  const lines: string[] = [];
+  return assistantRenderLines(content, width).map((line) => line.text);
+}
+
+interface AssistantRenderLine {
+  text: string;
+  code: boolean;
+}
+
+function assistantRenderLines(content: string, width: number): AssistantRenderLine[] {
+  const rendered: AssistantRenderLine[] = [];
   let inCode = false;
   for (const raw of content.split(/\r?\n/u)) {
     const line = raw.replace(/\s+$/u, '');
     if (inCode) {
       if (line.trimStart().startsWith('```')) {
         inCode = false;
-        lines.push('└────────');
+        rendered.push({ text: '└────────', code: true });
       } else {
-        lines.push(...wrapToLines(line, width));
+        rendered.push(...wrapToLines(line, width).map((text) => ({ text, code: true })));
       }
       continue;
     }
     if (/^\s*```/u.test(line)) {
       inCode = true;
-      lines.push('┌────────');
+      rendered.push({ text: '┌────────', code: true });
       continue;
     }
     if (line.length === 0) {
-      lines.push('');
+      rendered.push({ text: '', code: false });
       continue;
     }
-    lines.push(...wrapToLines(line, width));
+    rendered.push(...wrapToLines(line, width).map((text) => ({ text, code: false })));
   }
-  if (inCode) lines.push('└────────');
-  return lines;
+  if (inCode) rendered.push({ text: '└────────', code: true });
+  return rendered;
 }
 
 function estimateEntryLines(
@@ -535,7 +616,7 @@ function estimateEntriesLines(
   return total;
 }
 
-function ClippedEntry({
+export function ClippedEntry({
   entry,
   skip,
   take,
@@ -569,9 +650,9 @@ function ClippedEntry({
   let remainingSkip = skip;
   let remainingTake = take;
   const rows: React.ReactElement[] = [];
-  const takeLines = (
-    lines: string[],
-    render: (line: string, index: number) => React.ReactElement,
+  const takeLines = <T,>(
+    lines: T[],
+    render: (line: T, index: number) => React.ReactElement,
   ): void => {
     for (const line of lines) {
       if (remainingSkip > 0) {
@@ -620,11 +701,17 @@ function ClippedEntry({
         </Text>
       ));
     } else {
-      takeLines(assistantLines(entry.content, Math.max(1, width - 2)), (line, index) => (
-        <Text key={index} wrap="truncate-end">
-          {`  ${line}`}
-        </Text>
-      ));
+      takeLines(assistantRenderLines(entry.content, Math.max(1, width - 2)), (line, index) =>
+        line.code ? (
+          <Text key={index} color="gray" wrap="truncate-end">
+            {`  ${line.text}`}
+          </Text>
+        ) : (
+          <Box key={index} paddingLeft={2} flexDirection="column">
+            <MarkdownLine line={line.text} />
+          </Box>
+        ),
+      );
     }
   } else if (entry.kind === 'tool' && entry.tool !== undefined) {
     const tool = entry.tool;
@@ -1315,6 +1402,53 @@ export function TuiApp({
               'Git is not installed or not on PATH; /commit is unavailable (Git is optional).',
             );
           }
+        } else if (command.kind === 'push') {
+          if (command.args.length > 0) {
+            appendSystem('Usage: /push', 'error');
+            return;
+          }
+          if (!(await detectGitAvailability()).available) {
+            appendSystem(
+              'Git is not installed or not on PATH; /push is unavailable (Git is optional).',
+              'error',
+            );
+            return;
+          }
+          const preview = await previewCurrentBranchPush(runtimeRef.current.workspace);
+          if (preview.ahead.length === 0) {
+            appendSystem(
+              `Nothing to push; ${preview.branch} is up to date with ${preview.upstream}.`,
+            );
+            return;
+          }
+          appendSystem(
+            [
+              `Push ${preview.branch} to ${preview.remote}`,
+              `Upstream  ${preview.upstream}`,
+              `Commits   ${String(preview.ahead.length)}`,
+              ...preview.ahead.map((line) => `  ${line}`),
+            ].join('\n'),
+          );
+          const pushArgs = ['push', preview.remote, preview.branch];
+          const approved = await requestApproval({
+            kind: 'command',
+            title: 'Push Git changes',
+            detail: JSON.stringify(['git', ...pushArgs]),
+            readOnly: false,
+            requireConfirmation: true,
+          });
+          if (!approved) {
+            appendSystem('Push cancelled.');
+            return;
+          }
+          const result = await execa('git', pushArgs, {
+            ...pushGitOptions(runtimeRef.current.workspace),
+          });
+          if (result.exitCode !== 0) {
+            appendSystem(result.stderr.trim() || 'Git push failed.', 'error');
+          } else {
+            appendSystem(`Pushed ${preview.branch} to ${preview.remote}.`);
+          }
         } else if (command.kind === 'undo') {
           const transaction = await runtimeRef.current.transactions.undoLatest(
             runtimeRef.current.session?.id,
@@ -1333,7 +1467,16 @@ export function TuiApp({
         }
       }
     },
-    [appendSystem, exit, runPrompt, runtimeFactory, swapRuntime, togglePlanMode, usage],
+    [
+      appendSystem,
+      exit,
+      requestApproval,
+      runPrompt,
+      runtimeFactory,
+      swapRuntime,
+      togglePlanMode,
+      usage,
+    ],
   );
 
   const submitDraft = useCallback((): void => {

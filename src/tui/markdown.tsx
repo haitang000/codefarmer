@@ -69,6 +69,83 @@ function InlineText({ line }: { line: string }): React.ReactElement {
   );
 }
 
+/** Renders one non-code Markdown line so clipped transcript rows retain formatting. */
+export function MarkdownLine({ line }: { line: string }): React.ReactElement {
+  const heading = /^(#{1,6})\s+(.*)$/u.exec(line);
+  if (heading) {
+    const level = heading[1]?.length ?? 1;
+    const title = heading[2] ?? '';
+    const rendered = parseInlineMarkdown(title);
+    return (
+      <Text
+        bold
+        {...(level <= 1
+          ? { color: 'cyan' as const }
+          : level === 2
+            ? { color: 'blue' as const }
+            : {})}
+        dimColor={level >= 4}
+        wrap="wrap"
+      >
+        {level <= 2 ? `${'#'.repeat(level)} ` : ''}
+        {rendered.map((segment) => (
+          <Text
+            key={segment.key}
+            bold
+            italic={segment.italic === true}
+            inverse={segment.code === true}
+          >
+            {segment.text}
+          </Text>
+        ))}
+      </Text>
+    );
+  }
+
+  if (/^(-{3,}|\*{3,}|_{3,})$/u.test(line.trim())) {
+    return <Text dimColor>{'─'.repeat(24)}</Text>;
+  }
+
+  const quote = /^>\s?(.*)$/u.exec(line);
+  if (quote) {
+    return (
+      <Text dimColor wrap="wrap">
+        {'▍ '}
+        {quote[1] ?? ''}
+      </Text>
+    );
+  }
+
+  const bullet = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/u.exec(line);
+  if (bullet) {
+    const indent = bullet[1] ?? '';
+    const marker = bullet[2] ?? '-';
+    const text = bullet[3] ?? '';
+    return (
+      <Text wrap="wrap">
+        <Text color={/\d/u.test(marker) ? 'blue' : 'yellow'}>
+          {`${indent}${/\d/u.test(marker) ? marker : '•'} `}
+        </Text>
+        {parseInlineMarkdown(text).map((segment) => (
+          <Text
+            key={segment.key}
+            bold={segment.bold === true}
+            italic={segment.italic === true}
+            inverse={segment.code === true}
+            dimColor={segment.dim === true}
+            {...(segment.code === true ? { color: 'cyan' as const } : {})}
+          >
+            {segment.text}
+          </Text>
+        ))}
+      </Text>
+    );
+  }
+
+  if (line.length === 0) return <Text> </Text>;
+  return <InlineText line={line} />;
+}
+
 export function MarkdownView({ content }: { content: string }): React.ReactElement {
   const lines = content.split(/\r?\n/u);
   const blocks: React.ReactElement[] = [];
@@ -111,91 +188,7 @@ export function MarkdownView({ content }: { content: string }): React.ReactEleme
       continue;
     }
 
-    const heading = /^(#{1,6})\s+(.*)$/u.exec(line);
-    if (heading) {
-      const level = heading[1]?.length ?? 1;
-      const title = heading[2] ?? '';
-      const rendered = parseInlineMarkdown(title);
-      blocks.push(
-        <Text
-          key={key++}
-          bold
-          {...(level <= 1
-            ? { color: 'cyan' as const }
-            : level === 2
-              ? { color: 'blue' as const }
-              : {})}
-          dimColor={level >= 4}
-          wrap="wrap"
-        >
-          {level <= 2 ? `${'#'.repeat(level)} ` : ''}
-          {rendered.map((segment) => (
-            <Text
-              key={segment.key}
-              bold
-              italic={segment.italic === true}
-              inverse={segment.code === true}
-            >
-              {segment.text}
-            </Text>
-          ))}
-        </Text>,
-      );
-      continue;
-    }
-
-    if (/^(-{3,}|\*{3,}|_{3,})$/u.test(line.trim())) {
-      blocks.push(
-        <Text key={key++} dimColor>
-          {'─'.repeat(24)}
-        </Text>,
-      );
-      continue;
-    }
-
-    const quote = /^>\s?(.*)$/u.exec(line);
-    if (quote) {
-      blocks.push(
-        <Text key={key++} dimColor wrap="wrap">
-          {'▍ '}
-          {quote[1] ?? ''}
-        </Text>,
-      );
-      continue;
-    }
-
-    const bullet = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/u.exec(line);
-    if (bullet) {
-      const indent = bullet[1] ?? '';
-      const marker = bullet[2] ?? '-';
-      const text = bullet[3] ?? '';
-      blocks.push(
-        <Text key={key++} wrap="wrap">
-          <Text color={/\d/u.test(marker) ? 'blue' : 'yellow'}>
-            {`${indent}${/\d/u.test(marker) ? marker : '•'} `}
-          </Text>
-          {parseInlineMarkdown(text).map((segment) => (
-            <Text
-              key={segment.key}
-              bold={segment.bold === true}
-              italic={segment.italic === true}
-              inverse={segment.code === true}
-              dimColor={segment.dim === true}
-              {...(segment.code === true ? { color: 'cyan' as const } : {})}
-            >
-              {segment.text}
-            </Text>
-          ))}
-        </Text>,
-      );
-      continue;
-    }
-
-    if (line.length === 0) {
-      blocks.push(<Text key={key++}> </Text>);
-      continue;
-    }
-    blocks.push(<InlineText key={key++} line={line} />);
+    blocks.push(<MarkdownLine key={key++} line={line} />);
   }
 
   // An unterminated fence during streaming still renders as code.
