@@ -2,7 +2,8 @@
 
 CodeFarmer 是一个模块化 Coding Agent 命令行工具。它能够检查工作区、生成代码、
 通过可审查的补丁编辑文件、运行经审批的命令、查看 Git 状态，并恢复历史会话。
-它基于 OpenAI Responses API，默认使用 `gpt-5.6-sol` 模型和 `medium` 推理强度。
+它基于 OpenAI Responses API，默认使用 `gpt-5.6-sol` 模型，由模型自行决定推理强度，
+并使用低详细度输出以节省 token。
 
 [English](README.md) | [架构](docs/ARCHITECTURE.md) |
 [安全模型](docs/SECURITY.md) | [安装与部署](docs/DEPLOYMENT.md)
@@ -109,6 +110,8 @@ CodeFarmer 启动时所在的目录；它不会自动扩大到上层 Git 仓库�
 --model <模型>
 --base-url <URL>
 --reasoning <auto|none|low|medium|high|xhigh|max>
+--verbosity <low|medium|high>
+--reasoning-summary <none|auto|concise|detailed>
 --approval <ask|auto|read-only>
 --no-stream
 --log-level <trace|debug|info|warn|error|fatal|silent>
@@ -173,8 +176,9 @@ Ctrl+C 会退出 TUI。非交互 shell 中直接运行命令只显示帮助，�
   查看单个提交（补丁或 `--stat` 摘要），全部只读、不修改仓库状态。Git 为可选
   依赖：缺失时这些工具会优雅失败，Agent 继续使用文件工具完成任务。
 
-不支持 commit、checkout/switch、reset、clean、merge、rebase、tag、push 等
-Git 写操作。工具参数都会校验，输入和输出有大小限制；只读工具可以并行，文件
+不支持 commit、checkout/switch、reset、clean、merge、rebase、tag 等 Git 写
+操作。Agent 只能通过 `run_command` 执行 `git push`，且无论审批策略为何，均须
+由用户明确确认完整命令。工具参数都会校验，输入和输出有大小限制；只读工具可以并行，文件
 变更和命令串行执行。Agent 默认最多运行 25 轮。
 
 ## 配置
@@ -193,14 +197,16 @@ Git 写操作。工具参数都会校验，输入和输出有大小限制；只�
 {
   "model": "gpt-5.6-sol",
   "baseURL": "https://api.openai.com/v1",
-  "reasoning": "medium",
+  "reasoning": "auto",
+  "verbosity": "low",
+  "reasoningSummary": "none",
   "approval": "ask",
   "stream": true,
   "store": true,
   "logLevel": "info",
   "maxAgentTurns": 25,
   "maxFileSizeBytes": 1048576,
-  "maxToolOutputBytes": 102400,
+  "maxToolOutputBytes": 32768,
   "commandTimeoutMs": 120000,
   "ignoredPaths": [".git/**", "node_modules/**", "dist/**", ".env"]
 }
@@ -212,20 +218,26 @@ Git 写操作。工具参数都会校验，输入和输出有大小限制；只�
 | -------------------- | ---------------------------------- | --------------------------- |
 | `model`              | `CODEFARMER_MODEL`                 | `gpt-5.6-sol`               |
 | `baseURL`            | `CODEFARMER_BASE_URL`              | `https://api.openai.com/v1` |
-| `reasoning`          | `CODEFARMER_REASONING`             | `medium`                    |
+| `reasoning`          | `CODEFARMER_REASONING`             | `auto`                      |
+| `verbosity`          | `CODEFARMER_VERBOSITY`             | `low`                       |
+| `reasoningSummary`   | `CODEFARMER_REASONING_SUMMARY`    | `none`                      |
 | `approval`           | `CODEFARMER_APPROVAL`              | `ask`                       |
 | `stream`             | `CODEFARMER_STREAM`                | `true`                      |
 | `store`              | `CODEFARMER_STORE`                 | `true`（v1 必须）           |
 | `logLevel`           | `CODEFARMER_LOG_LEVEL`             | `info`                      |
 | `maxAgentTurns`      | `CODEFARMER_MAX_AGENT_TURNS`       | `25`                        |
 | `maxFileSizeBytes`   | `CODEFARMER_MAX_FILE_SIZE_BYTES`   | `1048576`                   |
-| `maxToolOutputBytes` | `CODEFARMER_MAX_TOOL_OUTPUT_BYTES` | `102400`                    |
+| `maxToolOutputBytes` | `CODEFARMER_MAX_TOOL_OUTPUT_BYTES` | `32768`                     |
 | `commandTimeoutMs`   | `CODEFARMER_COMMAND_TIMEOUT_MS`    | `120000`                    |
 | `ignoredPaths`       | `CODEFARMER_IGNORED_PATHS`         | 受保护和生成目录            |
 
 `CODEFARMER_IGNORED_PATHS` 可以是 JSON 字符串数组或逗号分隔列表。默认忽略
 `.git`、依赖目录、构建与覆盖率输出、`.env`、私钥和证书；`.env.example`
 仍允许读取。
+
+节省 token 的默认值包括：由模型自行决定推理强度、低详细度正文、不生成可见推理摘要、
+最多 25 个工具轮次，以及每个工具输出最多 32 KiB。需要更多上下文或解释时，
+可以提高 `verbosity`、`reasoningSummary`、`maxAgentTurns` 或 `maxToolOutputBytes`。
 
 可以永久、按项目或仅为一次命令更换 API 端点：
 
@@ -243,11 +255,11 @@ HTTP(S)，且不能包含账号密码、查询参数或片段；末尾斜杠会�
 | 策略        | 行为                                                   |
 | ----------- | ------------------------------------------------------ |
 | `ask`       | 自动读取；文件变更展示 diff 后确认；普通命令执行前确认 |
-| `auto`      | 自动执行允许的工作区补丁和普通命令                     |
+| `auto`      | 自动执行允许的工作区补丁和普通命令；`git push` 仍须确认 |
 | `read-only` | 拒绝文件变更和非只读命令                               |
 
 危险系统命令、`sh -c`、`cmd /c`、`powershell -Command` 等 shell 包装绕过，
-以及所有 Git 写操作，在任何策略下都会被拒绝。启动子进程前会移除
+以及除经明确确认的 `git push` 外的所有 Git 写操作，在任何策略下都会被拒绝。启动子进程前会移除
 `OPENAI_API_KEY` 和其他名称疑似包含敏感信息的环境变量。
 
 这些保护属于应用层策略。CodeFarmer v1 **没有**操作系统级进程、文件系统、

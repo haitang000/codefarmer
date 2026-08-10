@@ -1,7 +1,14 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import type { CodeFarmerConfig, LogLevel, ReasoningEffort, ApprovalPolicy } from '../types.js';
+import type {
+  ApprovalPolicy,
+  CodeFarmerConfig,
+  LogLevel,
+  ReasoningEffort,
+  ReasoningSummary,
+  TextVerbosity,
+} from '../types.js';
 import { ConfigError } from './errors.js';
 import { getAppPaths } from './paths.js';
 import { fileExists, writeJsonAtomic } from './persistence.js';
@@ -24,14 +31,16 @@ export const DEFAULT_IGNORED_PATHS = [
 export const DEFAULT_CONFIG: Readonly<CodeFarmerConfig> = {
   model: 'gpt-5.6-sol',
   baseURL: 'https://api.openai.com/v1',
-  reasoning: 'medium',
+  reasoning: 'auto',
+  verbosity: 'low',
+  reasoningSummary: 'none',
   approval: 'ask',
   stream: true,
   store: true,
   logLevel: 'info',
-  maxAgentTurns: 50,
+  maxAgentTurns: 25,
   maxFileSizeBytes: 1_048_576,
-  maxToolOutputBytes: 102_400,
+  maxToolOutputBytes: 32_768,
   commandTimeoutMs: 120_000,
   ignoredPaths: [...DEFAULT_IGNORED_PATHS],
 };
@@ -54,6 +63,8 @@ const configShape = {
   model: z.string().trim().min(1),
   baseURL: baseURLSchema,
   reasoning: z.enum(['auto', 'none', 'low', 'medium', 'high', 'xhigh', 'max']),
+  verbosity: z.enum(['low', 'medium', 'high']),
+  reasoningSummary: z.enum(['none', 'auto', 'concise', 'detailed']),
   approval: z.enum(['ask', 'auto', 'read-only']),
   stream: z.boolean(),
   store: z.literal(true),
@@ -166,6 +177,8 @@ export function configFromEnvironment(env: NodeJS.ProcessEnv = process.env): Con
     model: env.CODEFARMER_MODEL,
     baseURL: env.CODEFARMER_BASE_URL ?? env.OPENAI_BASE_URL,
     reasoning: env.CODEFARMER_REASONING as ReasoningEffort | undefined,
+    verbosity: env.CODEFARMER_VERBOSITY as TextVerbosity | undefined,
+    reasoningSummary: env.CODEFARMER_REASONING_SUMMARY as ReasoningSummary | undefined,
     approval: env.CODEFARMER_APPROVAL as ApprovalPolicy | undefined,
     stream: parseBoolean('CODEFARMER_STREAM', env.CODEFARMER_STREAM),
     store: parseStore(env.CODEFARMER_STORE),

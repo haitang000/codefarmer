@@ -31,7 +31,11 @@ describe('configuration', () => {
     });
 
     expect(config).toEqual(DEFAULT_CONFIG);
-    expect(config.maxAgentTurns).toBe(50);
+    expect(config.maxAgentTurns).toBe(25);
+    expect(config.maxToolOutputBytes).toBe(32_768);
+    expect(config.reasoning).toBe('auto');
+    expect(config.verbosity).toBe('low');
+    expect(config.reasoningSummary).toBe('none');
     expect(config.commandTimeoutMs).toBe(120_000);
     expect(config.baseURL).toBe('https://api.openai.com/v1');
   });
@@ -76,7 +80,9 @@ describe('configuration', () => {
     expect(config.maxAgentTurns).toBe(19);
     expect(config.approval).toBe('auto');
     expect(config.logLevel).toBe('debug');
-    expect(config.reasoning).toBe('medium');
+    expect(config.reasoning).toBe('auto');
+    expect(config.verbosity).toBe('low');
+    expect(config.reasoningSummary).toBe('none');
   });
 
   it('parses boolean, integer, and ignored-path environment values', () => {
@@ -86,6 +92,8 @@ describe('configuration', () => {
         CODEFARMER_STORE: '1',
         OPENAI_BASE_URL: 'https://gateway.example/v1',
         CODEFARMER_COMMAND_TIMEOUT_MS: '45000',
+        CODEFARMER_VERBOSITY: 'high',
+        CODEFARMER_REASONING_SUMMARY: 'detailed',
         CODEFARMER_IGNORED_PATHS: '["vendor/**","*.secret"]',
       }),
     ).toMatchObject({
@@ -93,6 +101,8 @@ describe('configuration', () => {
       store: true,
       baseURL: 'https://gateway.example/v1',
       commandTimeoutMs: 45_000,
+      verbosity: 'high',
+      reasoningSummary: 'detailed',
       ignoredPaths: ['vendor/**', '*.secret'],
     });
   });

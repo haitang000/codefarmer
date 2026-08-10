@@ -10,13 +10,14 @@ untrusted repositories.
 | Policy          | Reads     | File changes           | Ordinary commands                    |
 | --------------- | --------- | ---------------------- | ------------------------------------ |
 | `ask` (default) | automatic | show diff and ask      | ask before execution                 |
-| `auto`          | automatic | automatic in workspace | automatic if allowed                 |
+| `auto`          | automatic | automatic in workspace | automatic if allowed; `git push` asks |
 | `read-only`     | automatic | rejected               | rejected unless classified read-only |
 
 Dangerous system commands, shell-wrapper bypasses, and Git write operations
-remain blocked in every mode. In a non-interactive process, an operation that
-requires confirmation fails with exit code `3`; CodeFarmer never silently
-approves it.
+other than `git push` remain blocked in every mode. `git push` always requires
+an explicit interactive confirmation, even under `auto`. In a non-interactive
+process, an operation that requires confirmation fails with exit code `3`;
+CodeFarmer never silently approves it.
 
 Approval is an application policy, not isolation. In particular, `auto` allows
 an approved executable to perform anything permitted by the current operating
@@ -46,8 +47,9 @@ a child process that receives an allowed command.
 working directory, and a timeout (120 seconds by default). It does not pass a
 model-supplied string to a shell. Shell wrappers such as `sh -c`, `cmd /c`, and
 `powershell -Command`, destructive system commands, and Git write commands
-including commit, checkout/switch, reset, clean, merge, rebase, tag, and push
-are rejected.
+including commit, checkout/switch, reset, clean, merge, rebase, and tag are
+rejected. `git push` is permitted only after the user explicitly confirms the
+complete command; this confirmation cannot be bypassed by the `auto` policy.
 
 Before a process starts, CodeFarmer removes `OPENAI_API_KEY` and environment
 variables whose names indicate tokens, secrets, passwords, or private keys.

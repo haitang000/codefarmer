@@ -1,7 +1,11 @@
 {
   "model": "deepseek-v4-flash",
   "baseURL": "https://api.deepseek.com",
-  "reasoning": "max",
+  "reasoning": "auto",
+  "verbosity": "low",
+  "reasoningSummary": "none",
+  "maxAgentTurns": 25,
+  "maxToolOutputBytes": 32768,
   "approval": "auto",
   "$schema": "https://unpkg.com/codefarmer@0.1.0/schemas/codefarmer.config.schema.json"
 }

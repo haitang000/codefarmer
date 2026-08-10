@@ -118,18 +118,20 @@ export class OpenAIProvider implements AgentProvider {
 
   public async *stream(request: ProviderRequest): AsyncIterable<ProviderEvent> {
     try {
+      const reasoningSummary = request.reasoningSummary ?? 'auto';
+      const reasoning =
+        request.reasoning === 'auto' && reasoningSummary === 'none'
+          ? undefined
+          : {
+              ...(request.reasoning === 'auto' ? {} : { effort: request.reasoning }),
+              ...(reasoningSummary === 'none' ? {} : { summary: reasoningSummary }),
+            };
       const stream = await this.client.responses.create(
         {
           model: request.model,
           input: mapInput(request.input),
-          // summary 让 API 流式输出推理摘要（思考过程），供 TUI 展示；
-          // summary 的 'auto' 由 API 决定是否生成，非推理模型不受影响。
-          // effort 为 'auto' 时不下发该字段，让模型自行决定思考深度。
-          reasoning: {
-            ...(request.reasoning === 'auto' ? {} : { effort: request.reasoning }),
-            summary: 'auto',
-          },
-          text: { verbosity: 'medium' },
+          ...(reasoning === undefined ? {} : { reasoning }),
+          text: { verbosity: request.verbosity ?? 'medium' },
           ...(request.instructions === undefined ? {} : { instructions: request.instructions }),
           ...(request.previousResponseId === undefined
             ? {}

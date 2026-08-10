@@ -101,7 +101,9 @@ describe('AgentRunner', () => {
     expect(provider.requests).toHaveLength(1);
     expect(provider.requests[0]).toMatchObject({
       model: 'gpt-5.6-sol',
-      reasoning: 'medium',
+      reasoning: 'auto',
+      verbosity: 'low',
+      reasoningSummary: 'none',
       input: 'Introduce yourself',
       store: true,
     });
@@ -216,7 +218,7 @@ describe('AgentRunner', () => {
     ]);
   });
 
-  it('continues automatically after reaching the maximum tool turns', async () => {
+  it('stops at the configured tool-turn limit and requests one tool-free summary', async () => {
     const workspace = await temporaryWorkspace();
     const provider = new RecordingScriptedProvider([
       [
@@ -252,17 +254,16 @@ describe('AgentRunner', () => {
     expect(provider.requests).toHaveLength(3);
     expect(provider.requests[1]?.previousResponseId).toBe('response-limit-1');
     expect(provider.requests[2]?.previousResponseId).toBe('response-limit-2');
-    // 达到轮次后不再发"工具禁用"的总结请求，而是注入"继续"指令并保留
-    // 全部工具，让任务无感继续。
-    expect(provider.requests[2]?.tools?.length ?? 0).toBeGreaterThan(0);
+    expect(result.toolCalls).toHaveLength(2);
+    expect(provider.requests[2]?.tools).toEqual([]);
     expect(provider.requests[2]?.input).toContainEqual({
       type: 'message',
       role: 'user',
-      content: '继续',
+      content: expect.stringContaining('已达到最大工具轮次 2') as string,
     });
   });
 
-  it('keeps calling tools after the limit until the model finishes', async () => {
+  it('does not execute a tool call returned by the summary request', async () => {
     const workspace = await temporaryWorkspace();
     const provider = new RecordingScriptedProvider([
       [
@@ -296,27 +297,15 @@ describe('AgentRunner', () => {
     const result = await agent.run('Keep working', { history: false });
 
     expect(result.status).toBe('completed');
-    expect(result.message).toBe('All done.');
-    expect(result.toolCalls).toHaveLength(3);
-    expect(provider.requests).toHaveLength(4);
-    // 超过轮次上限后的第 3 轮仍带全部工具，并只注入一次"继续"指令。
-    expect(provider.requests[2]?.tools?.length ?? 0).toBeGreaterThan(0);
-    expect(provider.requests[2]?.input).toContainEqual({
-      type: 'message',
-      role: 'user',
-      content: '继续',
-    });
-    expect(provider.requests[3]?.input).not.toContainEqual({
-      type: 'message',
-      role: 'user',
-      content: '继续',
-    });
+    expect(result.message).toContain('已达到最大工具轮次 2');
+    expect(result.toolCalls).toHaveLength(2);
+    expect(provider.requests).toHaveLength(3);
+    expect(provider.requests[2]?.tools).toEqual([]);
   });
 
   it('falls back to a tool-less summary after auto-continuation hits the cap', async () => {
     const workspace = await temporaryWorkspace();
     const provider = new RecordingScriptedProvider([
-      // 4 轮工具调用 = 上限 2 轮 + 自动续跑 2 轮
       [
         {
           type: 'tool_call',
@@ -330,20 +319,6 @@ describe('AgentRunner', () => {
           call: { callId: 'missing-2', name: 'missing_tool', arguments: '{}' },
         },
         { type: 'response_completed', responseId: 'response-cap-2' },
-      ],
-      [
-        {
-          type: 'tool_call',
-          call: { callId: 'missing-3', name: 'missing_tool', arguments: '{}' },
-        },
-        { type: 'response_completed', responseId: 'response-cap-3' },
-      ],
-      [
-        {
-          type: 'tool_call',
-          call: { callId: 'missing-4', name: 'missing_tool', arguments: '{}' },
-        },
-        { type: 'response_completed', responseId: 'response-cap-4' },
       ],
       [
         { type: 'text_delta', delta: 'Capped summary.' },
@@ -360,13 +335,14 @@ describe('AgentRunner', () => {
 
     expect(result.status).toBe('completed');
     expect(result.message).toBe('Capped summary.');
-    expect(provider.requests).toHaveLength(5);
-    expect(provider.requests[4]?.tools).toEqual([]);
-    expect(provider.requests[4]?.input).toContainEqual(
+    expect(result.toolCalls).toHaveLength(2);
+    expect(provider.requests).toHaveLength(3);
+    expect(provider.requests[2]?.tools).toEqual([]);
+    expect(provider.requests[2]?.input).toContainEqual(
       expect.objectContaining({
         type: 'message',
         role: 'user',
-        content: expect.stringContaining('已达到最大工具轮次 4') as string,
+        content: expect.stringContaining('已达到最大工具轮次 2') as string,
       }),
     );
   });
@@ -374,7 +350,6 @@ describe('AgentRunner', () => {
   it('reports a local summary when the cap summary turn produces no output', async () => {
     const workspace = await temporaryWorkspace();
     const provider = new RecordingScriptedProvider([
-      // 4 轮工具调用 = 上限 2 轮 + 自动续跑 2 轮，总结请求空响应
       [
         {
           type: 'tool_call',
@@ -389,20 +364,6 @@ describe('AgentRunner', () => {
         },
         { type: 'response_completed', responseId: 'response-cap-2' },
       ],
-      [
-        {
-          type: 'tool_call',
-          call: { callId: 'missing-3', name: 'missing_tool', arguments: '{}' },
-        },
-        { type: 'response_completed', responseId: 'response-cap-3' },
-      ],
-      [
-        {
-          type: 'tool_call',
-          call: { callId: 'missing-4', name: 'missing_tool', arguments: '{}' },
-        },
-        { type: 'response_completed', responseId: 'response-cap-4' },
-      ],
       [],
     ]);
     const agent = await runner(workspace, provider, { maxAgentTurns: 2 });
@@ -412,10 +373,10 @@ describe('AgentRunner', () => {
     // The run must not be thrown away when the final summary call fails:
     // report what was actually executed instead.
     expect(result.status).toBe('completed');
-    expect(result.message).toContain('已达到最大工具轮次 4');
-    expect(result.message).toContain('4 次工具调用');
-    expect(result.toolCalls).toHaveLength(4);
-    expect(provider.requests).toHaveLength(5);
+    expect(result.message).toContain('已达到最大工具轮次 2');
+    expect(result.message).toContain('2 次工具调用');
+    expect(result.toolCalls).toHaveLength(2);
+    expect(provider.requests).toHaveLength(3);
   });
 
   it('restricts plan mode to read-only tools and rejects mutating calls', async () => {
@@ -695,7 +656,7 @@ describe('AgentRunner', () => {
     expect(Array.isArray(provider.requests[3]?.input)).toBe(true);
   });
 
-  it('injects a continue instruction after degrading to explicit history past the limit', async () => {
+  it('keeps the turn limit after degrading to explicit history', async () => {
     const workspace = await temporaryWorkspace();
     await writeFile(path.join(workspace, 'alpha.txt'), 'alpha\n', 'utf8');
     const provider = new RecordingScriptedProvider([
@@ -752,15 +713,10 @@ describe('AgentRunner', () => {
     const result = await agent.run('List the files twice', { history: false });
 
     expect(result.status).toBe('completed');
-    expect(result.message).toBe('Recovered.');
-    expect(result.toolCalls).toHaveLength(3);
-    expect(provider.requests).toHaveLength(5);
-    const continueMessage = { type: 'message', role: 'user', content: '继续' };
-    // 降级为显式历史后：重放轮（第 3 个请求）不注入；达到上限的那一轮
-    // （第 4 个请求）注入"继续"，且该消息写入 transcript，后续请求仍携带。
-    expect(provider.requests[2]?.input).not.toContainEqual(continueMessage);
-    expect(provider.requests[3]?.input).toContainEqual(continueMessage);
-    expect(provider.requests[4]?.input).toContainEqual(continueMessage);
+    expect(result.message).toContain('已达到最大工具轮次 2');
+    expect(result.toolCalls).toHaveLength(2);
+    expect(provider.requests).toHaveLength(4);
+    expect(provider.requests[3]?.tools).toEqual([]);
   });
 
   it('trims whole parallel tool batches without orphaning call outputs', async () => {
@@ -814,8 +770,9 @@ describe('AgentRunner', () => {
         expect(visibleCallIds.has(item.callId)).toBe(true);
       }
     }
-    // The transcript really did overflow and get trimmed.
-    expect(outputCount).toBeLessThan(6);
-    expect(outputCount).toBeGreaterThan(0);
+    // Parallel output is clamped proportionally before it enters the next turn.
+    expect(outputCount).toBe(6);
+    const outputs = finalInput.filter((item) => item.type === 'function_call_output');
+    expect(outputs.every((item) => item.output.length <= 12_500)).toBe(true);
   });
 });

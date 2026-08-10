@@ -92,6 +92,8 @@ describe('OpenAIProvider Base URL', () => {
     for await (const event of provider.stream({
       model: 'test-model',
       reasoning: 'medium',
+      verbosity: 'high',
+      reasoningSummary: 'detailed',
       input: 'hello',
       store: false,
     })) {
@@ -191,6 +193,8 @@ describe('OpenAIProvider Base URL', () => {
     for await (const event of provider.stream({
       model: 'test-model',
       reasoning: 'medium',
+      verbosity: 'high',
+      reasoningSummary: 'detailed',
       input: 'hello',
       store: false,
     })) {
@@ -198,8 +202,12 @@ describe('OpenAIProvider Base URL', () => {
     }
 
     // 请求必须开启推理摘要，否则 API 不会流式输出思考过程。
-    const parsedBody = JSON.parse(requestBody) as { reasoning?: { summary?: string } };
-    expect(parsedBody.reasoning?.summary).toBe('auto');
+    const parsedBody = JSON.parse(requestBody) as {
+      reasoning?: { summary?: string };
+      text?: { verbosity?: string };
+    };
+    expect(parsedBody.reasoning?.summary).toBe('detailed');
+    expect(parsedBody.text?.verbosity).toBe('high');
 
     const reasoningDeltas = events
       .filter((event): event is Extract<ProviderEvent, { type: 'reasoning_delta' }> =>
@@ -266,6 +274,8 @@ describe('OpenAIProvider Base URL', () => {
     for await (const event of provider.stream({
       model: 'test-model',
       reasoning: 'auto',
+      verbosity: 'low',
+      reasoningSummary: 'none',
       input: 'hello',
       store: false,
     })) {
@@ -275,9 +285,11 @@ describe('OpenAIProvider Base URL', () => {
 
     const parsedBody = JSON.parse(requestBody) as {
       reasoning?: { effort?: string; summary?: string };
+      text?: { verbosity?: string };
     };
-    // auto 时不下发 effort，由模型自行决定思考深度；推理摘要仍保持开启。
+    // efficient default: let the model choose reasoning and omit visible summaries.
     expect(parsedBody.reasoning?.effort).toBeUndefined();
-    expect(parsedBody.reasoning?.summary).toBe('auto');
+    expect(parsedBody.reasoning).toBeUndefined();
+    expect(parsedBody.text?.verbosity).toBe('low');
   });
 });

@@ -18,7 +18,7 @@ import { execa } from 'execa';
 
 import type { AgentRunResult } from '../core/runtime-types.js';
 import { getCredentialsPath, resolveApiKey, saveApiKey } from '../infra/credentials.js';
-import { ConfigError, ConflictError, toAppError } from '../infra/errors.js';
+import { ApprovalError, ConfigError, ConflictError, toAppError } from '../infra/errors.js';
 import {
   DEFAULT_CONFIG,
   loadConfigDetails,
@@ -39,6 +39,13 @@ export interface RunOptions {
   history?: boolean;
   session?: string;
   plan?: boolean;
+}
+
+export interface PushOptions {
+  yes?: boolean;
+  setUpstream?: boolean;
+  remote?: string;
+  branch?: string;
 }
 
 function cliResult(result: AgentRunResult): Record<string, unknown> {
@@ -158,7 +165,7 @@ async function showWorkspaceStatus(globalOptions: GlobalOptions): Promise<void> 
   }
   process.stdout.write(`${chalk.bold('工作区')} ${runtime.workspace}\n`);
   process.stdout.write(
-    `${chalk.bold('模型')} ${runtime.config.model} (${runtime.config.reasoning})\n`,
+    `${chalk.bold('模型')} ${runtime.config.model} (${runtime.config.reasoning}, ${runtime.config.verbosity})\n`,
   );
   process.stdout.write(`${chalk.bold('Base URL')} ${runtime.config.baseURL}\n`);
   process.stdout.write(`${chalk.bold('审批')} ${runtime.config.approval}\n`);
@@ -260,6 +267,8 @@ export async function initAction(globalOptions: GlobalOptions, force = false): P
     model: DEFAULT_CONFIG.model,
     baseURL: DEFAULT_CONFIG.baseURL,
     reasoning: DEFAULT_CONFIG.reasoning,
+    verbosity: DEFAULT_CONFIG.verbosity,
+    reasoningSummary: DEFAULT_CONFIG.reasoningSummary,
     approval: DEFAULT_CONFIG.approval,
   };
   await writeConfigFile(projectConfigPath, initial);
@@ -354,6 +363,29 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
   });
   if (isCancel(reasoning)) return abortSetup();
 
+  const verbosity = await select({
+    message: '文本详细度',
+    options: [
+      { value: 'low', label: 'low', hint: '简短，节省 token（默认）' },
+      { value: 'medium', label: 'medium' },
+      { value: 'high', label: 'high' },
+    ],
+    initialValue: defaults.verbosity,
+  });
+  if (isCancel(verbosity)) return abortSetup();
+
+  const reasoningSummary = await select({
+    message: '推理摘要',
+    options: [
+      { value: 'none', label: 'none', hint: '不生成可见摘要，节省 token（默认）' },
+      { value: 'auto', label: 'auto' },
+      { value: 'concise', label: 'concise' },
+      { value: 'detailed', label: 'detailed' },
+    ],
+    initialValue: defaults.reasoningSummary,
+  });
+  if (isCancel(reasoningSummary)) return abortSetup();
+
   const approval = await select({
     message: '审批策略',
     options: [
@@ -409,6 +441,8 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
     model,
     baseURL: normalizedBaseUrl,
     reasoning,
+    verbosity,
+    reasoningSummary,
     approval,
   };
   await writeConfigFile(projectConfigPath, config);
@@ -423,6 +457,135 @@ export async function undoAction(globalOptions: GlobalOptions, sessionId?: strin
   const runtime = await createBaseRuntime(globalOptions);
   const transaction = await runtime.transactions.undoLatest(sessionId);
   process.stdout.write(`已撤销 ${transaction.operation}: ${transaction.path}\n`);
+}
+
+// Conservative Git environment for the user-invoked push command: no external
+// diff drivers, no pager, and no optional locks (mirrors the agent Git tools).
+const PUSH_GIT_ENV = {
+  GIT_EXTERNAL_DIFF: '',
+  GIT_OPTIONAL_LOCKS: '0',
+  GIT_PAGER: 'cat',
+  PAGER: 'cat',
+};
+
+interface GitRunResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+async function runGitForPush(args: string[], cwd: string): Promise<GitRunResult> {
+  const result = await execa('git', ['--no-pager', '-c', 'core.fsmonitor=false', ...args], {
+    cwd,
+    reject: false,
+    env: PUSH_GIT_ENV,
+  });
+  return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
+}
+
+function validateGitArgument(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.startsWith('-')) {
+    throw new ConfigError(`${label}不能为空或以 - 开头`);
+  }
+  return trimmed;
+}
+
+async function pushCurrentBranch(workspace: string): Promise<string> {
+  const result = await runGitForPush(['rev-parse', '--abbrev-ref', 'HEAD'], workspace);
+  if (result.exitCode !== 0) {
+    if (/not a git repository/iu.test(result.stderr)) {
+      throw new ConfigError(`${workspace} 不是 Git 仓库；push 命令需要在 Git 仓库中运行`);
+    }
+    throw new ConfigError(result.stderr.trim() || '无法读取当前 Git 分支');
+  }
+  return result.stdout.trim();
+}
+
+export async function pushAction(
+  globalOptions: GlobalOptions,
+  options: PushOptions = {},
+): Promise<void> {
+  const workspace = await canonicalWorkspace(globalOptions.cwd ?? process.cwd());
+  const availability = await detectGitAvailability();
+  if (!availability.available) {
+    throw new ConfigError('push 命令需要 Git；请先安装 Git 并确保 git 在 PATH 中');
+  }
+
+  const branch =
+    options.branch === undefined || options.branch.trim().length === 0
+      ? await pushCurrentBranch(workspace)
+      : validateGitArgument(options.branch, '分支名');
+  if (branch === 'HEAD') {
+    throw new ConfigError('当前处于分离 HEAD 状态，无法推送；请先切换到具体分支');
+  }
+  const requestedRemote =
+    options.remote === undefined ? undefined : validateGitArgument(options.remote, '远程名');
+
+  const upstreamResult = await runGitForPush(
+    ['rev-parse', '--abbrev-ref', '--symbolic-full-name', `${branch}@{u}`],
+    workspace,
+  );
+  const upstream = upstreamResult.exitCode === 0 ? upstreamResult.stdout.trim() : undefined;
+  let remote = requestedRemote;
+  if (remote === undefined && upstream !== undefined) {
+    const slash = upstream.indexOf('/');
+    remote = slash > 0 ? upstream.slice(0, slash) : upstream;
+  }
+  if (remote === undefined) remote = options.setUpstream === true ? 'origin' : undefined;
+  if (remote === undefined) {
+    throw new ConfigError(
+      `分支 ${branch} 没有上游分支。首次推送请使用: codefarmer push --set-upstream --remote origin`,
+    );
+  }
+
+  // Summarize which commits would be pushed before asking for confirmation.
+  const ahead: string[] = [];
+  if (upstream !== undefined) {
+    const logResult = await runGitForPush(['log', '--oneline', `${branch}@{u}..HEAD`], workspace);
+    if (logResult.exitCode === 0) {
+      ahead.push(...logResult.stdout.split('\n').filter((line) => line.length > 0));
+    }
+  }
+
+  process.stdout.write(`${chalk.bold('推送')} ${branch} → ${remote}\n`);
+  if (upstream !== undefined) process.stdout.write(`${chalk.bold('上游')} ${upstream}\n`);
+  if (ahead.length > 0) {
+    process.stdout.write(`${chalk.bold('将推送')} ${String(ahead.length)} 个提交:\n`);
+    ahead.forEach((line) => process.stdout.write(`  ${line}\n`));
+  } else if (upstream !== undefined) {
+    process.stdout.write('没有新的提交可推送。\n');
+  }
+
+  // A push with no local commits ahead can only be a no-op, so it needs no
+  // confirmation; everything else requires an explicit yes (or `--yes`).
+  const needsConfirmation =
+    options.setUpstream === true || upstream === undefined || ahead.length > 0;
+  if (needsConfirmation && options.yes !== true) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      throw new ApprovalError('非交互环境推送需要显式确认；请添加 --yes 参数');
+    }
+    const answer = await confirm({
+      message: `确认将 ${branch} 推送到 ${remote}？`,
+      initialValue: false,
+    });
+    if (isCancel(answer) || answer !== true) {
+      cancel('已取消推送。');
+      process.exitCode = 130;
+      return;
+    }
+  }
+
+  const pushArgs = ['push'];
+  if (options.setUpstream === true) pushArgs.push('-u');
+  pushArgs.push(remote, branch);
+  const result = await runGitForPush(pushArgs, workspace);
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.trim() || `git push 失败（退出码 ${String(result.exitCode)}）`);
+  }
+  if (result.stdout.length > 0) process.stdout.write(result.stdout);
+  if (result.stderr.length > 0) process.stdout.write(result.stderr);
+  process.stdout.write(`已推送 ${branch} 到 ${remote}\n`);
 }
 
 export async function sessionsListAction(globalOptions: GlobalOptions): Promise<void> {
@@ -482,6 +645,10 @@ export async function configListAction(globalOptions: GlobalOptions): Promise<vo
       ...(globalOptions.model === undefined ? {} : { model: globalOptions.model }),
       ...(globalOptions.baseURL === undefined ? {} : { baseURL: globalOptions.baseURL }),
       ...(globalOptions.reasoning === undefined ? {} : { reasoning: globalOptions.reasoning }),
+      ...(globalOptions.verbosity === undefined ? {} : { verbosity: globalOptions.verbosity }),
+      ...(globalOptions.reasoningSummary === undefined
+        ? {}
+        : { reasoningSummary: globalOptions.reasoningSummary }),
       ...(globalOptions.approval === undefined ? {} : { approval: globalOptions.approval }),
     },
   });

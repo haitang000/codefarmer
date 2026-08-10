@@ -2,6 +2,8 @@ export type ApprovalPolicy = 'ask' | 'auto' | 'read-only';
 
 // 'auto' 表示不下发 effort，由模型自行决定思考深度。
 export type ReasoningEffort = 'auto' | 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type TextVerbosity = 'low' | 'medium' | 'high';
+export type ReasoningSummary = 'none' | 'auto' | 'concise' | 'detailed';
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
 
@@ -15,6 +17,8 @@ export interface CodeFarmerConfig {
   model: string;
   baseURL: string;
   reasoning: ReasoningEffort;
+  verbosity: TextVerbosity;
+  reasoningSummary: ReasoningSummary;
   approval: ApprovalPolicy;
   stream: boolean;
   store: true;
@@ -109,6 +113,8 @@ export type ProviderInput =
 export interface ProviderRequest {
   model: string;
   reasoning: ReasoningEffort;
+  verbosity?: TextVerbosity;
+  reasoningSummary?: ReasoningSummary;
   instructions?: string;
   input: string | ProviderInput[];
   previousResponseId?: string;

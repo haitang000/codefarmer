@@ -46,6 +46,8 @@ export interface ApprovalRequest {
   title: string;
   detail: string;
   readOnly?: boolean;
+  /** Requires an explicit interactive decision even under the auto policy. */
+  requireConfirmation?: boolean;
 }
 
 export interface ToolCall {

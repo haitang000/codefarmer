@@ -7,6 +7,7 @@ export interface ApprovalRequest {
   title: string;
   detail: string;
   readOnly?: boolean;
+  requireConfirmation?: boolean;
 }
 
 export interface ApprovalController {
@@ -24,7 +25,7 @@ export class PolicyApprovalController implements ApprovalController {
   public async request(request: ApprovalRequest): Promise<boolean> {
     if (request.readOnly) return true;
     if (this.policy === 'read-only') return false;
-    if (this.policy === 'auto') return true;
+    if (this.policy === 'auto' && request.requireConfirmation !== true) return true;
     if (!this.interactive) return false;
     return this.prompt(request);
   }

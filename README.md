@@ -3,7 +3,7 @@
 CodeFarmer is a modular coding-agent CLI that can inspect a workspace, generate
 and edit code through reviewable patches, run approved commands, inspect Git,
 and resume prior sessions. It uses the OpenAI Responses API and defaults to
-`gpt-5.6-sol` with `medium` reasoning.
+`gpt-5.6-sol` with model-selected reasoning and low-verbosity responses.
 
 [简体中文](README.zh-CN.md) | [Architecture](docs/ARCHITECTURE.md) |
 [Security](docs/SECURITY.md) | [Deployment](docs/DEPLOYMENT.md)
@@ -115,6 +115,8 @@ options include:
 --model <model>
 --base-url <url>
 --reasoning <auto|none|low|medium|high|xhigh|max>
+--verbosity <low|medium|high>
+--reasoning-summary <none|auto|concise|detailed>
 --approval <ask|auto|read-only>
 --no-stream
 --log-level <trace|debug|info|warn|error|fatal|silent>
@@ -184,8 +186,10 @@ CodeFarmer exposes a fixed v1 tool set to the model:
   missing, these tools fail gracefully and the agent continues with the file
   tools.
 
-Git writes such as commit, checkout/switch, reset, clean, merge, rebase, tag,
-and push are not supported. Tool input and output are bounded, model tool
+Git writes such as commit, checkout/switch, reset, clean, merge, rebase, and tag
+are not supported. The agent may run `git push` through `run_command` only after
+the user explicitly confirms the exact command, including when approval is set to
+`auto`. Tool input and output are bounded, model tool
 arguments are validated, read-only calls may run concurrently, and mutations
 and commands run serially. The default agent limit is 25 turns.
 
@@ -205,14 +209,16 @@ Example project configuration:
 {
   "model": "gpt-5.6-sol",
   "baseURL": "https://api.openai.com/v1",
-  "reasoning": "medium",
+  "reasoning": "auto",
+  "verbosity": "low",
+  "reasoningSummary": "none",
   "approval": "ask",
   "stream": true,
   "store": true,
   "logLevel": "info",
   "maxAgentTurns": 25,
   "maxFileSizeBytes": 1048576,
-  "maxToolOutputBytes": 102400,
+  "maxToolOutputBytes": 32768,
   "commandTimeoutMs": 120000,
   "ignoredPaths": [".git/**", "node_modules/**", "dist/**", ".env"]
 }
@@ -224,20 +230,27 @@ Supported environment overrides are:
 | -------------------- | ---------------------------------- | ----------------------------- |
 | `model`              | `CODEFARMER_MODEL`                 | `gpt-5.6-sol`                 |
 | `baseURL`            | `CODEFARMER_BASE_URL`              | `https://api.openai.com/v1`   |
-| `reasoning`          | `CODEFARMER_REASONING`             | `medium`                      |
+| `reasoning`          | `CODEFARMER_REASONING`             | `auto`                        |
+| `verbosity`          | `CODEFARMER_VERBOSITY`             | `low`                         |
+| `reasoningSummary`   | `CODEFARMER_REASONING_SUMMARY`    | `none`                        |
 | `approval`           | `CODEFARMER_APPROVAL`              | `ask`                         |
 | `stream`             | `CODEFARMER_STREAM`                | `true`                        |
 | `store`              | `CODEFARMER_STORE`                 | `true` (required in v1)       |
 | `logLevel`           | `CODEFARMER_LOG_LEVEL`             | `info`                        |
 | `maxAgentTurns`      | `CODEFARMER_MAX_AGENT_TURNS`       | `25`                          |
 | `maxFileSizeBytes`   | `CODEFARMER_MAX_FILE_SIZE_BYTES`   | `1048576`                     |
-| `maxToolOutputBytes` | `CODEFARMER_MAX_TOOL_OUTPUT_BYTES` | `102400`                      |
+| `maxToolOutputBytes` | `CODEFARMER_MAX_TOOL_OUTPUT_BYTES` | `32768`                       |
 | `commandTimeoutMs`   | `CODEFARMER_COMMAND_TIMEOUT_MS`    | `120000`                      |
 | `ignoredPaths`       | `CODEFARMER_IGNORED_PATHS`         | protected and generated paths |
 
 `CODEFARMER_IGNORED_PATHS` accepts a JSON string array or a comma-separated
 list. Default exclusions cover `.git`, dependencies, builds, coverage, `.env`
 files, private keys, and certificates; `.env.example` remains readable.
+
+The efficient defaults use model-selected reasoning, low text verbosity, no
+visible reasoning summary, a 25-turn tool limit, and 32 KiB per-tool output.
+Raise `verbosity`, `reasoningSummary`, `maxAgentTurns`, or
+`maxToolOutputBytes` for tasks that need more context or explanation.
 
 Change the API endpoint globally, per project, or for one invocation:
 
@@ -256,11 +269,12 @@ embedded credentials, query parameters, or fragments.
 | Policy      | Behavior                                                            |
 | ----------- | ------------------------------------------------------------------- |
 | `ask`       | Reads run automatically; patches show a diff and commands ask first |
-| `auto`      | Allowed workspace patches and ordinary commands run automatically   |
+| `auto`      | Allowed workspace patches and ordinary commands run automatically; `git push` still asks |
 | `read-only` | Mutations and non-read-only commands are rejected                   |
 
 Dangerous system commands, shell-wrapper bypasses such as `sh -c`, `cmd /c`,
-and `powershell -Command`, and all Git writes are always denied. Sensitive
+and `powershell -Command`, and all Git writes except explicitly confirmed
+`git push` commands are always denied. Sensitive
 environment variables, including `OPENAI_API_KEY`, are removed from child
 processes.
 

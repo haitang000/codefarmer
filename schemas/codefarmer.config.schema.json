@@ -18,8 +18,20 @@
     "reasoning": {
       "type": "string",
       "enum": ["auto", "none", "low", "medium", "high", "xhigh", "max"],
-      "default": "medium",
+      "default": "auto",
       "description": "Reasoning effort; 'auto' lets the model decide its own thinking depth."
+    },
+    "verbosity": {
+      "type": "string",
+      "enum": ["low", "medium", "high"],
+      "default": "low",
+      "description": "Text response detail level. Lower values reduce output tokens."
+    },
+    "reasoningSummary": {
+      "type": "string",
+      "enum": ["none", "auto", "concise", "detailed"],
+      "default": "none",
+      "description": "Visible reasoning summary detail. 'none' omits summaries and reduces output tokens."
     },
     "approval": {
       "type": "string",
@@ -38,7 +50,7 @@
       "enum": ["trace", "debug", "info", "warn", "error", "fatal", "silent"],
       "default": "info"
     },
-    "maxAgentTurns": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 },
+    "maxAgentTurns": { "type": "integer", "minimum": 1, "maximum": 100, "default": 25 },
     "maxFileSizeBytes": {
       "type": "integer",
       "minimum": 1,
@@ -49,7 +61,7 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 10485760,
-      "default": 102400
+      "default": 32768
     },
     "commandTimeoutMs": {
       "type": "integer",

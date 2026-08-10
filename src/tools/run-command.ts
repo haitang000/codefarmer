@@ -29,6 +29,7 @@ export type CommandRisk = 'read-only' | 'mutating' | 'blocked';
 export interface CommandClassification {
   risk: CommandRisk;
   reason: string;
+  requireConfirmation?: boolean;
 }
 
 const READ_ONLY_EXECUTABLES = new Set([
@@ -115,6 +116,13 @@ function classifyGit(args: string[]): CommandClassification {
   const subcommand = args[index]?.toLowerCase();
   if (subcommand === undefined) {
     return { risk: 'read-only', reason: 'Git help output.' };
+  }
+  if (subcommand === 'push') {
+    return {
+      risk: 'mutating',
+      reason: 'Git push sends local commits to a remote repository.',
+      requireConfirmation: true,
+    };
   }
   if (!GIT_READ_ONLY_SUBCOMMANDS.has(subcommand)) {
     return { risk: 'blocked', reason: `Git write-capable command is not allowed: ${subcommand}` };
@@ -363,9 +371,10 @@ export async function runCommand(
   if (context.approve !== undefined && classification.risk !== 'read-only') {
     const approved = await context.approve({
       kind: 'command',
-      title: `Run ${path.basename(executable)}`,
+      title: classification.requireConfirmation ? 'Push Git changes' : `Run ${path.basename(executable)}`,
       detail: JSON.stringify([executable, ...args]),
       readOnly: false,
+      ...(classification.requireConfirmation === true ? { requireConfirmation: true } : {}),
     });
     if (!approved) throw new ToolError('APPROVAL_DENIED', 'The command was rejected by the user.');
   }

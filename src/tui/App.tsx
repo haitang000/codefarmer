@@ -1135,7 +1135,8 @@ export function TuiApp({
             [
               `Workspace  ${active.workspace}`,
               `Session    ${active.session?.id ?? 'none'}`,
-              `Model      ${active.config.model} (${active.config.reasoning})`,
+              `Model      ${active.config.model} (${active.config.reasoning}, ${active.config.verbosity})`,
+              `Reasoning  summary ${active.config.reasoningSummary}`,
               `Approval   ${active.config.approval}`,
               `Base URL   ${active.config.baseURL}`,
               `Git        ${gitLine}`,
@@ -1146,7 +1147,7 @@ export function TuiApp({
           const session = active.session;
           const lines: string[] = [
             `Session    ${session?.id ?? 'none'}`,
-            `Model      ${active.config.model} (${active.config.reasoning})`,
+            `Model      ${active.config.model} (${active.config.reasoning}, ${active.config.verbosity})`,
             `Messages   ${String(session?.messages.length ?? 0)} | Tool calls ${String(session?.toolCalls.length ?? 0)}`,
             `Tokens     in ${String(usage.inputTokens)} / out ${String(usage.outputTokens)} / total ${String(usage.totalTokens)}`,
           ];

@@ -87,13 +87,15 @@ using `pnpm install --frozen-lockfile`.
   approval, and command-risk checks intact. `run_command` takes an executable
   and an argument array — never a shell string; shell-wrapper bypasses
   (`sh -c`, `cmd /c`, `powershell -Command`), dangerous system commands, and
-  all Git writes are always denied.
+  all Git writes except `git push` are always denied. `git push` must always
+  receive explicit user confirmation, including with the `auto` policy.
 - Never add a configuration path that persists `OPENAI_API_KEY`; it is read
   only from the environment. Credentials and sensitive env vars are stripped
   from child processes.
 - Git operations in this repo's tooling are read-only (`git_status`, `git_diff`,
-  `git_log`, `git_show`); do not add Git write operations or shell-string
-  execution without separate security design and review.
+  `git_log`, `git_show`), except for explicitly confirmed `git push` commands
+  through `run_command`; do not add other Git writes or shell-string execution
+  without separate security design and review.
 - Config precedence: CLI flags > `CODEFARMER_*` env vars > workspace
   `codefarmer.config.json` > user config > built-in defaults. Do not commit
   `.env*`, `dist/`, `coverage/`, logs, session data, or undo snapshots

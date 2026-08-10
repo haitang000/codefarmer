@@ -22,11 +22,15 @@ afterEach(async () => {
 });
 
 describe('run_command safety', () => {
-  it('blocks shell evaluation, dangerous commands, and Git writes', () => {
+  it('blocks shell evaluation, dangerous commands, and unsupported Git writes', () => {
     expect(classifyCommand('sh', ['-c', 'echo unsafe']).risk).toBe('blocked');
     expect(classifyCommand('cmd.exe', ['/c', 'echo unsafe']).risk).toBe('blocked');
     expect(classifyCommand('rm', ['file.txt']).risk).toBe('blocked');
     expect(classifyCommand('git', ['commit', '-m', 'message']).risk).toBe('blocked');
+    expect(classifyCommand('git', ['push', 'origin', 'main'])).toMatchObject({
+      risk: 'mutating',
+      requireConfirmation: true,
+    });
     expect(classifyCommand('git', ['status', '--short']).risk).toBe('mutating');
     expect(classifyCommand('cat', ['file.txt']).risk).toBe('mutating');
     expect(classifyCommand('node', ['--eval=console.log(1)']).risk).toBe('blocked');
@@ -67,6 +71,27 @@ describe('run_command safety', () => {
     });
     expect(denied).toMatchObject({ success: false, error: { code: 'APPROVAL_DENIED' } });
     expect(approve).toHaveBeenCalledOnce();
+  });
+
+  it('requires explicit confirmation before running git push', async () => {
+    const workspace = await temporaryWorkspace();
+    const approve = vi.fn(() => false);
+    const registry = await createToolRegistry({ workspace, approve });
+
+    const result = await registry.execute({
+      callId: 'push',
+      name: 'run_command',
+      arguments: { executable: 'git', args: ['push', 'origin', 'main'] },
+    });
+
+    expect(result).toMatchObject({ success: false, error: { code: 'APPROVAL_DENIED' } });
+    expect(approve).toHaveBeenCalledWith({
+      kind: 'command',
+      title: 'Push Git changes',
+      detail: '["git","push","origin","main"]',
+      readOnly: false,
+      requireConfirmation: true,
+    });
   });
 
   it('parses stringified null optional arguments from gateways', async () => {

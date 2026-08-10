@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { execa } from 'execa';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const CLI_ENTRY = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
@@ -107,6 +108,32 @@ async function withIsolatedEnv<T>(
   }
 }
 
+/** Create a workspace Git repository with an `origin` bare remote and an
+ * upstream branch, mirroring a freshly cloned project. */
+async function repositoryWithUpstream(): Promise<{ workspace: string; remote: string }> {
+  const root = await temporaryDirectory();
+  const remote = path.join(root, 'remote.git');
+  await execa('git', ['init', '--bare', '--quiet', remote], { cwd: root });
+  const workspace = path.join(root, 'workspace');
+  await mkdir(workspace);
+  await execa('git', ['init', '--quiet'], { cwd: workspace });
+  await execa('git', ['config', 'user.name', 'Test'], { cwd: workspace });
+  await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: workspace });
+  await writeFile(path.join(workspace, 'file.txt'), 'hello\n');
+  await execa('git', ['add', '.'], { cwd: workspace });
+  await execa('git', ['commit', '-m', 'initial'], { cwd: workspace });
+  const branch = (
+    await execa('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workspace })
+  ).stdout.trim();
+  await execa('git', ['remote', 'add', 'origin', remote], { cwd: workspace });
+  await execa('git', ['push', '-u', 'origin', branch], { cwd: workspace });
+  return { workspace, remote };
+}
+
+async function workspaceBranch(workspace: string): Promise<string> {
+  return (await execa('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workspace })).stdout.trim();
+}
+
 afterEach(async () => {
   await Promise.all(
     temporaryDirectories
@@ -151,7 +178,9 @@ describe('CodeFarmer CLI', () => {
       $schema: 'https://unpkg.com/codefarmer@0.1.0/schemas/codefarmer.config.schema.json',
       model: 'gpt-5.6-sol',
       baseURL: 'https://api.openai.com/v1',
-      reasoning: 'medium',
+      reasoning: 'auto',
+      verbosity: 'low',
+      reasoningSummary: 'none',
       approval: 'ask',
     });
   });
@@ -182,9 +211,11 @@ describe('CodeFarmer CLI', () => {
     expect(listResult.code).toBe(0);
     expect(JSON.parse(listResult.stdout)).toMatchObject({
       model: 'test-model',
-      reasoning: 'medium',
+      reasoning: 'auto',
+      verbosity: 'low',
+      reasoningSummary: 'none',
       approval: 'ask',
-      maxAgentTurns: 50,
+      maxAgentTurns: 25,
     });
   });
 
@@ -202,7 +233,18 @@ describe('CodeFarmer CLI', () => {
       environmentRoot,
     );
     const overrideResult = await runCli(
-      ['--cwd', workspace, '--base-url', 'http://localhost:8080/v1/', 'config', 'list'],
+      [
+        '--cwd',
+        workspace,
+        '--base-url',
+        'http://localhost:8080/v1/',
+        '--verbosity',
+        'high',
+        '--reasoning-summary',
+        'concise',
+        'config',
+        'list',
+      ],
       workspace,
       environmentRoot,
     );
@@ -211,6 +253,8 @@ describe('CodeFarmer CLI', () => {
     expect(JSON.parse(getResult.stdout)).toBe('https://gateway.example/v1');
     expect(JSON.parse(overrideResult.stdout)).toMatchObject({
       baseURL: 'http://localhost:8080/v1',
+      verbosity: 'high',
+      reasoningSummary: 'concise',
     });
   });
 
@@ -347,5 +391,85 @@ describe('CodeFarmer CLI', () => {
     );
     expect(result.code).toBe(2);
     expect(result.stderr).toContain('会话标题不能为空');
+  });
+
+  it('pushes the current branch to its upstream with --yes', async () => {
+    const { workspace, remote } = await repositoryWithUpstream();
+    const branch = await workspaceBranch(workspace);
+    await writeFile(path.join(workspace, 'file.txt'), 'world\n');
+    await execa('git', ['add', '.'], { cwd: workspace });
+    await execa('git', ['commit', '-m', 'second'], { cwd: workspace });
+
+    const result = await runCli(['--cwd', workspace, 'push', '--yes'], workspace, workspace);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('second');
+    expect(result.stdout).toContain(`已推送 ${branch} 到 origin`);
+    const remoteHead = await execa(
+      'git',
+      ['--git-dir', remote, 'rev-parse', branch],
+      { cwd: workspace },
+    );
+    const localHead = await execa('git', ['rev-parse', branch], { cwd: workspace });
+    expect(remoteHead.stdout.trim()).toBe(localHead.stdout.trim());
+  });
+
+  it('pushes a new branch and sets its upstream with --set-upstream', async () => {
+    const { workspace, remote } = await repositoryWithUpstream();
+    await execa('git', ['checkout', '-b', 'feature'], { cwd: workspace });
+    await writeFile(path.join(workspace, 'feature.txt'), 'feature\n');
+    await execa('git', ['add', '.'], { cwd: workspace });
+    await execa('git', ['commit', '-m', 'feature work'], { cwd: workspace });
+
+    const result = await runCli(
+      ['--cwd', workspace, 'push', '--yes', '--set-upstream', '--remote', 'origin'],
+      workspace,
+      workspace,
+    );
+
+    expect(result.code).toBe(0);
+    const remoteHead = await execa(
+      'git',
+      ['--git-dir', remote, 'rev-parse', 'feature'],
+      { cwd: workspace },
+    );
+    const localHead = await execa('git', ['rev-parse', 'feature'], { cwd: workspace });
+    expect(remoteHead.stdout.trim()).toBe(localHead.stdout.trim());
+  });
+
+  it('requires --yes to push in a non-interactive environment', async () => {
+    const { workspace } = await repositoryWithUpstream();
+    await writeFile(path.join(workspace, 'file.txt'), 'world\n');
+    await execa('git', ['add', '.'], { cwd: workspace });
+    await execa('git', ['commit', '-m', 'second'], { cwd: workspace });
+
+    const result = await runCli(['--cwd', workspace, 'push'], workspace, workspace);
+
+    expect(result.code).toBe(3);
+    expect(result.stderr).toContain('--yes');
+  });
+
+  it('rejects a push without an upstream branch', async () => {
+    const workspace = await temporaryDirectory();
+    await execa('git', ['init', '--quiet'], { cwd: workspace });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: workspace });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: workspace });
+    await writeFile(path.join(workspace, 'file.txt'), 'hello\n');
+    await execa('git', ['add', '.'], { cwd: workspace });
+    await execa('git', ['commit', '-m', 'initial'], { cwd: workspace });
+
+    const result = await runCli(['--cwd', workspace, 'push', '--yes'], workspace, workspace);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('没有上游分支');
+  });
+
+  it('rejects a push outside a Git repository', async () => {
+    const workspace = await temporaryDirectory();
+
+    const result = await runCli(['--cwd', workspace, 'push', '--yes'], workspace, workspace);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('不是 Git 仓库');
   });
 });

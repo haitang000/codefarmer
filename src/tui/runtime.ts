@@ -72,12 +72,16 @@ function toApprovalRequest(request: {
   title: string;
   detail: string;
   readOnly?: boolean;
+  requireConfirmation?: boolean;
 }): ApprovalRequest {
   return {
     kind: request.kind === 'file-mutation' ? 'patch' : 'command',
     title: request.title,
     detail: request.detail,
     ...(request.readOnly === undefined ? {} : { readOnly: request.readOnly }),
+    ...(request.requireConfirmation === undefined
+      ? {}
+      : { requireConfirmation: request.requireConfirmation }),
   };
 }
 

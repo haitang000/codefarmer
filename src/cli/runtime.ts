@@ -23,6 +23,8 @@ export interface GlobalOptions {
   model?: string;
   baseURL?: string;
   reasoning?: CodeFarmerConfig['reasoning'];
+  verbosity?: CodeFarmerConfig['verbosity'];
+  reasoningSummary?: CodeFarmerConfig['reasoningSummary'];
   approval?: CodeFarmerConfig['approval'];
   stream?: boolean;
   logLevel?: CodeFarmerConfig['logLevel'];
@@ -55,6 +57,10 @@ function configOverrides(options: GlobalOptions): ConfigOverrides {
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.baseURL === undefined ? {} : { baseURL: options.baseURL }),
     ...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
+    ...(options.verbosity === undefined ? {} : { verbosity: options.verbosity }),
+    ...(options.reasoningSummary === undefined
+      ? {}
+      : { reasoningSummary: options.reasoningSummary }),
     ...(options.approval === undefined ? {} : { approval: options.approval }),
     ...(options.stream === undefined ? {} : { stream: options.stream }),
     ...(options.logLevel === undefined ? {} : { logLevel: options.logLevel }),
@@ -156,6 +162,9 @@ export async function createAgentRuntime(
         title: request.title,
         detail: request.detail,
         ...(request.readOnly === undefined ? {} : { readOnly: request.readOnly }),
+        ...(request.requireConfirmation === undefined
+          ? {}
+          : { requireConfirmation: request.requireConfirmation }),
       }),
     onMutation: async (mutation) => runtimeBase.transactions.record(mutation),
   });

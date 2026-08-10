@@ -35,7 +35,7 @@ const MAX_TRANSCRIPT_CHARS = 150_000;
  * parallel tools can each return tens of kilobytes; clamping keeps the
  * request inside the context window on the next turn.
  */
-const MAX_TOOL_OUTPUT_INPUT_CHARS = 60_000;
+const MAX_TOOL_OUTPUT_INPUT_CHARS = 24_000;
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -277,13 +277,7 @@ export class AgentRunner {
     });
 
     try {
-      // 达到 maxAgentTurns 后自动续跑：向模型注入一次"继续"指令并保留
-      // 全部工具，任务无感继续，不再向用户显示"已达到最大轮次"提示；
-      // 仅当续跑后模型仍陷入工具循环（轮次达到上限的两倍）时，才回退
-      // 到一次无工具总结兜底收尾。
-      let continueSent = false;
-      for (let turn = 0; ; turn += 1) {
-        if (turn >= this.options.config.maxAgentTurns * 2) break;
+      for (let turn = 0; turn < this.options.config.maxAgentTurns; turn += 1) {
         const pendingCalls: { callId: string; name: string; arguments: string }[] = [];
         let responseId: string | undefined;
         let finishReason: string | undefined;
@@ -293,29 +287,13 @@ export class AgentRunner {
         const input: string | ProviderInput[] = explicitHistory
           ? [...transcript]
           : (lastOutputs ?? prompt);
-        // 自动续跑：达到轮次上限后向模型发送一次"继续"指令，全程不向
-        // 用户显示任何提示（用户只会看到任务继续执行直到自然完成）。
-        let requestInput: string | ProviderInput[] = input;
-        if (turn >= this.options.config.maxAgentTurns && !continueSent) {
-          continueSent = true;
-          const continueMessage: ProviderInput = {
-            type: 'message',
-            role: 'user',
-            content: '继续',
-          };
-          requestInput = Array.isArray(input)
-            ? [...input, continueMessage]
-            : [
-                { type: 'message' as const, role: 'user' as const, content: input },
-                continueMessage,
-              ];
-          if (explicitHistory) transcript.push(continueMessage);
-        }
         const request = {
           model: this.options.config.model,
           reasoning: this.options.config.reasoning,
+          verbosity: this.options.config.verbosity,
+          reasoningSummary: this.options.config.reasoningSummary,
           instructions,
-          input: requestInput,
+          input,
           tools:
             runOptions.plan === true
               ? this.options.tools.readOnlyDefinitions
@@ -541,12 +519,12 @@ export class AgentRunner {
         if (store !== undefined) store.saveQueued(session);
       }
 
-      // 自动续跑（上限的两倍轮次）后模型仍无法收尾：给模型最后一次
-      // 无工具总结机会，让用户至少拿到一份可执行的进度报告。
-      const turnLimit = this.options.config.maxAgentTurns * 2;
+      // The configured turn limit is strict. Give the model one concise,
+      // tool-free opportunity to report progress without extending the run.
+      const turnLimit = this.options.config.maxAgentTurns;
       const summaryInstruction =
-        `已达到最大工具轮次 ${String(turnLimit)}（含自动续跑），不能再调用任何工具。` +
-        '请立即用文字总结：已完成哪些修改、还有哪些未完成、失败原因以及建议的下一步操作。';
+        `已达到最大工具轮次 ${String(turnLimit)}，不能再调用任何工具。` +
+        '请简要总结已完成的修改、未完成事项、失败原因和下一步。';
       const summaryMessage: ProviderInput = {
         type: 'message',
         role: 'user',
@@ -556,86 +534,45 @@ export class AgentRunner {
       let summaryText = '';
       let summaryResponseId: string | undefined;
       let summaryToolCall = false;
-      let summaryReplayed = false;
-      let summaryAttempts = 0;
-      for (;;) {
-        const summaryInput: ProviderInput[] = explicitHistory
-          ? [...transcript, summaryMessage]
-          : [...(lastOutputs ?? []), summaryMessage];
-        const summaryRequest = {
-          model: this.options.config.model,
-          reasoning: this.options.config.reasoning,
-          instructions,
-          input: summaryInput,
-          tools: [],
-          store: this.options.config.store,
-          ...(previousResponseId === undefined ? {} : { previousResponseId }),
-          ...(runOptions.signal === undefined ? {} : { signal: runOptions.signal }),
-        };
-
-        summaryText = '';
-        summaryToolCall = false;
-        let chainFailed = false;
-        try {
-          for await (const event of this.options.provider.stream(summaryRequest)) {
-            runOptions.onEvent?.(event);
-            if (event.type === 'text_delta') summaryText += event.delta;
-            if (event.type === 'tool_call') summaryToolCall = true;
-            if (event.type === 'usage') totalUsage = sumUsage(totalUsage, event.usage);
-            if (event.type === 'response_completed') {
-              summaryResponseId = event.responseId;
-              summaryText = event.outputText ?? summaryText;
-            }
-            if (event.type === 'error') {
-              if (/auth|api.?key|401/iu.test(event.error.code)) {
-                throw new AuthenticationError(event.error.message, {
-                  details: { providerCode: event.error.code },
-                });
-              }
-              throw new ProviderError(event.error.message, {
+      const summaryInput: ProviderInput[] = explicitHistory
+        ? [...transcript, summaryMessage]
+        : [...(lastOutputs ?? []), summaryMessage];
+      const summaryRequest = {
+        model: this.options.config.model,
+        reasoning: this.options.config.reasoning,
+        verbosity: this.options.config.verbosity,
+        reasoningSummary: this.options.config.reasoningSummary,
+        instructions,
+        input: summaryInput,
+        tools: [],
+        store: this.options.config.store,
+        ...(previousResponseId === undefined ? {} : { previousResponseId }),
+        ...(runOptions.signal === undefined ? {} : { signal: runOptions.signal }),
+      };
+      try {
+        for await (const event of this.options.provider.stream(summaryRequest)) {
+          runOptions.onEvent?.(event);
+          if (event.type === 'text_delta') summaryText += event.delta;
+          if (event.type === 'tool_call') summaryToolCall = true;
+          if (event.type === 'usage') totalUsage = sumUsage(totalUsage, event.usage);
+          if (event.type === 'response_completed') {
+            summaryResponseId = event.responseId;
+            summaryText = event.outputText ?? summaryText;
+          }
+          if (event.type === 'error') {
+            if (/auth|api.?key|401/iu.test(event.error.code)) {
+              throw new AuthenticationError(event.error.message, {
                 details: { providerCode: event.error.code },
-                retryable: event.error.retryable,
               });
             }
-          }
-        } catch (error) {
-          if (!explicitHistory && isChainUnsupportedError(error)) {
-            chainFailed = true;
-          } else if (isRetryableProviderFailure(error) && summaryAttempts < 2) {
-            summaryAttempts += 1;
-            const delayMs = RETRY_BASE_DELAY_MS * 2 ** (summaryAttempts - 1);
-            runOptions.onEvent?.({
-              type: 'text_delta',
-              delta: `\n[summary retry ${String(summaryAttempts)}/2 after ${String(delayMs)}ms: ${error instanceof Error ? error.message : String(error)}]\n`,
+            throw new ProviderError(event.error.message, {
+              details: { providerCode: event.error.code },
+              retryable: event.error.retryable,
             });
-            await sleep(delayMs, runOptions.signal);
-            continue;
-          } else if (!explicitHistory && previousResponseId !== undefined) {
-            // Same chain fallback as the main loop: replay explicit history
-            // before giving up on the summary.
-            chainFailed = true;
-          } else {
-            break;
           }
         }
-        if (chainFailed && !summaryReplayed) {
-          summaryReplayed = true;
-          explicitHistory = true;
-          previousResponseId = undefined;
-          delete session.previousResponseId;
-          const replay: ProviderInput[] = [
-            ...session.messages.slice(0, -1).map((message) => ({
-              type: 'message' as const,
-              role: message.role,
-              content: message.content,
-            })),
-            { type: 'message', role: 'user', content: prompt },
-            ...transcript.slice(1),
-          ];
-          transcript.splice(0, transcript.length, ...replay);
-          continue;
-        }
-        break;
+      } catch (error) {
+        if (error instanceof AuthenticationError) throw error;
       }
 
       if (summaryResponseId === undefined || summaryToolCall || summaryText.trim() === '') {
@@ -643,7 +580,7 @@ export class AgentRunner {
         // not throw away the whole run: report what was actually done.
         const succeeded = toolCalls.filter((call) => call.result.success).length;
         finalMessage =
-          `已达到最大工具轮次 ${String(turnLimit)}（含自动续跑），且收尾总结请求未能完成` +
+          `已达到最大工具轮次 ${String(turnLimit)}，且收尾总结请求未能完成` +
           (summaryToolCall
             ? '（模型仍尝试调用工具）'
             : summaryText.trim() === ''

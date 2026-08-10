@@ -1,7 +1,13 @@
 import { Command, CommanderError, Option } from 'commander';
 
 import { AppError, ConfigError, EXIT_CODES, formatAppError, toAppError } from './infra/errors.js';
-import type { ApprovalPolicy, LogLevel, ReasoningEffort } from './types.js';
+import type {
+  ApprovalPolicy,
+  LogLevel,
+  ReasoningEffort,
+  ReasoningSummary,
+  TextVerbosity,
+} from './types.js';
 import { completionScript } from './cli/completions.js';
 import {
   configGetAction,
@@ -10,6 +16,7 @@ import {
   configSetAction,
   doctorAction,
   initAction,
+  pushAction,
   runAction,
   sessionsDeleteAction,
   sessionsExportAction,
@@ -20,6 +27,7 @@ import {
   statusAction,
   undoAction,
 } from './cli/commands.js';
+import type { PushOptions } from './cli/commands.js';
 import type { GlobalOptions } from './cli/runtime.js';
 import type { SessionExportFormat } from './cli/session-export.js';
 
@@ -29,6 +37,8 @@ function globals(command: Command): GlobalOptions {
     model?: string;
     baseUrl?: string;
     reasoning?: ReasoningEffort;
+    verbosity?: TextVerbosity;
+    reasoningSummary?: ReasoningSummary;
     approval?: ApprovalPolicy;
     stream?: boolean;
     logLevel?: LogLevel;
@@ -42,6 +52,10 @@ function globals(command: Command): GlobalOptions {
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.baseUrl === undefined ? {} : { baseURL: options.baseUrl }),
     ...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
+    ...(options.verbosity === undefined ? {} : { verbosity: options.verbosity }),
+    ...(options.reasoningSummary === undefined
+      ? {}
+      : { reasoningSummary: options.reasoningSummary }),
     ...(options.approval === undefined ? {} : { approval: options.approval }),
     ...(streamSource === 'cli' || streamSource === 'env' ? { stream: options.stream } : {}),
     ...(options.logLevel === undefined ? {} : { logLevel: options.logLevel }),
@@ -87,6 +101,15 @@ program
       'high',
       'xhigh',
       'max',
+    ]),
+  )
+  .addOption(new Option('--verbosity <level>', '文本详细度').choices(['low', 'medium', 'high']))
+  .addOption(
+    new Option('--reasoning-summary <mode>', '推理摘要').choices([
+      'none',
+      'auto',
+      'concise',
+      'detailed',
     ]),
   )
   .addOption(new Option('--approval <policy>', '审批策略').choices(['ask', 'auto', 'read-only']))
@@ -171,6 +194,15 @@ program
   .action(async (options: { session?: string }, command: Command) =>
     undoAction(globals(command), options.session),
   );
+
+program
+  .command('push')
+  .description('推送当前分支的提交到远程仓库')
+  .option('--yes', '跳过确认（非交互环境推送必须使用）')
+  .option('-u, --set-upstream', '推送并设置上游分支（用于首次推送新分支）')
+  .option('--remote <name>', '远程仓库名称（默认取上游远程，否则 origin）')
+  .option('--branch <name>', '要推送的分支（默认当前分支）')
+  .action(async (options: PushOptions, command: Command) => pushAction(globals(command), options));
 
 const sessions = program.command('sessions').description('管理本地会话');
 sessions
