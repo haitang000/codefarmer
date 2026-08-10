@@ -8,7 +8,7 @@ import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
 
 import type { ApprovalRequest } from '../core/approval.js';
 import type { AgentRuntime } from '../cli/runtime.js';
-import { detectGitAvailability } from '../tools/git-tools.js';
+import { commitWorkspaceChanges, detectGitAvailability } from '../tools/git-tools.js';
 import type { ProviderEvent, ReasoningEffort, TokenUsage } from '../types.js';
 import { MarkdownView } from './markdown.js';
 import { formatToolResult, type TuiInteractionBridge, type TuiRuntimeFactory } from './runtime.js';
@@ -41,8 +41,7 @@ const EFFORT_COLORS: Record<ReasoningEffort, string> = {
   max: 'red',
 };
 // Slash commands that stay available while a turn is running; plain prompts
-// typed meanwhile are queued and run after the active turn instead of being
-// silently dropped.
+// typed meanwhile remain in the input buffer until the active turn finishes.
 const READ_ONLY_COMMANDS: ReadonlySet<TuiCommand['kind']> = new Set([
   'help',
   'context',
@@ -50,9 +49,16 @@ const READ_ONLY_COMMANDS: ReadonlySet<TuiCommand['kind']> = new Set([
   'plan',
   'status',
   'config',
+  'doctor',
   'sessions',
   'diff',
 ]);
+
+function canRunWhileBusy(command: TuiCommand): boolean {
+  return (
+    command.kind === 'cancel' || command.kind === 'quit' || READ_ONLY_COMMANDS.has(command.kind)
+  );
+}
 
 const INIT_AGENT_PROMPT = `Initialize this workspace by creating or updating a root-level AGENT.md.
 
@@ -756,6 +762,10 @@ export function TuiApp({
     setCursor(position);
   }, []);
   const [busy, setBusy] = useState(false);
+  // React state may lag behind key events by one render. This ref is the
+  // synchronous lock for model turns and prevents local commands from
+  // accidentally starting a second turn or clearing the active one.
+  const busyRef = useRef(false);
   const [status, setStatus] = useState('Ready');
   const [planMode, setPlanMode] = useState(initialPlanMode);
   // Ctrl+O 切换：是否在助手消息上方展示推理摘要（思考过程）。
@@ -925,13 +935,14 @@ export function TuiApp({
 
   const runPrompt = useCallback(
     async (prompt: string, displayPrompt = prompt): Promise<void> => {
-      if (busy) return;
+      if (busyRef.current) return;
       const assistantId = id('assistant');
       setEntries((previous) => [
         ...previous,
         { id: id('user'), kind: 'user', content: displayPrompt },
         { id: assistantId, kind: 'assistant', content: '' },
       ]);
+      busyRef.current = true;
       setBusy(true);
       setStatus('Thinking');
       const controller = new AbortController();
@@ -997,10 +1008,11 @@ export function TuiApp({
           deltaFlushTimerRef.current = undefined;
         }
         controllerRef.current = undefined;
+        busyRef.current = false;
         setBusy(false);
       }
     },
-    [appendSystem, busy, flushDeltaBuffer, planMode],
+    [appendSystem, flushDeltaBuffer, planMode],
   );
 
   const runCommand = useCallback(
@@ -1030,13 +1042,17 @@ export function TuiApp({
         return;
       }
       // 只读命令在思考期间也可用；输入框不再被占用。
-      if (busy && !READ_ONLY_COMMANDS.has(command.kind)) return;
+      const modelTurnActive = busyRef.current;
+      if (modelTurnActive && !canRunWhileBusy(command)) return;
       const commandName = command.kind === 'delete-session' ? 'delete' : command.kind;
       setEntries((previous) => [
         ...previous,
         { id: id('command'), kind: 'user', content: `/${commandName}` },
       ]);
-      setBusy(true);
+      if (!modelTurnActive) {
+        busyRef.current = true;
+        setBusy(true);
+      }
       try {
         if (command.kind === 'help') {
           appendSystem(TUI_HELP);
@@ -1206,6 +1222,27 @@ export function TuiApp({
               appendSystem(result.stdout || '(no diff)');
             }
           }
+        } else if (command.kind === 'commit') {
+          const result = await commitWorkspaceChanges({
+            workspace: runtimeRef.current.workspace,
+            message: command.message,
+          });
+          if (result.status === 'committed') {
+            appendSystem(
+              `Committed ${result.hash}: ${result.message}\n  ${result.files.join(', ')}`,
+            );
+          } else if (result.status === 'clean') {
+            appendSystem('Nothing to commit; the working tree is clean.');
+          } else if (result.status === 'not-a-repository') {
+            appendSystem(
+              'The workspace is not a Git repository; /commit is unavailable here.',
+              'error',
+            );
+          } else {
+            appendSystem(
+              'Git is not installed or not on PATH; /commit is unavailable (Git is optional).',
+            );
+          }
         } else if (command.kind === 'undo') {
           const transaction = await runtimeRef.current.transactions.undoLatest(
             runtimeRef.current.session?.id,
@@ -1217,23 +1254,28 @@ export function TuiApp({
       } catch (error) {
         appendSystem(displayError(error), 'error');
       } finally {
-        setBusy(false);
-        setStatus('Ready');
+        if (!modelTurnActive) {
+          busyRef.current = false;
+          setBusy(false);
+          setStatus('Ready');
+        }
       }
     },
-    [appendSystem, busy, exit, runPrompt, runtimeFactory, swapRuntime, togglePlanMode, usage],
+    [appendSystem, exit, runPrompt, runtimeFactory, swapRuntime, togglePlanMode, usage],
   );
 
   const submitDraft = useCallback((): void => {
     const value = draftRef.current.trim();
-    if (value.length === 0 || busy) return;
+    if (value.length === 0) return;
+    const command = parseTuiCommand(value);
+    if (busyRef.current && !canRunWhileBusy(command)) return;
     historyRef.current = [...historyRef.current.filter((entry) => entry !== value), value].slice(
       -50,
     );
     historyIndexRef.current = -1;
     applyDraft('', 0);
-    void runCommand(parseTuiCommand(value));
-  }, [applyDraft, busy, runCommand]);
+    void runCommand(command);
+  }, [applyDraft, runCommand]);
 
   const contentWidth = Math.max(10, columns - 2);
   const visibleHeight = Math.max(4, rows - 11);

@@ -5,7 +5,11 @@ import path from 'node:path';
 import { execa } from 'execa';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { detectGitAvailability, resetGitAvailabilityCache } from '../../src/tools/git-tools.js';
+import {
+  commitWorkspaceChanges,
+  detectGitAvailability,
+  resetGitAvailabilityCache,
+} from '../../src/tools/git-tools.js';
 import { createToolRegistry } from '../../src/tools/registry.js';
 
 const temporaryDirectories: string[] = [];
@@ -199,6 +203,57 @@ describe('Git tools', () => {
     expect(status.error?.message).toContain('not a Git repository');
   });
 
+  it('stages and commits workspace changes with commitWorkspaceChanges', async () => {
+    const { root, workspace } = await repository();
+    await commit(root, 'baseline');
+    // The helper never fabricates a Git identity; the test repo provides one.
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: root });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
+    await writeFile(path.join(workspace, 'inside.txt'), 'inside changed\n');
+    await writeFile(path.join(workspace, 'new.txt'), 'new file\n');
+
+    const first = await commitWorkspaceChanges({ workspace, message: 'custom message' });
+    expect(first.status).toBe('committed');
+    if (first.status === 'committed') {
+      expect(first.message).toBe('custom message');
+      expect(first.files).toEqual(expect.arrayContaining(['inside.txt', 'new.txt']));
+      expect(first.hash).toMatch(/^[0-9a-f]{7,}$/u);
+    }
+
+    expect(await commitWorkspaceChanges({ workspace })).toEqual({ status: 'clean' });
+
+    // Without a message, a subject is derived from the changed paths.
+    await writeFile(path.join(workspace, 'another.txt'), 'x\n');
+    const derived = await commitWorkspaceChanges({ workspace });
+    expect(derived.status).toBe('committed');
+    if (derived.status === 'committed') {
+      expect(derived.message).toContain('another.txt');
+    }
+
+    const log = await execa('git', ['log', '--oneline', '-2'], { cwd: root });
+    expect(log.stdout).toContain('custom message');
+  });
+
+  it('reports when commitWorkspaceChanges cannot find a repository or Git', async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), 'codefarmer-nogit-'));
+    temporaryDirectories.push(workspace);
+    resetGitAvailabilityCache();
+    expect(await commitWorkspaceChanges({ workspace })).toEqual({ status: 'not-a-repository' });
+
+    const { workspace: repositoryWorkspace } = await repository();
+    const originalPath = process.env.PATH;
+    resetGitAvailabilityCache();
+    process.env.PATH = '';
+    try {
+      expect(await commitWorkspaceChanges({ workspace: repositoryWorkspace })).toEqual({
+        status: 'git-unavailable',
+      });
+    } finally {
+      process.env.PATH = originalPath;
+      resetGitAvailabilityCache();
+    }
+  });
+
   it('fails gracefully when Git is not available', async () => {
     const { workspace } = await repository();
     const registry = await createToolRegistry({ workspace });
@@ -207,6 +262,7 @@ describe('Git tools', () => {
     process.env.PATH = '';
     try {
       expect((await detectGitAvailability()).available).toBe(false);
+      expect(await commitWorkspaceChanges({ workspace })).toEqual({ status: 'git-unavailable' });
       const status = await registry.execute({
         callId: 'status',
         name: 'git_status',

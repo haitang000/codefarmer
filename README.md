@@ -155,10 +155,15 @@ pause in an approval modal; only an explicit `y` accepts the operation.
 | `/resume <id>` | Switch to a saved session                      |
 | `/delete <id>` | Delete a non-active local session              |
 | `/diff`        | Show current Git diff                          |
+| `/commit <msg>` | Stage and commit all workspace changes        |
 | `/undo`        | Undo the most recent eligible file mutation    |
 | `/new`         | Start a fresh session                          |
 | `/cancel`      | Cancel the active request or tool              |
 | `/quit`        | Leave the TUI and restore the terminal         |
+
+Read-only slash commands, `/cancel`, and `/quit` remain available while the
+model is generating; ordinary prompts stay in the input buffer until it is
+ready for the next turn.
 
 `Esc` or `Ctrl+C` cancels an active turn. When no turn is active, `Ctrl+C`
 exits and restores the terminal. In a non-interactive shell, no-argument
