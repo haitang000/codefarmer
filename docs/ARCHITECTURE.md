@@ -27,6 +27,9 @@ src/
 - **CLI** translates arguments and script-oriented commands into core operations.
   Interactive TTY invocations dynamically load the TUI; machine-readable
   `run --json` output is kept separate from diagnostics on stderr.
+  `stats` is a pure offline aggregation of local session records — it never
+  contacts the network — and labels its cost figures as estimates based on
+  public list prices, with unmatched models listed separately.
 - **TUI** owns terminal layout and input state. It consumes provider and tool
   lifecycle events, renders the transcript and approval modal, and dispatches
   local commands such as status, diff, session switching, and undo. It never
@@ -117,6 +120,16 @@ unsuffixed application name `codefarmer`: user configuration lives in its
 config directory, sessions and transactions under its data directory, and
 daily JSONL files in its log directory. Workspace-specific records are keyed
 by a hash of the canonical workspace path.
+
+## Skills
+
+The runtime discovers Codex-compatible `SKILL.md` directories from workspace ancestors,
+user/system locations, and compatible Codex locations. The initial provider instruction carries a
+bounded catalog of references, descriptions, and paths; the agent uses read-only `read_skill` and
+`read_skill_resource` tools to load selected instructions and text resources progressively. Explicit
+CLI/TUI selections are passed only to the active run or TUI session and are not persisted in a
+`SessionRecord`. Resources are resolved through their skill directory's real path, preventing
+traversal and symlink escapes. Skills never execute scripts implicitly.
 
 ## Reliability boundaries
 

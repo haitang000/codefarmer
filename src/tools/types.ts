@@ -4,6 +4,7 @@ import type {
   ToolDefinition,
   ToolResult,
 } from '../types.js';
+import type { SkillCatalog } from '../types.js';
 
 export type ToolName =
   | 'list_files'
@@ -15,7 +16,9 @@ export type ToolName =
   | 'git_status'
   | 'git_diff'
   | 'git_log'
-  | 'git_show';
+  | 'git_show'
+  | 'read_skill'
+  | 'read_skill_resource';
 
 export interface ToolContextOptions {
   workspace: string;
@@ -28,6 +31,7 @@ export interface ToolContextOptions {
   onMutation?: (mutation: MutationTransaction) => void | Promise<void>;
   approve?: (request: ApprovalRequest) => boolean | Promise<boolean>;
   hooks?: ToolLifecycleHooks;
+  skillCatalog?: SkillCatalog;
 }
 
 export interface ResolvedToolContext {
@@ -39,6 +43,7 @@ export interface ResolvedToolContext {
   sessionId?: string;
   onMutation?: (mutation: MutationTransaction) => void | Promise<void>;
   approve?: (request: ApprovalRequest) => boolean | Promise<boolean>;
+  skillCatalog?: SkillCatalog;
 }
 
 export interface ApprovalRequest {

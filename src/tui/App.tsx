@@ -22,6 +22,7 @@ import {
   COMPACT_KEEP_RECENT_MESSAGES,
   sessionContextChars,
 } from '../core/session-compact.js';
+import { formatSkillCatalog } from '../core/skills.js';
 import { MarkdownLine, MarkdownView } from './markdown.js';
 import {
   extractCommitMessage,
@@ -29,6 +30,7 @@ import {
   type TuiInteractionBridge,
   type TuiRuntimeFactory,
 } from './runtime.js';
+import { formatTerminalTitle, normaliseSessionTitle } from './title.js';
 import {
   parseTuiCommand,
   TUI_HELP,
@@ -61,6 +63,7 @@ const EFFORT_COLORS: Record<ReasoningEffort, string> = {
 // typed meanwhile remain in the input buffer until the active turn finishes.
 const READ_ONLY_COMMANDS: ReadonlySet<TuiCommand['kind']> = new Set([
   'help',
+  'skills',
   'context',
   'effort',
   'plan',
@@ -110,6 +113,8 @@ export interface TuiAppProps {
   initialPlanMode?: boolean;
   /** 初始是否展示思考过程（Ctrl+O 切换）。 */
   initialShowThinking?: boolean;
+  /** Synchronises the terminal window title with the active session. */
+  onTerminalTitleChange?: (title: string) => void;
 }
 
 interface PendingApproval {
@@ -248,8 +253,7 @@ export function runtimeEntries(runtime: AgentRuntime): TranscriptEntry[] {
     timeline.push({
       entry: {
         id: message.id,
-        kind:
-          message.role === 'user' ? 'user' : message.role === 'system' ? 'system' : 'assistant',
+        kind: message.role === 'user' ? 'user' : message.role === 'system' ? 'system' : 'assistant',
         content: message.content,
       },
       timestamp: message.createdAt,
@@ -279,6 +283,30 @@ export function runtimeEntries(runtime: AgentRuntime): TranscriptEntry[] {
     .map(({ entry }) => entry);
 }
 
+/**
+ * Insert a requested tool after the response that led to it. An empty
+ * assistant placeholder is discarded, because it only represented a pending
+ * response that turned into a tool call instead of spoken output.
+ */
+export function appendToolEntryAtResponseBoundary(
+  entries: TranscriptEntry[],
+  assistantId: string | undefined,
+  assistantHasOutput: boolean,
+  toolEntry: TranscriptEntry,
+): TranscriptEntry[] {
+  const withoutEmptyPlaceholder =
+    assistantId !== undefined && !assistantHasOutput
+      ? entries.filter((entry) => entry.id !== assistantId)
+      : entries;
+  const existingIndex = withoutEmptyPlaceholder.findIndex(
+    (entry) => entry.tool?.callId === toolEntry.tool?.callId,
+  );
+  if (existingIndex < 0) return [...withoutEmptyPlaceholder, toolEntry];
+  const next = [...withoutEmptyPlaceholder];
+  next[existingIndex] = toolEntry;
+  return next;
+}
+
 function welcomeEntries(): TranscriptEntry[] {
   return [
     {
@@ -302,6 +330,39 @@ function displayError(error: unknown): string {
 function previewLine(text: string, maximumLength = 60): string {
   const first = text.trimStart().split(/\r?\n/u, 1)[0] ?? '';
   return first.length > maximumLength ? `${first.slice(0, maximumLength - 1)}…` : first;
+}
+
+/**
+ * Assumed model context window (tokens) used only to render an estimated
+ * usage ratio in `/context`; the real limit depends on the provider/model.
+ */
+export const ESTIMATED_CONTEXT_WINDOW_TOKENS = 128_000;
+
+/** Group thousands for readability, independent of the terminal locale. */
+export function formatNumber(value: number): string {
+  return value.toLocaleString('en-US');
+}
+
+/**
+ * Rough char→token estimate for human display: ASCII text ≈ 4 chars per
+ * token, CJK and other wide characters ≈ 1 token each. Only used to make
+ * `/context` usage intuitive, never to trim or budget history.
+ */
+export function estimateContextTokens(text: string): number {
+  let ascii = 0;
+  let wide = 0;
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code < 0x80) ascii += 1;
+    else wide += 1;
+  }
+  return Math.ceil(ascii / 4) + wide;
+}
+
+/** Render a ratio as a fixed-width bar of filled/empty blocks. */
+export function usageBar(ratio: number, width = 20): string {
+  const filled = Math.max(0, Math.min(width, Math.round(ratio * width)));
+  return `${'█'.repeat(filled)}${'░'.repeat(width - filled)}`;
 }
 
 // Keep the active-turn indicator compact; tool-call labels still take over
@@ -868,6 +929,7 @@ export function TuiApp({
   bridge,
   initialPlanMode = false,
   initialShowThinking = false,
+  onTerminalTitleChange,
 }: TuiAppProps): React.ReactElement {
   const { exit } = useApp();
   const { columns, rows } = useWindowSize();
@@ -896,6 +958,7 @@ export function TuiApp({
   const busyRef = useRef(false);
   const [status, setStatus] = useState('Ready');
   const [planMode, setPlanMode] = useState(initialPlanMode);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   // Ctrl+O 切换：是否在助手消息上方展示推理摘要（思考过程）。
   const [showThinking, setShowThinking] = useState(initialShowThinking);
   const [usage, setUsage] = useState<TokenUsage>(initialRuntime.session?.usage ?? EMPTY_USAGE);
@@ -941,6 +1004,10 @@ export function TuiApp({
       ),
     );
   }, []);
+
+  useEffect(() => {
+    onTerminalTitleChange?.(formatTerminalTitle(runtime.session?.title));
+  }, [onTerminalTitleChange, runtime.session?.title]);
 
   const pumpApproval = useCallback(() => {
     if (currentApprovalRef.current !== undefined) return;
@@ -1059,6 +1126,7 @@ export function TuiApp({
     setUsage(next.session?.usage ?? EMPTY_USAGE);
     setStatus('Ready');
     setTopLine(-1);
+    setSelectedSkills([]);
   }, []);
 
   interface RunPromptOptions {
@@ -1081,6 +1149,23 @@ export function TuiApp({
       const nested = options?.nested === true;
       if (busyRef.current && !nested) return undefined;
       const assistantId = id('assistant');
+      // A run may contain several model responses separated by tool calls.
+      // Keep each response in its own transcript entry instead of appending
+      // every streamed delta to the placeholder created for the whole run.
+      const activeAssistant: { id: string | undefined; hasOutput: boolean } = {
+        id: assistantId,
+        hasOutput: false,
+      };
+      const ensureAssistantEntry = (): string => {
+        if (activeAssistant.id !== undefined) return activeAssistant.id;
+        const nextAssistantId = id('assistant');
+        activeAssistant.id = nextAssistantId;
+        setEntries((previous) => [
+          ...previous,
+          { id: nextAssistantId, kind: 'assistant', content: '' },
+        ]);
+        return nextAssistantId;
+      };
       setEntries((previous) => [
         ...previous,
         { id: id('user'), kind: 'user', content: displayPrompt },
@@ -1102,16 +1187,48 @@ export function TuiApp({
           history: options?.ephemeral === true ? false : true,
           signal: controller.signal,
           ...(options?.plan === true || planMode ? { plan: true } : {}),
+          ...(selectedSkills.length === 0 ? {} : { skills: selectedSkills }),
           onEvent: (event: ProviderEvent) => {
             if (event.type === 'text_delta') {
+              const currentAssistantId = ensureAssistantEntry();
+              activeAssistant.hasOutput ||= event.delta.length > 0;
               deltaBufferRef.current += event.delta;
-              deltaFlushTimerRef.current ??= setInterval(() => flushDeltaBuffer(assistantId), 60);
+              deltaFlushTimerRef.current ??= setInterval(
+                () => flushDeltaBuffer(currentAssistantId),
+                60,
+              );
             } else if (event.type === 'reasoning_delta') {
+              const currentAssistantId = ensureAssistantEntry();
+              activeAssistant.hasOutput ||= event.delta.length > 0;
               reasoningBufferRef.current += event.delta;
-              deltaFlushTimerRef.current ??= setInterval(() => flushDeltaBuffer(assistantId), 60);
+              deltaFlushTimerRef.current ??= setInterval(
+                () => flushDeltaBuffer(currentAssistantId),
+                60,
+              );
+            } else if (
+              event.type === 'response_completed' &&
+              event.outputText !== undefined &&
+              event.outputText.length > 0 &&
+              !activeAssistant.hasOutput
+            ) {
+              const currentAssistantId = ensureAssistantEntry();
+              activeAssistant.hasOutput = true;
+              deltaBufferRef.current += event.outputText;
+              deltaFlushTimerRef.current ??= setInterval(
+                () => flushDeltaBuffer(currentAssistantId),
+                60,
+              );
             } else if (event.type === 'usage') {
               setUsage(event.usage);
             } else if (event.type === 'tool_call') {
+              const currentAssistantId = activeAssistant.id;
+              if (currentAssistantId !== undefined) {
+                flushDeltaBuffer(currentAssistantId);
+              }
+              // The next model response must start a fresh entry after the
+              // tool result instead of joining text from the prior turn.
+              activeAssistant.id = undefined;
+              activeAssistant.hasOutput = false;
               const call = event.call;
               const tool: ToolView = {
                 callId: call.callId,
@@ -1127,38 +1244,36 @@ export function TuiApp({
                   content: call.name,
                   tool,
                 };
-                const assistantIndex = previous.findIndex((entry) => entry.id === assistantId);
-                if (assistantIndex < 0) return [...previous, toolEntry];
-                const assistant = previous[assistantIndex];
-                if (assistant === undefined) return [...previous, toolEntry];
-                // The placeholder is created before the agent decides to use
-                // tools. Keep it after every tool so the eventual response
-                // always reads as the conclusion of that work.
-                return [
-                  ...previous.slice(0, assistantIndex),
-                  ...previous.slice(assistantIndex + 1),
+                return appendToolEntryAtResponseBoundary(
+                  previous,
+                  currentAssistantId,
+                  activeAssistant.hasOutput,
                   toolEntry,
-                  assistant,
-                ];
+                );
               });
               setStatus(`Preparing ${call.name}`);
             }
           },
         });
-        flushDeltaBuffer(assistantId);
+        if (activeAssistant.id !== undefined) flushDeltaBuffer(activeAssistant.id);
         setUsage(result.usage);
         setEntries((previous) => {
-          const assistantIndex = previous.findIndex((entry) => entry.id === assistantId);
-          if (assistantIndex < 0 || result.message.length === 0) return previous;
+          if (result.message.length === 0) return previous;
+          const assistantIndex =
+            activeAssistant.id === undefined
+              ? -1
+              : previous.findIndex((entry) => entry.id === activeAssistant.id);
+          if (assistantIndex < 0) {
+            return [
+              ...previous,
+              { id: id('assistant'), kind: 'assistant', content: result.message },
+            ];
+          }
           const assistant = previous[assistantIndex];
           if (assistant === undefined) return previous;
-          // Put the completed answer behind all tool updates, including a
-          // final hook event that arrived while the response was streaming.
-          return [
-            ...previous.slice(0, assistantIndex),
-            ...previous.slice(assistantIndex + 1),
-            { ...assistant, content: result.message },
-          ];
+          const next = [...previous];
+          next[assistantIndex] = { ...assistant, content: result.message };
+          return next;
         });
         setStatus(result.status === 'cancelled' ? 'Cancelled' : 'Ready');
         if (!nested && activeRuntime.session !== undefined) {
@@ -1177,7 +1292,7 @@ export function TuiApp({
         }
         return result;
       } catch (error) {
-        flushDeltaBuffer(assistantId);
+        if (activeAssistant.id !== undefined) flushDeltaBuffer(activeAssistant.id);
         appendSystem(displayError(error), 'error');
         setStatus('Error');
         return undefined;
@@ -1193,7 +1308,7 @@ export function TuiApp({
         }
       }
     },
-    [appendSystem, flushDeltaBuffer, planMode],
+    [appendSystem, flushDeltaBuffer, planMode, selectedSkills],
   );
 
   const runCommand = useCallback(
@@ -1237,6 +1352,32 @@ export function TuiApp({
       try {
         if (command.kind === 'help') {
           appendSystem(TUI_HELP);
+        } else if (command.kind === 'skills') {
+          const skills = runtimeRef.current.skills;
+          appendSystem(
+            skills === undefined ? 'No skill catalog is available.' : formatSkillCatalog(skills),
+          );
+        } else if (command.kind === 'skill') {
+          if (command.ref.length === 0) {
+            appendSystem(
+              selectedSkills.length === 0
+                ? 'Usage: /skill <ref> | /skill off'
+                : `Selected skills: ${selectedSkills.join(', ')}`,
+            );
+          } else if (command.ref === 'off') {
+            setSelectedSkills([]);
+            appendSystem('Cleared selected skills.');
+          } else if (runtimeRef.current.skills?.get(command.ref) === undefined) {
+            appendSystem(
+              `Unknown skill: ${command.ref}. Run /skills to list available skills.`,
+              'error',
+            );
+          } else {
+            setSelectedSkills((previous) =>
+              previous.includes(command.ref) ? previous : [...previous, command.ref],
+            );
+            appendSystem(`Selected skill ${command.ref}.`);
+          }
         } else if (command.kind === 'new') {
           const next = await runtimeFactory();
           swapRuntime(next);
@@ -1271,6 +1412,7 @@ export function TuiApp({
               `Model      ${active.config.model} (${active.config.reasoning}, ${active.config.verbosity})`,
               `Reasoning  summary ${active.config.reasoningSummary}`,
               `Approval   ${active.config.approval}`,
+              `Skills     ${selectedSkills.length === 0 ? 'none selected' : selectedSkills.join(', ')}`,
               `Base URL   ${active.config.baseURL}`,
               `Git        ${gitLine}`,
             ].join('\n'),
@@ -1282,25 +1424,46 @@ export function TuiApp({
           const lines: string[] = [
             `Session    ${session?.id ?? 'none'}`,
             `Model      ${active.config.model} (${active.config.reasoning}, ${active.config.verbosity})`,
-            `Messages   ${String(messages.length)} | Tool calls ${String(session?.toolCalls.length ?? 0)}`,
-            `Tokens     in ${String(usage.inputTokens)} / out ${String(usage.outputTokens)} / total ${String(usage.totalTokens)}`,
+            `Messages   ${formatNumber(messages.length)} | Tool calls ${formatNumber(session?.toolCalls.length ?? 0)}`,
           ];
-          if (usage.cachedInputTokens !== undefined) {
-            lines.push(`           cached ${String(usage.cachedInputTokens)}`);
-          }
-          if (usage.reasoningTokens !== undefined) {
-            lines.push(`           reasoning ${String(usage.reasoningTokens)}`);
-          }
           if (messages.length === 0) {
             lines.push('Context    empty');
           } else {
-            const contextChars = sessionContextChars(session);
-            lines.push(
-              `Context    ${String(contextChars)} chars across ${String(messages.length)} messages`,
+            const contextChars = messages.reduce((sum, message) => sum + message.content.length, 0);
+            const contextTokens = messages.reduce(
+              (sum, message) => sum + estimateContextTokens(message.content),
+              0,
             );
+            const ratio = Math.min(1, contextTokens / ESTIMATED_CONTEXT_WINDOW_TOKENS);
+            lines.push(
+              `Context    ${usageBar(ratio)} ${formatNumber(contextTokens)} / ${formatNumber(ESTIMATED_CONTEXT_WINDOW_TOKENS)} tokens ≈ ${(ratio * 100).toFixed(1)}%`,
+              `           ${formatNumber(contextChars)} chars across ${formatNumber(messages.length)} messages`,
+            );
+            const roleChars = new Map<string, number>();
+            let largestChars = 0;
+            let largestIndex = -1;
             messages.forEach((message, index) => {
+              roleChars.set(
+                message.role,
+                (roleChars.get(message.role) ?? 0) + message.content.length,
+              );
+              if (message.content.length > largestChars) {
+                largestChars = message.content.length;
+                largestIndex = index;
+              }
+            });
+            const roleSummary = [...roleChars.entries()]
+              .sort((a, b) => b[1] - a[1])
+              .map(
+                ([role, chars]) =>
+                  `${role} ${formatNumber(chars)} (${String(Math.round((chars / contextChars) * 100))}%)`,
+              )
+              .join(' | ');
+            lines.push(`Roles      ${roleSummary}`);
+            messages.forEach((message, index) => {
+              const marker = index === largestIndex ? ' ← largest' : '';
               lines.push(
-                `  ${String(index + 1).padStart(2, ' ')}. ${message.role.padEnd(9, ' ')} ${String(message.content.length).padStart(6, ' ')} chars  ${previewLine(message.content)}`,
+                `  ${String(index + 1).padStart(2, ' ')}. ${message.role.padEnd(9, ' ')} ${formatNumber(message.content.length).padStart(9, ' ')} chars${marker}  ${previewLine(message.content)}`,
               );
             });
             if (
@@ -1309,6 +1472,15 @@ export function TuiApp({
             ) {
               lines.push('Tip        Run /compact to compress the early messages into a summary.');
             }
+          }
+          lines.push(
+            `Tokens     in ${formatNumber(usage.inputTokens)} / out ${formatNumber(usage.outputTokens)} / total ${formatNumber(usage.totalTokens)}`,
+          );
+          if (usage.cachedInputTokens !== undefined) {
+            lines.push(`           cached ${formatNumber(usage.cachedInputTokens)}`);
+          }
+          if (usage.reasoningTokens !== undefined) {
+            lines.push(`           reasoning ${formatNumber(usage.reasoningTokens)}`);
           }
           appendSystem(lines.join('\n'));
         } else if (command.kind === 'compact') {
@@ -1556,6 +1728,7 @@ export function TuiApp({
       requestApproval,
       runPrompt,
       runtimeFactory,
+      selectedSkills,
       swapRuntime,
       togglePlanMode,
       usage,
@@ -1841,6 +2014,7 @@ export function TuiApp({
   const clampedTop = topLine < 0 ? maximumTop : Math.min(topLine, maximumTop);
   const atBottom = topLine < 0;
   const sessionId = runtime.session?.id ?? 'pending';
+  const sessionTitle = normaliseSessionTitle(runtime.session?.title) ?? 'NEW SESSION';
   const cursorDraft = `${draft.slice(0, cursor)}|${draft.slice(cursor)}`;
   const advice = cursor === draft.length ? tuiCommandAdvice(draft) : '';
   const approvalView = approval;
@@ -1865,9 +2039,10 @@ export function TuiApp({
             <Text color="gray">{'WORKSPACE  '}</Text>
             {runtime.workspace}
           </Text>
-          <Text dimColor wrap="truncate-start">
+          <Text dimColor wrap="truncate-middle">
             <Text color="gray">{'SESSION  '}</Text>
-            {sessionId.slice(0, 12)}
+            {sessionTitle}
+            <Text color="gray">{`  ${sessionId.slice(0, 8)}`}</Text>
           </Text>
         </Box>
       </Box>

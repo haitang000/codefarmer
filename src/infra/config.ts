@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
+import { PROVIDER_IDS } from '../types.js';
 import type {
   ApprovalPolicy,
   CodeFarmerConfig,
@@ -8,7 +9,9 @@ import type {
   ReasoningEffort,
   ReasoningSummary,
   TextVerbosity,
+  ProviderId,
 } from '../types.js';
+import { isProviderId, providerPreset } from '../providers/catalog.js';
 import { ConfigError } from './errors.js';
 import { getAppPaths } from './paths.js';
 import { fileExists, writeJsonAtomic } from './persistence.js';
@@ -29,6 +32,7 @@ export const DEFAULT_IGNORED_PATHS = [
 ] as const;
 
 export const DEFAULT_CONFIG: Readonly<CodeFarmerConfig> = {
+  provider: 'openai',
   model: 'gpt-5.6-sol',
   baseURL: 'https://api.openai.com/v1',
   reasoning: 'auto',
@@ -60,6 +64,7 @@ const baseURLSchema = z
   .transform((value) => value.replace(/\/+$/u, ''));
 
 const configShape = {
+  provider: z.enum(PROVIDER_IDS),
   model: z.string().trim().min(1),
   baseURL: baseURLSchema,
   reasoning: z.enum(['auto', 'none', 'low', 'medium', 'high', 'xhigh', 'max']),
@@ -173,9 +178,13 @@ function parseIgnoredPaths(value: string | undefined): string[] | undefined {
 }
 
 export function configFromEnvironment(env: NodeJS.ProcessEnv = process.env): ConfigOverrides {
+  const provider = env.CODEFARMER_PROVIDER;
+  const providerConfig: Partial<Pick<CodeFarmerConfig, 'model' | 'baseURL'>> =
+    provider !== undefined && isProviderId(provider) ? providerDefaults(provider) : {};
   return definedOnly({
-    model: env.CODEFARMER_MODEL,
-    baseURL: env.CODEFARMER_BASE_URL ?? env.OPENAI_BASE_URL,
+    provider: provider as ProviderId | undefined,
+    model: env.CODEFARMER_MODEL ?? providerConfig.model,
+    baseURL: env.CODEFARMER_BASE_URL ?? env.OPENAI_BASE_URL ?? providerConfig.baseURL,
     reasoning: env.CODEFARMER_REASONING as ReasoningEffort | undefined,
     verbosity: env.CODEFARMER_VERBOSITY as TextVerbosity | undefined,
     reasoningSummary: env.CODEFARMER_REASONING_SUMMARY as ReasoningSummary | undefined,
@@ -198,6 +207,12 @@ export function configFromEnvironment(env: NodeJS.ProcessEnv = process.env): Con
     ),
     ignoredPaths: parseIgnoredPaths(env.CODEFARMER_IGNORED_PATHS),
   }) as ConfigOverrides;
+}
+
+/** Return the built-in endpoint/model pair for a provider selected by setup. */
+export function providerDefaults(provider: ProviderId): Pick<CodeFarmerConfig, 'model' | 'baseURL'> {
+  const preset = providerPreset(provider);
+  return { model: preset.defaultModel, baseURL: preset.defaultBaseURL };
 }
 
 async function readConfigFile(filePath: string): Promise<ConfigFile | undefined> {
@@ -254,14 +269,28 @@ export async function loadConfigDetails(options: LoadConfigOptions = {}): Promis
     readConfigFile(userConfigPath),
     readConfigFile(projectConfigPath),
   ]);
+  const userOverrides = withoutSchema(userConfig);
+  const projectOverrides = withoutSchema(projectConfig);
+  const environmentOverrides = configFromEnvironment(options.env);
+  const cliOverrides = definedOnly(options.cli ?? {});
+  const selectedProvider =
+    cliOverrides.provider ??
+    environmentOverrides.provider ??
+    projectOverrides.provider ??
+    userOverrides.provider ??
+    DEFAULT_CONFIG.provider;
+  const selectedDefaults = isProviderId(selectedProvider)
+    ? providerDefaults(selectedProvider)
+    : {};
 
   const config = validateMergedConfig({
     ...DEFAULT_CONFIG,
+    ...selectedDefaults,
     ignoredPaths: [...DEFAULT_CONFIG.ignoredPaths],
-    ...withoutSchema(userConfig),
-    ...withoutSchema(projectConfig),
-    ...configFromEnvironment(options.env),
-    ...definedOnly(options.cli ?? {}),
+    ...userOverrides,
+    ...projectOverrides,
+    ...environmentOverrides,
+    ...cliOverrides,
   });
 
   return {

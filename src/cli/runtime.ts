@@ -5,21 +5,31 @@ import type { Logger } from 'pino';
 
 import { PolicyApprovalController, type ApprovalRequest } from '../core/approval.js';
 import { AgentRunner } from '../core/agent.js';
+import { discoverSkills } from '../core/skills.js';
 import { SessionStore } from '../core/session-store.js';
 import { TransactionStore } from '../core/transaction-store.js';
-import { resolveApiKey } from '../infra/credentials.js';
+import { resolveProviderApiKey } from '../infra/credentials.js';
 import { AuthenticationError, ConfigError } from '../infra/errors.js';
-import { loadConfig, type ConfigOverrides } from '../infra/config.js';
+import { loadConfig, providerDefaults, type ConfigOverrides } from '../infra/config.js';
 import { createLogger } from '../infra/logger.js';
 import { canonicalWorkspace } from '../infra/paths.js';
 import { OpenAIProvider } from '../providers/openai.js';
+import { OpenAICompatibleProvider } from '../providers/openai-compatible.js';
+import { isProviderId, providerPreset } from '../providers/catalog.js';
 import { createToolRegistry } from '../tools/registry.js';
 import type { ToolLifecycleHooks } from '../tools/types.js';
-import type { CodeFarmerConfig, SessionRecord } from '../types.js';
+import type {
+  AgentProvider,
+  CodeFarmerConfig,
+  ProviderId,
+  SessionRecord,
+  SkillCatalog,
+} from '../types.js';
 import { promptForApproval } from './ui.js';
 
 export interface GlobalOptions {
   cwd?: string;
+  provider?: ProviderId;
   model?: string;
   baseURL?: string;
   reasoning?: CodeFarmerConfig['reasoning'];
@@ -37,6 +47,7 @@ export interface BaseRuntime {
   sessions: SessionStore;
   transactions: TransactionStore;
   logger: Logger;
+  skills?: SkillCatalog;
 }
 
 export interface AgentRuntime extends BaseRuntime {
@@ -53,9 +64,12 @@ export interface AgentRuntimeOptions {
 }
 
 function configOverrides(options: GlobalOptions): ConfigOverrides {
+  const providerConfig =
+    options.provider === undefined ? {} : providerDefaults(options.provider);
   return {
-    ...(options.model === undefined ? {} : { model: options.model }),
-    ...(options.baseURL === undefined ? {} : { baseURL: options.baseURL }),
+    ...(options.provider === undefined ? {} : { provider: options.provider }),
+    ...(options.model === undefined ? providerConfig : { model: options.model }),
+    ...(options.baseURL === undefined ? providerConfig : { baseURL: options.baseURL }),
     ...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
     ...(options.verbosity === undefined ? {} : { verbosity: options.verbosity }),
     ...(options.reasoningSummary === undefined
@@ -74,6 +88,14 @@ export function resolveSessionConfig(
   resuming: boolean,
 ): CodeFarmerConfig {
   if (session === undefined || !resuming) return baseConfig;
+  if (!isProviderId(session.provider)) {
+    throw new ConfigError(`会话 ${session.id} 使用不受支持的 Provider: ${session.provider}`);
+  }
+  if (options.provider !== undefined && options.provider !== session.provider) {
+    throw new ConfigError(
+      `会话 ${session.id} 绑定到 ${session.provider}；请新建会话后再切换 Provider`,
+    );
+  }
   if (
     session.baseURL !== undefined &&
     options.baseURL !== undefined &&
@@ -85,6 +107,7 @@ export function resolveSessionConfig(
   }
   return {
     ...baseConfig,
+    provider: session.provider,
     ...(options.model === undefined ? { model: session.model } : {}),
     ...(session.baseURL === undefined ? {} : { baseURL: session.baseURL }),
   };
@@ -94,7 +117,8 @@ export async function createBaseRuntime(options: GlobalOptions): Promise<BaseRun
   const workspace = await canonicalWorkspace(options.cwd ?? process.cwd());
   await access(workspace, constants.R_OK);
   const config = await loadConfig({ cwd: workspace, cli: configOverrides(options) });
-  const apiKey = await resolveApiKey();
+  const skills = await discoverSkills(workspace);
+  const apiKey = await resolveProviderApiKey(config.provider);
   const [sessions, transactions, logger] = await Promise.all([
     SessionStore.create(workspace),
     TransactionStore.create(workspace),
@@ -105,28 +129,22 @@ export async function createBaseRuntime(options: GlobalOptions): Promise<BaseRun
     }),
   ]);
   logger.info(
-    { workspace, model: config.model, approval: config.approval },
+    { workspace, provider: config.provider, model: config.model, approval: config.approval },
     'CodeFarmer runtime initialized',
   );
-  return { workspace, config, sessions, transactions, logger };
+  return { workspace, config, sessions, transactions, logger, skills };
 }
 
 export async function createAgentRuntime(
   options: GlobalOptions,
   agentOptions: AgentRuntimeOptions = {},
 ): Promise<AgentRuntime> {
-  const apiKey = await resolveApiKey();
-  if (!apiKey) {
-    throw new AuthenticationError(
-      '缺少 OPENAI_API_KEY；请设置环境变量，或运行 codefarmer setup 保存密钥到本地凭据',
-    );
-  }
   const base = await createBaseRuntime(options);
   const history = agentOptions.history ?? true;
   const session =
     agentOptions.sessionId === undefined
       ? history
-        ? await base.sessions.createSession('openai', base.config.model, base.config.baseURL)
+        ? await base.sessions.createSession(base.config.provider, base.config.model, base.config.baseURL)
         : undefined
       : await base.sessions.get(agentOptions.sessionId);
   const config = resolveSessionConfig(
@@ -135,6 +153,12 @@ export async function createAgentRuntime(
     session,
     agentOptions.sessionId !== undefined,
   );
+  const apiKey = await resolveProviderApiKey(config.provider);
+  if (!apiKey) {
+    throw new AuthenticationError(
+      `缺少 ${config.provider} 的 API Key（${providerPreset(config.provider).environmentVariables[0] ?? '对应环境变量'}）；请设置对应环境变量，或运行 codefarmer setup 保存密钥到本地凭据`,
+    );
+  }
   const runtimeBase = config === base.config ? base : { ...base, config };
   if (session !== undefined && session.model !== config.model) {
     session.model = config.model;
@@ -155,6 +179,7 @@ export async function createAgentRuntime(
     maxOutputBytes: config.maxToolOutputBytes,
     commandTimeoutMs: config.commandTimeoutMs,
     ignoredPaths: config.ignoredPaths,
+    ...(runtimeBase.skills === undefined ? {} : { skillCatalog: runtimeBase.skills }),
     ...(session === undefined ? {} : { sessionId: session.id }),
     approve: async (request) =>
       approval.request({
@@ -168,16 +193,20 @@ export async function createAgentRuntime(
       }),
     onMutation: async (mutation) => runtimeBase.transactions.record(mutation),
   });
-  const provider = new OpenAIProvider({
-    apiKey,
-    baseURL: config.baseURL,
-    connectionModel: config.model,
-  });
+  const provider: AgentProvider =
+    config.provider === 'openai'
+      ? new OpenAIProvider({ apiKey, baseURL: config.baseURL, connectionModel: config.model })
+      : new OpenAICompatibleProvider({
+          provider: config.provider,
+          apiKey,
+          baseURL: config.baseURL,
+        });
   const runner = new AgentRunner({
     provider,
     tools,
     config,
     workspace: runtimeBase.workspace,
+    ...(runtimeBase.skills === undefined ? {} : { skillCatalog: runtimeBase.skills }),
     ...(agentOptions.toolHooks === undefined ? {} : { toolHooks: agentOptions.toolHooks }),
     ...(history ? { sessionStore: runtimeBase.sessions } : {}),
   });

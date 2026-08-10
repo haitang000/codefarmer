@@ -22,6 +22,12 @@ import {
 import { failedResult, requireObject } from './output.js';
 import { runCommand, runCommandDefinition } from './run-command.js';
 import { writeFileDefinition, writeWorkspaceFile } from './write-file.js';
+import {
+  readSkill,
+  readSkillDefinition,
+  readSkillResource,
+  readSkillResourceDefinition,
+} from './skill-tools.js';
 import type {
   RegisteredTool,
   ResolvedToolContext,
@@ -246,6 +252,7 @@ export async function createToolRegistry(options: ToolContextOptions): Promise<T
     ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
     ...(options.onMutation === undefined ? {} : { onMutation: options.onMutation }),
     ...(options.approve === undefined ? {} : { approve: options.approve }),
+    ...(options.skillCatalog === undefined ? {} : { skillCatalog: options.skillCatalog }),
   };
 
   const register = (
@@ -283,6 +290,12 @@ export async function createToolRegistry(options: ToolContextOptions): Promise<T
       ),
       register(gitShowDefinition, (arguments_, callId, options = {}) =>
         gitShow(callId, arguments_, executionContext(context, options), guard),
+      ),
+      register(readSkillDefinition, (arguments_, callId, options = {}) =>
+        readSkill(callId, arguments_, executionContext(context, options)),
+      ),
+      register(readSkillResourceDefinition, (arguments_, callId, options = {}) =>
+        readSkillResource(callId, arguments_, executionContext(context, options)),
       ),
     ],
     options,

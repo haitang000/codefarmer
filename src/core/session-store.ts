@@ -34,10 +34,7 @@ export class SessionStore {
     private readonly directory: string,
   ) {}
 
-  public static async create(
-    workspace: string,
-    appPaths?: AppPaths,
-  ): Promise<SessionStore> {
+  public static async create(workspace: string, appPaths?: AppPaths): Promise<SessionStore> {
     const paths = await getWorkspacePaths(workspace, appPaths);
     await ensureWorkspaceDirectories(paths);
     return new SessionStore(paths.workspace, paths.sessions);
@@ -113,6 +110,7 @@ export class SessionStore {
     if (trimmed.length === 0) throw new Error('会话标题不能为空');
     const session = await this.get(id);
     session.title = trimmed;
+    session.titleSource = 'custom';
     await this.save(session);
     return session;
   }
@@ -130,7 +128,10 @@ export class SessionStore {
       createdAt: new Date().toISOString(),
       ...(responseId === undefined ? {} : { responseId }),
     });
-    session.title ??= deriveSessionTitle(content);
+    if (session.title === undefined) {
+      session.title = deriveSessionTitle(content);
+      session.titleSource = 'automatic';
+    }
     if (responseId !== undefined) session.previousResponseId = responseId;
     await this.save(session);
   }

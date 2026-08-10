@@ -11,6 +11,7 @@ import type {
   ProviderToolResultInput,
   SessionRecord,
   TokenUsage,
+  SkillCatalog,
 } from '../types.js';
 import { buildAgentInstructions } from './prompt.js';
 import type { AgentRunResult } from './runtime-types.js';
@@ -37,6 +38,37 @@ const MAX_TRANSCRIPT_CHARS = 150_000;
  * request inside the context window on the next turn.
  */
 const MAX_TOOL_OUTPUT_INPUT_CHARS = 24_000;
+/** Keep the title request cheap even when a resumed session is very long. */
+const MAX_TITLE_INPUT_CHARS = 12_000;
+const MAX_TITLE_LENGTH = 60;
+
+const TITLE_INSTRUCTIONS = `请根据提供的会话内容生成一个简洁、准确的会话标题。
+要求：
+- 只输出标题本身，不要前缀、引号、解释、Markdown 或句末标点；
+- 使用会话主要使用的语言；
+- 突出用户要完成的主要任务，控制在 60 个字符以内。`;
+
+function cleanGeneratedTitle(value: string): string {
+  let title = value.split(/\r?\n/u, 1)[0]?.trim() ?? '';
+  title = title.replace(/^(标题|title)\s*[:：]\s*/iu, '');
+  title = title.replace(/^[`"“”'‘’]+|[`"“”'‘’]+$/gu, '').trim();
+  title = title.replace(/[。.!！?？；;]+$/u, '').trim();
+  if (title.length === 0) return '';
+  if (title.length <= MAX_TITLE_LENGTH) return title;
+  return `${title.slice(0, MAX_TITLE_LENGTH - 1)}…`;
+}
+
+function titleInput(session: SessionRecord): ProviderInput[] {
+  const input: ProviderInput[] = [];
+  let remaining = MAX_TITLE_INPUT_CHARS;
+  for (const message of session.messages) {
+    if (remaining <= 0) break;
+    const content = message.content.slice(0, remaining);
+    input.push({ type: 'message', role: message.role, content });
+    remaining -= content.length;
+  }
+  return input;
+}
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -205,6 +237,7 @@ export interface AgentRunnerOptions {
   workspace: string;
   sessionStore?: SessionStore;
   toolHooks?: ToolLifecycleHooks;
+  skillCatalog?: SkillCatalog;
 }
 
 export interface RunTurnOptions {
@@ -215,10 +248,47 @@ export interface RunTurnOptions {
   toolHooks?: ToolLifecycleHooks;
   /** Plan mode: expose only read-only tools and reject any mutating call. */
   plan?: boolean;
+  /** Explicit skill references to load for this turn. */
+  skills?: string[];
 }
 
 export class AgentRunner {
   public constructor(private readonly options: AgentRunnerOptions) {}
+
+  /** Generate the title once, after the first assistant response is stored. */
+  private async generateSessionTitle(session: SessionRecord, signal?: AbortSignal): Promise<void> {
+    if (session.titleSource !== 'automatic' || session.titleGenerated === true) return;
+    const input = titleInput(session);
+    if (input.length === 0) return;
+    try {
+      let generated = '';
+      let completed = '';
+      let hasToolCall = false;
+      for await (const event of this.options.provider.stream({
+        model: this.options.config.model,
+        reasoning: 'none',
+        verbosity: 'low',
+        reasoningSummary: 'none',
+        instructions: TITLE_INSTRUCTIONS,
+        input,
+        store: false,
+        ...(signal === undefined ? {} : { signal }),
+      })) {
+        if (event.type === 'text_delta') generated += event.delta;
+        if (event.type === 'tool_call') hasToolCall = true;
+        if (event.type === 'response_completed') completed = event.outputText ?? generated;
+        if (event.type === 'error') return;
+      }
+      const title = cleanGeneratedTitle(completed || generated);
+      if (hasToolCall || title.length === 0) return;
+      session.title = title;
+      session.titleSource = 'automatic';
+      session.titleGenerated = true;
+    } catch {
+      // Title generation is an enhancement; a provider failure must not fail
+      // an otherwise completed coding task.
+    }
+  }
 
   public async run(prompt: string, runOptions: RunTurnOptions = {}): Promise<AgentRunResult> {
     const history = runOptions.history ?? true;
@@ -245,7 +315,10 @@ export class AgentRunner {
       content: prompt,
       createdAt: new Date().toISOString(),
     });
-    session.title ??= deriveSessionTitle(prompt);
+    if (session.title === undefined) {
+      session.title = deriveSessionTitle(prompt);
+      session.titleSource = 'automatic';
+    }
     if (store !== undefined) store.saveQueued(session);
 
     let previousResponseId = session.previousResponseId;
@@ -254,7 +327,7 @@ export class AgentRunner {
     const toolCalls: AgentRunResult['toolCalls'] = [];
 
     // Explicit replay transcript for gateways without stored-response chaining.
-    let explicitHistory = false;
+    let explicitHistory = this.options.provider.supportsResponseContinuation === false;
     const transcript: ProviderInput[] = [{ type: 'message', role: 'user', content: prompt }];
     if (previousResponseId === undefined && session.messages.length > 1) {
       explicitHistory = true;
@@ -271,9 +344,16 @@ export class AgentRunner {
     // Agent instructions depend only on run-level settings, so render them
     // once instead of rebuilding the same string on every turn (including the
     // final summary request).
+    const skillCatalog = this.options.skillCatalog;
+    const selectedSkills =
+      runOptions.skills === undefined || skillCatalog === undefined
+        ? []
+        : await Promise.all(runOptions.skills.map((ref) => skillCatalog.read(ref)));
     const instructions = buildAgentInstructions({
       workspace: this.options.workspace,
       approval: this.options.config.approval,
+      ...(this.options.skillCatalog === undefined ? {} : { skills: this.options.skillCatalog }),
+      ...(selectedSkills.length === 0 ? {} : { selectedSkills }),
       ...(runOptions.plan === true ? { plan: true } : {}),
     });
 
@@ -283,6 +363,7 @@ export class AgentRunner {
         let responseId: string | undefined;
         let finishReason: string | undefined;
         let streamedText = '';
+        let streamedReasoning = '';
         let completedText = '';
 
         const input: string | ProviderInput[] = explicitHistory
@@ -307,6 +388,7 @@ export class AgentRunner {
         let chainFailed = false;
         for (let attempt = 1; ; attempt += 1) {
           streamedText = '';
+          streamedReasoning = '';
           completedText = '';
           pendingCalls.length = 0;
           responseId = undefined;
@@ -316,6 +398,7 @@ export class AgentRunner {
             for await (const event of this.options.provider.stream(request)) {
               runOptions.onEvent?.(event);
               if (event.type === 'text_delta') streamedText += event.delta;
+              if (event.type === 'reasoning_delta') streamedReasoning += event.delta;
               if (event.type === 'tool_call') pendingCalls.push(event.call);
               if (event.type === 'usage') totalUsage = sumUsage(totalUsage, event.usage);
               if (event.type === 'response_completed') {
@@ -440,6 +523,7 @@ export class AgentRunner {
             createdAt: new Date().toISOString(),
             ...(responseId === undefined ? {} : { responseId }),
           });
+          if (store !== undefined) await this.generateSessionTitle(session, runOptions.signal);
           session.status = 'completed';
           session.usage = totalUsage;
           if (store !== undefined) {
@@ -468,6 +552,9 @@ export class AgentRunner {
             callId: call.callId,
             name: call.name,
             arguments: call.arguments,
+            ...(streamedReasoning.length === 0
+              ? {}
+              : { reasoningContent: streamedReasoning }),
           });
         }
         lastOutputs = results.map(({ result }) => ({
@@ -595,6 +682,7 @@ export class AgentRunner {
           content: finalMessage,
           createdAt: new Date().toISOString(),
         });
+        if (store !== undefined) await this.generateSessionTitle(session, runOptions.signal);
         session.status = 'completed';
         session.usage = totalUsage;
         if (store !== undefined) {
@@ -622,6 +710,7 @@ export class AgentRunner {
         createdAt: new Date().toISOString(),
         responseId: summaryResponseId,
       });
+      if (store !== undefined) await this.generateSessionTitle(session, runOptions.signal);
       session.status = 'completed';
       session.usage = totalUsage;
       if (store !== undefined) {

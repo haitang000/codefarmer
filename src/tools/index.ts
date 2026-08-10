@@ -30,6 +30,12 @@ export type { GitAvailability } from './git-tools.js';
 export { ToolRegistry, createToolRegistry } from './registry.js';
 export { writeFileDefinition, writeWorkspaceFile } from './write-file.js';
 export {
+  readSkill,
+  readSkillDefinition,
+  readSkillResource,
+  readSkillResourceDefinition,
+} from './skill-tools.js';
+export {
   classifyCommand,
   executeProcess,
   runCommand,

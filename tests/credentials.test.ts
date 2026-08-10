@@ -6,8 +6,11 @@ import {
   deleteStoredApiKey,
   getCredentialsPath,
   readStoredApiKey,
+  readStoredProviderApiKey,
   resolveApiKey,
+  resolveProviderApiKey,
   saveApiKey,
+  saveProviderApiKey,
 } from '../src/infra/credentials.js';
 import type { AppPaths } from '../src/infra/paths.js';
 import { writeJsonAtomic } from '../src/infra/persistence.js';
@@ -68,5 +71,16 @@ describe('local credential store', () => {
     await deleteStoredApiKey(appPaths);
 
     expect(await readStoredApiKey(appPaths)).toBeUndefined();
+  });
+
+  it('keeps API keys isolated by provider and resolves provider-specific environment keys', async () => {
+    await saveProviderApiKey('deepseek', 'deepseek-stored', appPaths);
+    await saveProviderApiKey('gemini', 'gemini-stored', appPaths);
+    vi.stubEnv('DEEPSEEK_API_KEY', 'deepseek-env');
+
+    expect(await readStoredProviderApiKey('deepseek', appPaths)).toBe('deepseek-stored');
+    expect(await readStoredProviderApiKey('gemini', appPaths)).toBe('gemini-stored');
+    expect(await resolveProviderApiKey('deepseek', appPaths)).toBe('deepseek-env');
+    expect(await resolveProviderApiKey('gemini', appPaths)).toBe('gemini-stored');
   });
 });

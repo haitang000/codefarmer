@@ -4,6 +4,8 @@ import type { ProviderToolCall, TokenUsage, ToolResult } from '../types.js';
 export type TuiCommand =
   | { kind: 'prompt'; value: string }
   | { kind: 'help' }
+  | { kind: 'skills' }
+  | { kind: 'skill'; ref: string }
   | { kind: 'init' }
   | { kind: 'new' }
   | { kind: 'status' }
@@ -66,6 +68,8 @@ export interface TuiUsage {
 
 export const TUI_HELP = [
   '/help       show this help',
+  '/skills     list discovered skills',
+  '/skill REF  select a skill for this TUI session; /skill off clears selection',
   '/init       summarize this workspace into AGENT.md',
   'Ctrl+O      toggle the reasoning (thinking) display',
   '/new        start a new session',
@@ -90,6 +94,8 @@ export const TUI_HELP = [
 /** Commands offered by the interactive prompt, in display/completion order. */
 export const TUI_COMMANDS = [
   'help',
+  'skills',
+  'skill',
   'init',
   'new',
   'status',
@@ -142,6 +148,10 @@ export function parseTuiCommand(input: string): TuiCommand {
     case 'help':
     case '?':
       return { kind: 'help' };
+    case 'skills':
+      return { kind: 'skills' };
+    case 'skill':
+      return { kind: 'skill', ref: parts[0] ?? '' };
     case 'init':
       return { kind: 'init' };
     case 'new':

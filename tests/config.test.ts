@@ -38,6 +38,7 @@ describe('configuration', () => {
     expect(config.reasoningSummary).toBe('none');
     expect(config.commandTimeoutMs).toBe(120_000);
     expect(config.baseURL).toBe('https://api.openai.com/v1');
+    expect(config.provider).toBe('openai');
   });
 
   it('applies CLI > environment > project > user > defaults precedence', async () => {
@@ -68,6 +69,7 @@ describe('configuration', () => {
       userConfigPath,
       projectConfigPath,
       env: {
+        CODEFARMER_PROVIDER: 'deepseek',
         CODEFARMER_MODEL: 'environment-model',
         CODEFARMER_BASE_URL: 'https://environment.example/v1/',
         CODEFARMER_MAX_AGENT_TURNS: '19',
@@ -76,6 +78,7 @@ describe('configuration', () => {
     });
 
     expect(config.model).toBe('cli-model');
+    expect(config.provider).toBe('deepseek');
     expect(config.baseURL).toBe('http://localhost:8080/v1');
     expect(config.maxAgentTurns).toBe(19);
     expect(config.approval).toBe('auto');
@@ -104,6 +107,21 @@ describe('configuration', () => {
       verbosity: 'high',
       reasoningSummary: 'detailed',
       ignoredPaths: ['vendor/**', '*.secret'],
+    });
+  });
+
+  it('selects a provider default model and endpoint when only the provider changes', async () => {
+    const cwd = await temporaryDirectory();
+    const config = await loadConfig({
+      cwd,
+      env: { CODEFARMER_PROVIDER: 'gemini' },
+      userConfigPath: path.join(cwd, 'missing-user.json'),
+    });
+
+    expect(config).toMatchObject({
+      provider: 'gemini',
+      model: 'gemini-2.5-pro',
+      baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
     });
   });
 

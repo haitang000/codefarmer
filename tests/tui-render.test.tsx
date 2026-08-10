@@ -8,10 +8,14 @@ import {
   ApprovalModal,
   EffortPicker,
   EntryView,
+  appendToolEntryAtResponseBoundary,
   runtimeEntries,
   TuiApp,
   assistantLines,
   wrapToLines,
+  estimateContextTokens,
+  formatNumber,
+  usageBar,
 } from '../src/tui/App.js';
 import { MarkdownView } from '../src/tui/markdown.js';
 import { TuiInteractionBridge } from '../src/tui/runtime.js';
@@ -24,6 +28,7 @@ function mockRuntime(): AgentRuntime {
     session: {
       version: 1,
       id: 'session-render-test',
+      title: 'Fix login redirect',
       workspace: 'C:\\workspace',
       provider: 'test',
       model: 'test-model',
@@ -41,6 +46,55 @@ function mockRuntime(): AgentRuntime {
 }
 
 describe('TUI rendering', () => {
+  it('keeps each streamed response before the tool that follows it', () => {
+    const firstAssistant = {
+      id: 'assistant-1',
+      kind: 'assistant' as const,
+      content: '先检查项目。',
+    };
+    const tool = {
+      id: 'tool-call-1',
+      kind: 'tool' as const,
+      content: 'list_files',
+      tool: {
+        callId: 'call-1',
+        name: 'list_files',
+        status: 'requested' as const,
+      },
+    };
+    const afterTool = appendToolEntryAtResponseBoundary(
+      [firstAssistant],
+      firstAssistant.id,
+      true,
+      tool,
+    );
+    const transcript = [
+      ...afterTool,
+      { id: 'assistant-2', kind: 'assistant' as const, content: '检查完成。' },
+    ];
+
+    expect(transcript.map((entry) => entry.kind)).toEqual(['assistant', 'tool', 'assistant']);
+    expect(transcript.map((entry) => entry.content)).toEqual([
+      '先检查项目。',
+      'list_files',
+      '检查完成。',
+    ]);
+  });
+
+  it('removes an empty assistant placeholder when the response becomes a tool call', () => {
+    const placeholder = { id: 'assistant-1', kind: 'assistant' as const, content: '' };
+    const tool = {
+      id: 'tool-call-1',
+      kind: 'tool' as const,
+      content: 'list_files',
+      tool: { callId: 'call-1', name: 'list_files', status: 'requested' as const },
+    };
+
+    expect(appendToolEntryAtResponseBoundary([placeholder], placeholder.id, false, tool)).toEqual([
+      tool,
+    ]);
+  });
+
   it('places tool results before the assistant response in a restored session', () => {
     const runtime = mockRuntime();
     const session = runtime.session;
@@ -107,6 +161,7 @@ describe('TUI rendering', () => {
 
     expect(output.trim().length).toBeGreaterThan(0);
     expect(output).toContain('CodeFarmer');
+    expect(output).toContain('Fix login redirect');
     expect(output).toContain('C:\\workspace');
     expect(output).toContain('test-model');
     expect(output).toContain('Ready');
@@ -279,5 +334,31 @@ describe('TUI rendering', () => {
     const answerIndex = visibleLines.findIndex((line) => line.includes('Final answer.'));
     expect(thinkingIndex).toBeGreaterThanOrEqual(0);
     expect(answerIndex).toBeGreaterThan(thinkingIndex);
+  });
+});
+
+describe('context usage helpers', () => {
+  it('formats numbers with thousands separators', () => {
+    expect(formatNumber(0)).toBe('0');
+    expect(formatNumber(12345)).toBe('12,345');
+    expect(formatNumber(128000)).toBe('128,000');
+  });
+
+  it('estimates tokens from characters (ASCII ≈ 4 chars per token, wide chars ≈ 1)', () => {
+    expect(estimateContextTokens('')).toBe(0);
+    expect(estimateContextTokens('abc')).toBe(1);
+    expect(estimateContextTokens('abcd')).toBe(1);
+    expect(estimateContextTokens('abcdefghi')).toBe(3); // ceil(9 / 4)
+    expect(estimateContextTokens('你好')).toBe(2);
+    expect(estimateContextTokens('hello 你好')).toBe(4); // ceil(6 / 4) + 2
+  });
+
+  it('renders a fixed-width usage bar clamped to the ratio', () => {
+    expect(usageBar(0, 10)).toBe('░'.repeat(10));
+    expect(usageBar(1, 10)).toBe('█'.repeat(10));
+    expect(usageBar(0.5, 10)).toBe('█████░░░░░');
+    expect(usageBar(1.5, 10)).toBe('█'.repeat(10));
+    expect(usageBar(-1, 10)).toBe('░'.repeat(10));
+    expect(usageBar(0.05, 20)).toBe('█' + '░'.repeat(19));
   });
 });

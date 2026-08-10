@@ -40,15 +40,36 @@ describe('run_command safety', () => {
     expect(classifyCommand('sed', ['-i.bak', 's/a/b/', 'file']).risk).toBe('mutating');
   });
 
-  it('removes sensitive environment values', () => {
+  it('blocks bundled short-flag shell and interpreter evaluation', () => {
+    expect(classifyCommand('sh', ['-lc', 'echo unsafe']).risk).toBe('blocked');
+    expect(classifyCommand('zsh', ['-fc', 'echo unsafe']).risk).toBe('blocked');
+    expect(classifyCommand('bash', ['-ic', 'echo unsafe']).risk).toBe('blocked');
+    expect(classifyCommand('perl', ['-ne', 'print $_']).risk).toBe('blocked');
+    expect(classifyCommand('ruby', ['-pe', 'puts 1']).risk).toBe('blocked');
+    expect(classifyCommand('python', ['-Oc', 'print(1)']).risk).toBe('blocked');
+    expect(classifyCommand('node', ['-ep', 'console.log(1)']).risk).toBe('blocked');
+    // Bundles without an evaluation flag stay approvable rather than blocked.
+    expect(classifyCommand('sh', ['-x', 'script.sh']).risk).toBe('mutating');
+    expect(classifyCommand('perl', ['-n', 'script.pl']).risk).toBe('mutating');
+  });
+
+  it('removes sensitive environment values including cloud credentials', () => {
     const clean = sanitiseEnvironment({
       PATH: 'path-value',
       OPENAI_API_KEY: 'api-key',
       SERVICE_TOKEN: 'token',
       dbPassword: 'password',
+      AWS_ACCESS_KEY_ID: 'aws-access-key',
+      GOOGLE_API_KEY: 'google-api-key',
+      AZURE_STORAGE_ACCOUNT_KEY: 'azure-account-key',
+      SSH_AUTH_SOCK: '/tmp/ssh-agent.sock',
       NORMAL_VALUE: 'visible',
     });
-    expect(clean).toEqual({ PATH: 'path-value', NORMAL_VALUE: 'visible' });
+    expect(clean).toEqual({
+      PATH: 'path-value',
+      SSH_AUTH_SOCK: '/tmp/ssh-agent.sock',
+      NORMAL_VALUE: 'visible',
+    });
   });
 
   it('runs direct read-only executables and rejects mutating commands before execution', async () => {

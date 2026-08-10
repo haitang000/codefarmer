@@ -16,6 +16,9 @@ describe('TUI command parser', () => {
     });
     expect(parseTuiCommand('/sessions')).toEqual({ kind: 'sessions' });
     expect(parseTuiCommand('/init')).toEqual({ kind: 'init' });
+    expect(parseTuiCommand('/skills')).toEqual({ kind: 'skills' });
+    expect(parseTuiCommand('/skill docs')).toEqual({ kind: 'skill', ref: 'docs' });
+    expect(parseTuiCommand('/skill off')).toEqual({ kind: 'skill', ref: 'off' });
     expect(parseTuiCommand('/status')).toEqual({ kind: 'status' });
     expect(parseTuiCommand('/context')).toEqual({ kind: 'context' });
     expect(parseTuiCommand('/ctx')).toEqual({ kind: 'context' });
@@ -48,6 +51,7 @@ describe('TUI command parser', () => {
     expect(TUI_HELP).toContain('/plan');
     expect(TUI_HELP).toContain('/init');
     expect(TUI_HELP).toContain('/push');
+    expect(TUI_HELP).toContain('/skills');
   });
 
   it('returns unknown commands without discarding their arguments', () => {

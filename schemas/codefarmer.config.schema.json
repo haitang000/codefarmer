@@ -2,11 +2,16 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://codefarmer.dev/schemas/codefarmer.config.schema.json",
   "title": "CodeFarmer configuration",
-  "description": "Project or user configuration for the CodeFarmer CLI. API keys must be supplied through OPENAI_API_KEY and cannot be stored here.",
+  "description": "Project or user configuration for the CodeFarmer CLI. Provider API keys are supplied through environment variables or the local credentials file and cannot be stored here.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "$schema": { "type": "string" },
+    "provider": {
+      "type": "string",
+      "enum": ["openai", "gemini", "grok", "deepseek", "kimi"],
+      "default": "openai"
+    },
     "model": { "type": "string", "minLength": 1, "default": "gpt-5.6-sol" },
     "baseURL": {
       "type": "string",

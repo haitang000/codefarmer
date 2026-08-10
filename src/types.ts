@@ -1,5 +1,8 @@
 export type ApprovalPolicy = 'ask' | 'auto' | 'read-only';
 
+export const PROVIDER_IDS = ['openai', 'gemini', 'grok', 'deepseek', 'kimi'] as const;
+export type ProviderId = (typeof PROVIDER_IDS)[number];
+
 // 'auto' 表示不下发 effort，由模型自行决定思考深度。
 export type ReasoningEffort = 'auto' | 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type TextVerbosity = 'low' | 'medium' | 'high';
@@ -14,6 +17,7 @@ export interface JsonObject {
 }
 
 export interface CodeFarmerConfig {
+  provider: ProviderId;
   model: string;
   baseURL: string;
   reasoning: ReasoningEffort;
@@ -35,6 +39,31 @@ export interface ToolDefinition {
   description: string;
   inputSchema: JsonObject;
   readOnly: boolean;
+}
+
+export type SkillScope = 'workspace' | 'user' | 'system' | 'codex';
+
+export interface SkillDescriptor {
+  /** Stable reference used by the model and CLI. */
+  ref: string;
+  name: string;
+  description: string;
+  directory: string;
+  skillFile: string;
+  scope: SkillScope;
+}
+
+export interface SkillRecord extends SkillDescriptor {
+  instructions: string;
+}
+
+export interface SkillCatalog {
+  skills: SkillDescriptor[];
+  warnings: string[];
+  truncated: boolean;
+  get(ref: string): SkillDescriptor | undefined;
+  read(ref: string): Promise<SkillRecord>;
+  readResource(ref: string, relativePath: string): Promise<{ path: string; content: string }>;
 }
 
 export interface ToolResult {
@@ -105,6 +134,8 @@ export interface ProviderFunctionCallInput {
   callId: string;
   name: string;
   arguments: string;
+  /** Provider-specific reasoning that must be replayed with thinking tool calls. */
+  reasoningContent?: string;
 }
 
 export type ProviderInput =
@@ -125,6 +156,8 @@ export interface ProviderRequest {
 
 export interface AgentProvider {
   readonly name: string;
+  /** Whether the provider accepts OpenAI Responses API response IDs for continuation. */
+  readonly supportsResponseContinuation?: boolean;
   stream(request: ProviderRequest): AsyncIterable<ProviderEvent>;
   checkConnection?(signal?: AbortSignal): Promise<void>;
 }
@@ -162,6 +195,10 @@ export interface SessionRecord {
   baseURL?: string;
   status: SessionStatus;
   title?: string;
+  /** Whether the title was generated automatically or set by the user. */
+  titleSource?: 'automatic' | 'custom';
+  /** Set after the model has produced the first automatic title. */
+  titleGenerated?: boolean;
   createdAt: string;
   updatedAt: string;
   previousResponseId?: string;

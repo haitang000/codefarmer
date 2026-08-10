@@ -18,7 +18,13 @@ import { execa } from 'execa';
 
 import type { AgentRunResult } from '../core/runtime-types.js';
 import { compactSession, sessionContextChars } from '../core/session-compact.js';
-import { getCredentialsPath, resolveApiKey, saveApiKey } from '../infra/credentials.js';
+import { discoverSkills } from '../core/skills.js';
+import { computeWorkspaceStats, type WorkspaceStats } from '../core/stats.js';
+import {
+  getCredentialsPath,
+  resolveProviderApiKey,
+  saveProviderApiKey,
+} from '../infra/credentials.js';
 import {
   ApprovalError,
   AuthenticationError,
@@ -29,14 +35,17 @@ import {
 import {
   DEFAULT_CONFIG,
   loadConfigDetails,
+  providerDefaults,
   writeConfigFile,
   type ConfigFile,
 } from '../infra/config.js';
 import { canonicalWorkspace, getAppPaths } from '../infra/paths.js';
 import { fileExists, readJsonFileIfExists } from '../infra/persistence.js';
 import { OpenAIProvider } from '../providers/openai.js';
+import { OpenAICompatibleProvider } from '../providers/openai-compatible.js';
+import { isProviderId, providerPreset } from '../providers/catalog.js';
 import { detectGitAvailability } from '../tools/git-tools.js';
-import type { SessionRecord } from '../types.js';
+import type { AgentProvider, ProviderId, SessionRecord, SessionStatus } from '../types.js';
 import { createAgentRuntime, createBaseRuntime, type GlobalOptions } from './runtime.js';
 import { renderSessionExport, type SessionExportFormat } from './session-export.js';
 import { createEventRenderer, printJson, printResultMessage } from './ui.js';
@@ -46,6 +55,7 @@ export interface RunOptions {
   history?: boolean;
   session?: string;
   plan?: boolean;
+  skills?: string[];
 }
 
 export interface PushOptions {
@@ -53,6 +63,10 @@ export interface PushOptions {
   setUpstream?: boolean;
   remote?: string;
   branch?: string;
+}
+
+export interface StatsOptions {
+  json?: boolean;
 }
 
 function cliResult(result: AgentRunResult): Record<string, unknown> {
@@ -112,6 +126,7 @@ export async function runAction(
         history,
         signal: controller.signal,
         ...(runOptions.plan === true ? { plan: true } : {}),
+        ...(runOptions.skills === undefined ? {} : { skills: runOptions.skills }),
         onEvent: createEventRenderer({ json, stream: runtime.config.stream }),
       });
       if (json) printJson(cliResult(result));
@@ -139,6 +154,39 @@ export async function runAction(
     process.exitCode = appError.exitCode;
     return result;
   }
+}
+
+export async function skillsListAction(globalOptions: GlobalOptions): Promise<void> {
+  const workspace = await canonicalWorkspace(globalOptions.cwd ?? process.cwd());
+  const catalog = await discoverSkills(workspace);
+  if (catalog.skills.length === 0) {
+    process.stdout.write('No skills discovered.\n');
+    return;
+  }
+  process.stdout.write(
+    `${catalog.skills
+      .map((skill) => `${skill.ref}\t${skill.scope}\t${skill.description}\t${skill.skillFile}`)
+      .join('\n')}\n`,
+  );
+  catalog.warnings.forEach((warning) => process.stderr.write(`Warning: ${warning}\n`));
+}
+
+export async function skillsShowAction(
+  globalOptions: GlobalOptions,
+  ref: string,
+  resourcePath?: string,
+): Promise<void> {
+  const workspace = await canonicalWorkspace(globalOptions.cwd ?? process.cwd());
+  const catalog = await discoverSkills(workspace);
+  if (resourcePath === undefined) {
+    const skill = await catalog.read(ref);
+    process.stdout.write(skill.instructions);
+    if (!skill.instructions.endsWith('\n')) process.stdout.write('\n');
+    return;
+  }
+  const resource = await catalog.readResource(ref, resourcePath);
+  process.stdout.write(resource.content);
+  if (!resource.content.endsWith('\n')) process.stdout.write('\n');
 }
 
 function printSession(session: SessionRecord): void {
@@ -171,6 +219,7 @@ async function showWorkspaceStatus(globalOptions: GlobalOptions): Promise<void> 
     }
   }
   process.stdout.write(`${chalk.bold('工作区')} ${runtime.workspace}\n`);
+  process.stdout.write(`${chalk.bold('Provider')} ${providerPreset(runtime.config.provider).label}\n`);
   process.stdout.write(
     `${chalk.bold('模型')} ${runtime.config.model} (${runtime.config.reasoning}, ${runtime.config.verbosity})\n`,
   );
@@ -271,6 +320,7 @@ export async function initAction(globalOptions: GlobalOptions, force = false): P
   }
   const initial: ConfigFile = {
     $schema: SETUP_SCHEMA_URL,
+    provider: DEFAULT_CONFIG.provider,
     model: DEFAULT_CONFIG.model,
     baseURL: DEFAULT_CONFIG.baseURL,
     reasoning: DEFAULT_CONFIG.reasoning,
@@ -302,15 +352,28 @@ function abortSetup(): void {
   process.exitCode = 130;
 }
 
-async function testConnection(baseUrl: string, model: string, apiKey?: string): Promise<void> {
+function createProvider(
+  provider: ProviderId,
+  baseURL: string,
+  model: string,
+  apiKey: string,
+): AgentProvider {
+  return provider === 'openai'
+    ? new OpenAIProvider({ apiKey, baseURL, connectionModel: model })
+    : new OpenAICompatibleProvider({ provider, apiKey, baseURL });
+}
+
+async function testConnection(
+  provider: ProviderId,
+  baseURL: string,
+  model: string,
+  apiKey?: string,
+): Promise<void> {
   const progress = spinner();
-  progress.start('正在测试 OpenAI 连接');
+  progress.start(`正在测试 ${providerPreset(provider).label} 连接`);
   try {
-    await new OpenAIProvider({
-      ...(apiKey === undefined ? {} : { apiKey }),
-      baseURL: baseUrl,
-      connectionModel: model,
-    }).checkConnection();
+    if (apiKey === undefined) throw new Error('缺少 API Key');
+    await createProvider(provider, baseURL, model, apiKey).checkConnection?.();
     progress.stop('连接测试通过');
   } catch (error) {
     progress.stop(`连接测试失败: ${error instanceof Error ? error.message : String(error)}`);
@@ -340,16 +403,35 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
     }
   }
 
+  const selectedProvider = await select({
+    message: 'AI Provider',
+    options: [
+      { value: 'openai', label: 'OpenAI' },
+      { value: 'gemini', label: 'Google Gemini' },
+      { value: 'grok', label: 'xAI Grok' },
+      { value: 'deepseek', label: 'DeepSeek' },
+      { value: 'kimi', label: 'Kimi' },
+    ],
+    initialValue: defaults.provider,
+  });
+  if (isCancel(selectedProvider)) return abortSetup();
+  const provider = selectedProvider;
+  const preset = providerPreset(provider);
+  const providerConfig =
+    provider === defaults.provider
+      ? defaults
+      : { ...defaults, model: preset.defaultModel, baseURL: preset.defaultBaseURL };
+
   const model = await text({
-    message: 'OpenAI 模型',
-    initialValue: defaults.model,
+    message: `${preset.label} 模型`,
+    initialValue: providerConfig.model,
     validate: (value) => (value.trim().length === 0 ? '模型不能为空' : undefined),
   });
   if (isCancel(model)) return abortSetup();
 
   const baseURL = await text({
-    message: 'OpenAI 兼容 API Base URL',
-    initialValue: defaults.baseURL,
+    message: `${preset.label} API Base URL`,
+    initialValue: providerConfig.baseURL,
     validate: (value) =>
       isValidBaseUrl(value) ? undefined : '需要合法的 HTTP(S) URL，且不能包含凭据',
   });
@@ -405,9 +487,10 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
   if (isCancel(approval)) return abortSetup();
 
   const normalizedBaseUrl = baseURL.replace(/\/+$/u, '');
-  let apiKey = await resolveApiKey();
-  if (process.env.OPENAI_API_KEY) {
-    process.stdout.write(`${chalk.green('✓')} 使用环境变量中的 OPENAI_API_KEY。\n`);
+  let apiKey = await resolveProviderApiKey(provider);
+  const environmentKey = preset.environmentVariables.find((name) => process.env[name]?.trim());
+  if (environmentKey !== undefined) {
+    process.stdout.write(`${chalk.green('✓')} 使用环境变量中的 ${environmentKey}。\n`);
   } else if (apiKey !== undefined) {
     process.stdout.write(`${chalk.green('✓')} 使用已保存的本地凭据 ${getCredentialsPath()}。\n`);
     const replaceKey = await confirm({
@@ -419,18 +502,18 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
   }
   if (apiKey === undefined) {
     const input = await password({
-      message: 'OpenAI API Key（不会写入项目配置，仅保存到本地凭据文件；留空跳过）',
+      message: `${preset.label} API Key（不会写入项目配置，仅保存到本地凭据文件；留空跳过）`,
       validate: () => undefined,
     });
     if (isCancel(input)) return abortSetup();
     const trimmed = input.trim();
     if (trimmed.length > 0) {
       apiKey = trimmed;
-      const savedPath = await saveApiKey(trimmed);
+      const savedPath = await saveProviderApiKey(provider, trimmed);
       process.stdout.write(`${chalk.green('✓')} API Key 已保存到 ${savedPath}\n`);
     } else {
       process.stdout.write(
-        `${chalk.yellow('⚠')} 未提供 API Key；运行任务前请设置 OPENAI_API_KEY 环境变量或重新运行 setup。\n`,
+        `${chalk.yellow('⚠')} 未提供 API Key；运行任务前请设置 ${preset.environmentVariables[0] ?? '对应的 API Key'} 环境变量或重新运行 setup。\n`,
       );
     }
   }
@@ -440,11 +523,12 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
       initialValue: true,
     });
     if (isCancel(shouldTest)) return abortSetup();
-    if (shouldTest) await testConnection(normalizedBaseUrl, model, apiKey);
+    if (shouldTest) await testConnection(provider, normalizedBaseUrl, model, apiKey);
   }
 
   const config: ConfigFile = {
     $schema: SETUP_SCHEMA_URL,
+    provider,
     model,
     baseURL: normalizedBaseUrl,
     reasoning,
@@ -602,6 +686,72 @@ export async function sessionsListAction(globalOptions: GlobalOptions): Promise<
   else sessions.forEach(printSession);
 }
 
+function formatCount(value: number): string {
+  return new Intl.NumberFormat('en-US').format(value);
+}
+
+function formatUsd(value: number): string {
+  return `$${value.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  })}`;
+}
+
+function printWorkspaceStats(stats: WorkspaceStats): void {
+  const statusLabels: Record<SessionStatus, string> = {
+    active: '进行中',
+    completed: '已完成',
+    cancelled: '已取消',
+    failed: '失败',
+  };
+  const statusSummary = (Object.entries(stats.statusCounts) as [SessionStatus, number][])
+    .map(([status, count]) => `${statusLabels[status]} ${String(count)}`)
+    .join(' / ');
+  process.stdout.write(`${chalk.bold('会话')} ${String(stats.totalSessions)} 个（${statusSummary}）\n`);
+  process.stdout.write(
+    `${chalk.bold('Token 累计')} 输入 ${formatCount(stats.usage.inputTokens)} / ` +
+      `输出 ${formatCount(stats.usage.outputTokens)} / 合计 ${formatCount(stats.usage.totalTokens)}` +
+      `（推理 ${formatCount(stats.usage.reasoningTokens)}，缓存输入 ${formatCount(stats.usage.cachedInputTokens)}）\n`,
+  );
+  process.stdout.write(
+    `${chalk.bold('消息 / 工具调用')} ${formatCount(stats.totalMessages)} / ${formatCount(stats.totalToolCalls)}\n`,
+  );
+  process.stdout.write(
+    `${chalk.bold('近 7 天 / 30 天会话')} ${formatCount(stats.recent.last7Days)} / ${formatCount(stats.recent.last30Days)}\n`,
+  );
+  process.stdout.write(`${chalk.bold('按模型')}（仅统计记录用量的会话，估算费用按公开列表价）\n`);
+  for (const stat of stats.byModel) {
+    const cost = stat.priceMatched ? formatUsd(stat.estimatedCostUsd) : '未知';
+    process.stdout.write(
+      `  ${stat.model}\t${stat.provider}\t${String(stat.sessions)} 会话\t` +
+        `${formatCount(stat.usage.totalTokens)} tokens\t${cost}\n`,
+    );
+  }
+  if (stats.costUnknownModels.length > 0) {
+    process.stdout.write(
+      `${chalk.yellow('未匹配价格表的模型（费用未知，未计入合计）')} ${stats.costUnknownModels.join(', ')}\n`,
+    );
+  }
+  process.stdout.write(
+    `${chalk.bold('估算费用')} ${formatUsd(stats.estimatedCostUsd)}（仅计已匹配模型；非账单，请以 Provider 账单为准）\n`,
+  );
+}
+
+export async function statsAction(globalOptions: GlobalOptions, json = false): Promise<void> {
+  const runtime = await createBaseRuntime(globalOptions);
+  const sessions = await runtime.sessions.list();
+  const stats = computeWorkspaceStats(sessions);
+  if (json) {
+    printJson(stats);
+    return;
+  }
+  if (stats.totalSessions === 0) {
+    process.stdout.write('暂无会话；完成第一次 codefarmer run 后这里会显示 Token 用量与费用统计。\n');
+    return;
+  }
+  printWorkspaceStats(stats);
+}
+
 export async function sessionsShowAction(globalOptions: GlobalOptions, id: string): Promise<void> {
   const runtime = await createBaseRuntime(globalOptions);
   printJson(await runtime.sessions.get(id));
@@ -632,19 +782,18 @@ export async function sessionsCompactAction(
   globalOptions: GlobalOptions,
   id: string,
 ): Promise<void> {
-  const apiKey = await resolveApiKey();
-  if (!apiKey) {
-    throw new AuthenticationError(
-      '缺少 OPENAI_API_KEY；请设置环境变量，或运行 codefarmer setup 保存密钥到本地凭据',
-    );
-  }
   const runtime = await createBaseRuntime(globalOptions);
   const session = await runtime.sessions.get(id);
-  const provider = new OpenAIProvider({
+  const apiKey = await resolveProviderApiKey(runtime.config.provider);
+  if (!apiKey) {
+    throw new AuthenticationError(`缺少 ${runtime.config.provider} 的 API Key`);
+  }
+  const provider = createProvider(
+    runtime.config.provider,
+    session.baseURL ?? runtime.config.baseURL,
+    runtime.config.model,
     apiKey,
-    baseURL: session.baseURL ?? runtime.config.baseURL,
-    connectionModel: runtime.config.model,
-  });
+  );
   const beforeChars = sessionContextChars(session);
   const result = await compactSession({
     session,
@@ -678,11 +827,14 @@ export async function sessionsExportAction(
 }
 
 export async function configListAction(globalOptions: GlobalOptions): Promise<void> {
+  const providerConfig =
+    globalOptions.provider === undefined ? {} : providerDefaults(globalOptions.provider);
   const details = await loadConfigDetails({
     cwd: globalOptions.cwd ?? process.cwd(),
     cli: {
-      ...(globalOptions.model === undefined ? {} : { model: globalOptions.model }),
-      ...(globalOptions.baseURL === undefined ? {} : { baseURL: globalOptions.baseURL }),
+      ...(globalOptions.provider === undefined ? {} : { provider: globalOptions.provider }),
+      ...(globalOptions.model === undefined ? providerConfig : { model: globalOptions.model }),
+      ...(globalOptions.baseURL === undefined ? providerConfig : { baseURL: globalOptions.baseURL }),
       ...(globalOptions.reasoning === undefined ? {} : { reasoning: globalOptions.reasoning }),
       ...(globalOptions.verbosity === undefined ? {} : { verbosity: globalOptions.verbosity }),
       ...(globalOptions.reasoningSummary === undefined
@@ -716,13 +868,23 @@ export async function configSetAction(
 ): Promise<void> {
   if (/api.?key|token|secret|password/iu.test(key)) {
     throw new ConfigError(
-      '凭据不能写入配置；请设置 OPENAI_API_KEY 环境变量，或运行 codefarmer setup 保存到本地凭据',
+      '凭据不能写入配置；请设置对应 Provider 的 API Key 环境变量，或运行 codefarmer setup 保存到本地凭据',
     );
   }
   const details = await loadConfigDetails({ cwd: globalOptions.cwd ?? process.cwd() });
   const target = project ? details.projectConfigPath : details.userConfigPath;
   const current = (await readJsonFileIfExists<ConfigFile>(target)) ?? {};
-  const candidate = { ...current, [key]: parseConfigValue(raw) };
+  const value = parseConfigValue(raw);
+  if (key === 'provider') {
+    if (typeof value !== 'string' || !isProviderId(value)) {
+      throw new ConfigError('provider 必须是 openai、gemini、grok、deepseek 或 kimi。');
+    }
+    const candidate = { ...current, provider: value, ...providerDefaults(value) };
+    await writeConfigFile(target, candidate);
+    process.stdout.write(`已更新 ${target}\n`);
+    return;
+  }
+  const candidate = { ...current, [key]: value };
   await writeConfigFile(target, candidate);
   process.stdout.write(`已更新 ${target}\n`);
 }
@@ -759,25 +921,28 @@ export async function doctorAction(globalOptions: GlobalOptions): Promise<void> 
       detail: '未安装或不在 PATH（可选，仅 Git 状态与差异功能不可用）',
     });
   }
-  const resolvedKey = await resolveApiKey();
-  const keySource = process.env.OPENAI_API_KEY ? '环境变量' : `本地凭据 ${getCredentialsPath()}`;
+  const preset = providerPreset(runtime.config.provider);
+  const resolvedKey = await resolveProviderApiKey(runtime.config.provider);
+  const keyEnvironment = preset.environmentVariables.find((name) => process.env[name]?.trim());
+  const keySource = keyEnvironment === undefined ? `本地凭据 ${getCredentialsPath()}` : '环境变量';
   checks.push({
-    name: 'OPENAI_API_KEY',
+    name: `${preset.label} API Key`,
     ok: resolvedKey !== undefined,
     detail: resolvedKey === undefined ? '未设置' : `已设置（${keySource}）`,
   });
   checks.push({ name: 'Base URL', ok: true, detail: runtime.config.baseURL });
   if (resolvedKey !== undefined) {
     try {
-      await new OpenAIProvider({
-        apiKey: resolvedKey,
-        baseURL: runtime.config.baseURL,
-        connectionModel: runtime.config.model,
-      }).checkConnection();
-      checks.push({ name: 'OpenAI', ok: true, detail: '连接成功' });
+      await createProvider(
+        runtime.config.provider,
+        runtime.config.baseURL,
+        runtime.config.model,
+        resolvedKey,
+      ).checkConnection?.();
+      checks.push({ name: preset.label, ok: true, detail: '连接成功' });
     } catch (error) {
       checks.push({
-        name: 'OpenAI',
+        name: preset.label,
         ok: false,
         detail: error instanceof Error ? error.message : String(error),
       });

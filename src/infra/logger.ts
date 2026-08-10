@@ -7,7 +7,7 @@ import { getAppPaths } from './paths.js';
 export const REDACTED = '[REDACTED]';
 const LOG_FILE_PATTERN = /^codefarmer-(\d{4}-\d{2}-\d{2})\.jsonl$/;
 const SENSITIVE_KEY_PATTERN =
-  /(?:authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|token|secret|password|passwd|private[-_]?key)/i;
+  /(?:authorization|api[-_]?key|access[-_]?key|account[-_]?key|access[-_]?token|refresh[-_]?token|token|secret|password|passwd|private[-_]?key)/i;
 const FILE_BODY_KEY_PATTERN = /^(?:content|file[-_]?content|body|patch|diff)$/i;
 
 export interface CreateLoggerOptions {

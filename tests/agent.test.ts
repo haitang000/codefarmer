@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { AgentRunner } from '../src/core/agent.js';
+import { SessionStore } from '../src/core/session-store.js';
 import { DEFAULT_CONFIG } from '../src/infra/config.js';
 import { ProviderError } from '../src/infra/errors.js';
 import { ScriptedProvider } from '../src/providers/fake.js';
@@ -72,6 +73,7 @@ async function runner(
   workspace: string,
   provider: ScriptedProvider,
   overrides: Partial<CodeFarmerConfig> = {},
+  sessionStore?: SessionStore,
 ): Promise<AgentRunner> {
   const effectiveConfig = config(overrides);
   const tools = await createToolRegistry({
@@ -85,6 +87,7 @@ async function runner(
     tools,
     config: effectiveConfig,
     workspace,
+    ...(sessionStore === undefined ? {} : { sessionStore }),
   });
 }
 
@@ -97,6 +100,47 @@ afterEach(async () => {
 });
 
 describe('AgentRunner', () => {
+  it('generates and persists a model-based title after the first turn', async () => {
+    const workspace = await temporaryWorkspace();
+    const sessionStore = await SessionStore.create(workspace, {
+      data: path.join(workspace, 'data'),
+      config: path.join(workspace, 'config'),
+      cache: path.join(workspace, 'cache'),
+      log: path.join(workspace, 'log'),
+      temp: path.join(workspace, 'temp'),
+      userConfigFile: path.join(workspace, 'config.json'),
+      sessions: path.join(workspace, 'sessions'),
+      transactions: path.join(workspace, 'transactions'),
+    });
+    const provider = new RecordingScriptedProvider([
+      [
+        { type: 'text_delta', delta: '已完成登录流程修复。' },
+        {
+          type: 'response_completed',
+          responseId: 'response-main',
+          outputText: '已完成登录流程修复。',
+        },
+      ],
+      [
+        { type: 'text_delta', delta: '修复登录流程' },
+        { type: 'response_completed', responseId: 'response-title', outputText: '修复登录流程' },
+      ],
+    ]);
+    const agent = await runner(workspace, provider, {}, sessionStore);
+
+    const result = await agent.run('请修复登录流程并补充测试');
+    const persisted = await sessionStore.get(result.sessionId);
+
+    expect(persisted.title).toBe('修复登录流程');
+    expect(persisted.titleSource).toBe('automatic');
+    expect(persisted.titleGenerated).toBe(true);
+    expect(provider.requests[1]?.tools).toBeUndefined();
+    expect(provider.requests[1]?.input).toEqual([
+      expect.objectContaining({ content: '请修复登录流程并补充测试' }),
+      expect.objectContaining({ content: '已完成登录流程修复。' }),
+    ]);
+  });
+
   it('completes a text-only response and aggregates usage', async () => {
     const workspace = await temporaryWorkspace();
     const provider = new RecordingScriptedProvider([
@@ -139,7 +183,7 @@ describe('AgentRunner', () => {
       input: 'Introduce yourself',
       store: true,
     });
-    expect(provider.requests[0]?.tools).toHaveLength(10);
+    expect(provider.requests[0]?.tools).toHaveLength(12);
   });
 
   it('executes a tool call and continues with its call id and response id', async () => {
@@ -461,9 +505,8 @@ describe('AgentRunner', () => {
 
     await agent.run('Do something', { history: false });
 
-    expect(provider.requests[0]?.tools).toHaveLength(10);
+    expect(provider.requests[0]?.tools).toHaveLength(12);
     expect(provider.requests[0]?.instructions).not.toContain('Plan mode is ON');
-
   });
 
   it('surfaces non-retryable provider error events without attempting another turn', async () => {

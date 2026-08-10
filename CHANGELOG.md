@@ -13,9 +13,9 @@ All notable changes to CodeFarmer are documented here. This project follows
 - Configurable OpenAI-compatible Base URLs with endpoint-bound session recovery.
 - `sessions export` renders a saved session as Markdown or JSON, printed to
   stdout or written to a file (`--format`, `--output`).
-- Sessions derive an automatic title from the first user message, shown in
-  `sessions list` and exports; `sessions rename <id> <title>` sets a custom
-  title.
+- Sessions receive a model-generated title after the first turn, based on the
+  conversation; the first user message is retained as a fallback and
+  `sessions rename <id> <title>` sets a custom title.
 - Workspace-scoped file, search, patch, command, and read-only Git tools.
 - Approval policies, mutation history, conflict-aware undo, structured logs,
   configuration management, diagnostics, and bilingual documentation.
@@ -27,6 +27,10 @@ All notable changes to CodeFarmer are documented here. This project follows
 - `/commit` without a message asks the agent to summarize the working-tree
   diff (read-only, kept out of session history) and uses the summary as the
   commit message; an explicit message still commits directly.
+- `stats` aggregates token usage and estimated cost across local sessions:
+  human-readable by default, machine-readable JSON with `--json`. Models
+  without a known public list price are listed separately and never counted
+  as zero cost; all figures are estimates, not invoices.
 
 ### Fixed
 

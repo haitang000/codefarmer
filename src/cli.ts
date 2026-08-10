@@ -4,6 +4,7 @@ import { AppError, ConfigError, EXIT_CODES, formatAppError, toAppError } from '.
 import type {
   ApprovalPolicy,
   LogLevel,
+  ProviderId,
   ReasoningEffort,
   ReasoningSummary,
   TextVerbosity,
@@ -24,6 +25,9 @@ import {
   sessionsListAction,
   sessionsRenameAction,
   sessionsShowAction,
+  skillsListAction,
+  skillsShowAction,
+  statsAction,
   setupAction,
   statusAction,
   undoAction,
@@ -35,6 +39,7 @@ import type { SessionExportFormat } from './cli/session-export.js';
 function globals(command: Command): GlobalOptions {
   const options = command.optsWithGlobals<{
     cwd?: string;
+    provider?: ProviderId;
     model?: string;
     baseUrl?: string;
     reasoning?: ReasoningEffort;
@@ -50,6 +55,7 @@ function globals(command: Command): GlobalOptions {
   const streamSource = root.getOptionValueSource('stream');
   return {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    ...(options.provider === undefined ? {} : { provider: options.provider }),
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.baseUrl === undefined ? {} : { baseURL: options.baseUrl }),
     ...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
@@ -85,14 +91,15 @@ async function launchTui(
 const program = new Command();
 program
   .name('codefarmer')
-  .description('安全、可审计的 OpenAI Coding Agent CLI')
+  .description('安全、可审计的多 Provider Coding Agent CLI')
   .usage('[选项] [命令]')
   .version('0.1.0', '-V, --version', '显示版本')
   .helpOption('-h, --help', '显示帮助')
   .helpCommand('help [command]', '显示命令帮助')
   .option('--cwd <path>', '工作区目录')
-  .option('--model <model>', 'OpenAI 模型')
-  .option('--base-url <url>', 'OpenAI 兼容 API Base URL')
+  .addOption(new Option('--provider <provider>', 'AI Provider').choices(['openai', 'gemini', 'grok', 'deepseek', 'kimi']))
+  .option('--model <model>', '模型')
+  .option('--base-url <url>', 'API Base URL')
   .addOption(
     new Option('--reasoning <effort>', '推理强度').choices([
       'auto',
@@ -163,14 +170,21 @@ program
   .option('--json', '仅输出机器可读 JSON')
   .option('--no-history', '不保存本地会话历史')
   .option('--session <id>', '继续已有会话')
+  .option('--skill <ref>', '显式加载技能（可重复）', (value: string, previous: string[] | undefined) => [
+    ...(previous ?? []),
+    value,
+  ])
   .option('--plan', '计划模式：只允许只读工具，输出实施方案而不修改文件')
   .action(
     async (
       prompt: string[],
-      options: { json?: boolean; history?: boolean; session?: string; plan?: boolean },
+      options: { json?: boolean; history?: boolean; session?: string; plan?: boolean; skill?: string[] },
       command: Command,
     ) => {
-      await runAction(prompt, globals(command), options);
+      await runAction(prompt, globals(command), {
+        ...options,
+        ...(options.skill === undefined ? {} : { skills: options.skill }),
+      });
     },
   );
 
@@ -187,6 +201,14 @@ program
   .command('status')
   .description('显示工作区、Git、配置和会话状态')
   .action(async (_options: unknown, command: Command) => statusAction(globals(command)));
+
+program
+  .command('stats')
+  .description('显示会话 Token 用量与估算费用统计（离线聚合本地会话）')
+  .option('--json', '仅输出机器可读 JSON')
+  .action(async (options: { json?: boolean }, command: Command) =>
+    statsAction(globals(command), options.json ?? false),
+  );
 
 program
   .command('undo')
@@ -216,6 +238,20 @@ sessions
   .argument('<id>')
   .action(async (id: string, _options: unknown, command: Command) =>
     sessionsShowAction(globals(command), id),
+  );
+
+const skills = program.command('skills').description('发现和查看 Codex 兼容技能');
+skills
+  .command('list')
+  .description('列出可用技能')
+  .action(async (_options: unknown, command: Command) => skillsListAction(globals(command)));
+skills
+  .command('show')
+  .description('显示技能说明或其目录中的文本资源')
+  .argument('<ref>', '技能引用')
+  .argument('[path]', '可选的技能相对资源路径')
+  .action(async (ref: string, resourcePath: string | undefined, _options: unknown, command: Command) =>
+    skillsShowAction(globals(command), ref, resourcePath),
   );
 sessions
   .command('resume')
@@ -291,7 +327,7 @@ config
 
 program
   .command('doctor')
-  .description('检查运行环境和 OpenAI 连接')
+  .description('检查运行环境和 AI Provider 连接')
   .action(async (_options: unknown, command: Command) => doctorAction(globals(command)));
 
 program

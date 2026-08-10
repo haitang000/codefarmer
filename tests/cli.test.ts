@@ -161,7 +161,27 @@ describe('CodeFarmer CLI', () => {
     expect(result.stderr).toBe('');
     expect(result.stdout).toContain('Usage: codefarmer');
     expect(result.stdout).toContain('run');
+    expect(result.stdout).toContain('stats');
     expect(result.stdout).toContain('doctor');
+  });
+
+  it('lists and shows skills without credentials or network access', async () => {
+    const workspace = await temporaryDirectory();
+    const environmentRoot = await temporaryDirectory();
+    const skillDirectory = path.join(workspace, '.agents', 'skills', 'docs');
+    await mkdir(skillDirectory, { recursive: true });
+    await writeFile(
+      path.join(skillDirectory, 'SKILL.md'),
+      '---\nname: docs\ndescription: Documentation workflow.\n---\n\nRead the docs first.\n',
+    );
+
+    const list = await runCli(['--cwd', workspace, 'skills', 'list'], workspace, environmentRoot);
+    const show = await runCli(['--cwd', workspace, 'skills', 'show', 'docs'], workspace, environmentRoot);
+
+    expect(list.code).toBe(0);
+    expect(list.stdout).toContain('docs');
+    expect(show.code).toBe(0);
+    expect(show.stdout).toContain('Read the docs first.');
   });
 
   it('initializes a schema-linked project configuration', async () => {
@@ -176,6 +196,7 @@ describe('CodeFarmer CLI', () => {
     ) as Record<string, unknown>;
     expect(written).toEqual({
       $schema: 'https://unpkg.com/codefarmer@0.1.0/schemas/codefarmer.config.schema.json',
+      provider: 'openai',
       model: 'gpt-5.6-sol',
       baseURL: 'https://api.openai.com/v1',
       reasoning: 'auto',
@@ -255,6 +276,26 @@ describe('CodeFarmer CLI', () => {
       baseURL: 'http://localhost:8080/v1',
       verbosity: 'high',
       reasoningSummary: 'concise',
+    });
+  });
+
+  it('sets a provider together with its default model and endpoint', async () => {
+    const workspace = await temporaryDirectory();
+    const environmentRoot = await temporaryDirectory();
+    const result = await runCli(
+      ['--cwd', workspace, 'config', 'set', 'provider', 'gemini', '--project'],
+      workspace,
+      environmentRoot,
+    );
+
+    expect(result.code).toBe(0);
+    const written = JSON.parse(
+      await readFile(path.join(workspace, 'codefarmer.config.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(written).toMatchObject({
+      provider: 'gemini',
+      model: 'gemini-2.5-pro',
+      baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
     });
   });
 
@@ -393,6 +434,122 @@ describe('CodeFarmer CLI', () => {
     );
     expect(result.code).toBe(2);
     expect(result.stderr).toContain('会话标题不能为空');
+  });
+
+  it('prints aggregate token and cost statistics for the workspace', async () => {
+    const workspace = await temporaryDirectory();
+    const environmentRoot = await temporaryDirectory();
+    await withIsolatedEnv(environmentRoot, async (SessionStoreRef) => {
+      const store = await SessionStoreRef.create(workspace);
+      const first = await store.createSession('openai', 'gpt-5-mini');
+      await store.appendMessage(first, 'user', 'First task');
+      await store.setStatus(first, 'completed', {
+        inputTokens: 1_000_000,
+        outputTokens: 100_000,
+        totalTokens: 1_100_000,
+        reasoningTokens: 10_000,
+        cachedInputTokens: 500_000,
+      });
+      const second = await store.createSession('openai', 'gpt-5-mini');
+      await store.setStatus(second, 'failed', {
+        inputTokens: 2_000,
+        outputTokens: 0,
+        totalTokens: 2_000,
+      });
+      const third = await store.createSession('openai', 'gpt-5.6-sol');
+      await store.setStatus(third, 'cancelled', {
+        inputTokens: 10,
+        outputTokens: 10,
+        totalTokens: 20,
+      });
+    });
+
+    const result = await runCli(['--cwd', workspace, 'stats'], workspace, environmentRoot);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('会话 3');
+    expect(result.stdout).toContain('gpt-5-mini');
+    expect(result.stdout).toContain('gpt-5.6-sol');
+    expect(result.stdout).toContain('未匹配价格表');
+    expect(result.stdout).toContain('估算费用');
+  });
+
+  it('prints machine-readable JSON statistics with stats --json', async () => {
+    const workspace = await temporaryDirectory();
+    const environmentRoot = await temporaryDirectory();
+    await withIsolatedEnv(environmentRoot, async (SessionStoreRef) => {
+      const store = await SessionStoreRef.create(workspace);
+      const first = await store.createSession('openai', 'gpt-5-mini');
+      await store.setStatus(first, 'completed', {
+        inputTokens: 1_000_000,
+        outputTokens: 100_000,
+        totalTokens: 1_100_000,
+        reasoningTokens: 10_000,
+        cachedInputTokens: 500_000,
+      });
+      const second = await store.createSession('openai', 'gpt-5-mini');
+      await store.setStatus(second, 'failed', {
+        inputTokens: 2_000,
+        outputTokens: 0,
+        totalTokens: 2_000,
+      });
+      const third = await store.createSession('openai', 'gpt-5.6-sol');
+      await store.setStatus(third, 'cancelled', {
+        inputTokens: 10,
+        outputTokens: 10,
+        totalTokens: 20,
+      });
+    });
+
+    const result = await runCli(['--cwd', workspace, 'stats', '--json'], workspace, environmentRoot);
+
+    expect(result.code).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      totalSessions: number;
+      sessionsWithUsage: number;
+      statusCounts: Record<string, number>;
+      usage: Record<string, number>;
+      byModel: {
+        model: string;
+        sessions: number;
+        priceMatched: boolean;
+        estimatedCostUsd: number;
+      }[];
+      costUnknownModels: string[];
+      estimatedCostUsd: number;
+    };
+    expect(payload.totalSessions).toBe(3);
+    expect(payload.sessionsWithUsage).toBe(3);
+    expect(payload.statusCounts).toEqual({ active: 0, completed: 1, cancelled: 1, failed: 1 });
+    expect(payload.usage).toEqual({
+      inputTokens: 1_002_010,
+      outputTokens: 100_010,
+      totalTokens: 1_102_020,
+      reasoningTokens: 10_000,
+      cachedInputTokens: 500_000,
+    });
+    expect(payload.costUnknownModels).toEqual(['gpt-5.6-sol']);
+    expect(payload.estimatedCostUsd).toBeCloseTo(0.338, 9);
+    const gpt = payload.byModel.find((stat) => stat.model === 'gpt-5-mini');
+    expect(gpt?.sessions).toBe(2);
+    expect(gpt?.priceMatched).toBe(true);
+    expect(gpt?.estimatedCostUsd).toBeCloseTo(0.338, 9);
+    const unknown = payload.byModel.find((stat) => stat.model === 'gpt-5.6-sol');
+    expect(unknown?.priceMatched).toBe(false);
+    expect(unknown?.estimatedCostUsd).toBe(0);
+  });
+
+  it('reports an empty workspace for stats', async () => {
+    const workspace = await temporaryDirectory();
+    const environmentRoot = await temporaryDirectory();
+
+    const human = await runCli(['--cwd', workspace, 'stats'], workspace, environmentRoot);
+    expect(human.code).toBe(0);
+    expect(human.stdout).toContain('暂无会话');
+
+    const json = await runCli(['--cwd', workspace, 'stats', '--json'], workspace, environmentRoot);
+    expect(json.code).toBe(0);
+    expect(JSON.parse(json.stdout)).toMatchObject({ totalSessions: 0, byModel: [] });
   });
 
   it('pushes the current branch to its upstream with --yes', async () => {

@@ -86,6 +86,7 @@ describe('SessionStore titles', () => {
 
       await store.appendMessage(session, 'user', 'Refactor the login flow');
       expect(session.title).toBe('Refactor the login flow');
+      expect(session.titleSource).toBe('automatic');
 
       await store.appendMessage(session, 'assistant', 'Here is the plan.');
       expect(session.title).toBe('Refactor the login flow');
@@ -123,6 +124,7 @@ describe('SessionStore titles', () => {
 
       const renamed = await store.rename(session.id, '  Sprint 12 cleanup  ');
       expect(renamed.title).toBe('Sprint 12 cleanup');
+      expect(renamed.titleSource).toBe('custom');
       expect((await store.get(session.id)).title).toBe('Sprint 12 cleanup');
     });
   });

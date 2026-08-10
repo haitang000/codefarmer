@@ -2,8 +2,8 @@
 
 CodeFarmer is a modular coding-agent CLI that can inspect a workspace, generate
 and edit code through reviewable patches, run approved commands, inspect Git,
-and resume prior sessions. It uses the OpenAI Responses API and defaults to
-`gpt-5.6-sol` with model-selected reasoning and low-verbosity responses.
+and resume prior sessions. It supports OpenAI, Google Gemini, xAI Grok,
+DeepSeek, and Kimi; OpenAI defaults to the Responses API with `gpt-5.6-sol`.
 
 [简体中文](README.zh-CN.md) | [Architecture](docs/ARCHITECTURE.md) |
 [Security](docs/SECURITY.md) | [Deployment](docs/DEPLOYMENT.md)
@@ -25,7 +25,7 @@ structured logs, and Vitest covers the runtime.
 ## Requirements
 
 - Node.js 22 or newer
-- An OpenAI API key
+- An API key for OpenAI, Google Gemini, xAI Grok, DeepSeek, or Kimi
 - Git (optional) for read-only Git status, diff, log, and show tools
 - pnpm when building from source
 
@@ -37,9 +37,9 @@ Install the published package globally:
 npm install -g codefarmer
 ```
 
-Set the API key in the current shell. CodeFarmer reads `OPENAI_API_KEY` from
-the environment first; alternatively, `codefarmer setup` can save the key to a
-local credential file in your user configuration directory (never inside the
+Set the key for your selected provider in the current shell. `codefarmer setup`
+can select a provider, fill its default endpoint and model, and save the key to
+a local credential file in your user configuration directory (never inside the
 project or configuration files).
 
 ```bash
@@ -51,6 +51,11 @@ PowerShell:
 ```powershell
 $env:OPENAI_API_KEY = "sk-..."
 ```
+
+`OPENAI_API_KEY`, `GEMINI_API_KEY` (or `GOOGLE_API_KEY`), `XAI_API_KEY` (or
+`GROK_API_KEY`), `DEEPSEEK_API_KEY`, and `MOONSHOT_API_KEY` (or `KIMI_API_KEY`)
+are supported. The setup wizard is the shortest path: it only asks for the
+chosen provider's API key.
 
 For development from this repository:
 
@@ -75,8 +80,8 @@ Use `run --json` for one-shot automation and CI.
 
 `init` creates `codefarmer.config.json` in the current workspace with a JSON
 Schema reference. Prefer a guided flow? `codefarmer setup` walks through
-model, Base URL, reasoning effort, and approval policy interactively, and can
-test the OpenAI connection before writing the file. The workspace boundary is
+provider, model, Base URL, reasoning effort, and approval policy interactively,
+and can test the selected provider connection before writing the file. The workspace boundary is
 exactly the `--cwd` value, or the
 directory in which CodeFarmer starts; it is not automatically expanded to a
 parent Git repository.
@@ -91,7 +96,10 @@ parent Git repository.
 | `codefarmer setup`                              | Interactive wizard for model, Base URL, reasoning, and approval          |
 | `codefarmer chat`                               | Open a TUI session (optionally with `--session`)                         |
 | `codefarmer run "<task>"`                       | Run one task, suitable for scripts and CI                                |
+| `codefarmer skills list`                         | List discovered Codex-compatible skills                                  |
+| `codefarmer skills show <ref> [path]`            | Print a skill or one of its text resources                               |
 | `codefarmer status`                             | Show workspace, Git, configuration, and recent-session status            |
+| `codefarmer stats`                              | Show aggregate token usage and estimated cost across local sessions      |
 | `codefarmer undo`                               | Revert the latest eligible patch transaction                             |
 | `codefarmer sessions list`                      | List saved sessions for the workspace                                    |
 | `codefarmer sessions show <id>`                 | Show a saved session and audit summary                                   |
@@ -146,25 +154,25 @@ session actions in one alternate-screen interface. It streams model output and
 shows each tool as it moves from running to succeeded or failed. Mutating tools
 pause in an approval modal; only an explicit `y` accepts the operation.
 
-| TUI command     | Action                                                                                  |
-| --------------- | --------------------------------------------------------------------------------------- |
-| `/help`         | Show local commands                                                                     |
-| `/init`         | Inspect the workspace and create or update `AGENT.md`                                   |
-| `/status`       | Show session, workspace, Git, and runtime                                               |
-| `/context`      | Show context messages and token usage                                                   |
+| TUI command     | Action                                                                                     |
+| --------------- | ------------------------------------------------------------------------------------------ |
+| `/help`         | Show local commands                                                                        |
+| `/init`         | Inspect the workspace and create or update `AGENT.md`                                      |
+| `/status`       | Show session, workspace, Git, and runtime                                                  |
+| `/context`      | Show context messages and token usage                                                      |
 | `/compact`      | Compress early messages of the current session into a summary (suggested on long sessions) |
-| `/effort`       | Open the reasoning effort picker (↑/↓ + Enter)                                          |
-| `/config`       | Show effective configuration                                                            |
-| `/sessions`     | List saved sessions                                                                     |
-| `/resume <id>`  | Switch to a saved session                                                               |
-| `/delete <id>`  | Delete a non-active local session                                                       |
-| `/diff`         | Show current Git diff                                                                   |
-| `/commit [msg]` | Stage and commit all workspace changes; without a message the agent summarizes the diff |
-| `/push`         | Push the current branch to its configured upstream after confirmation                   |
-| `/undo`         | Undo the most recent eligible file mutation                                             |
-| `/new`          | Start a fresh session                                                                   |
-| `/cancel`       | Cancel the active request or tool                                                       |
-| `/quit`         | Leave the TUI and restore the terminal                                                  |
+| `/effort`       | Open the reasoning effort picker (↑/↓ + Enter)                                             |
+| `/config`       | Show effective configuration                                                               |
+| `/sessions`     | List saved sessions                                                                        |
+| `/resume <id>`  | Switch to a saved session                                                                  |
+| `/delete <id>`  | Delete a non-active local session                                                          |
+| `/diff`         | Show current Git diff                                                                      |
+| `/commit [msg]` | Stage and commit all workspace changes; without a message the agent summarizes the diff    |
+| `/push`         | Push the current branch to its configured upstream after confirmation                      |
+| `/undo`         | Undo the most recent eligible file mutation                                                |
+| `/new`          | Start a fresh session                                                                      |
+| `/cancel`       | Cancel the active request or tool                                                          |
+| `/quit`         | Leave the TUI and restore the terminal                                                     |
 
 Read-only slash commands, `/cancel`, and `/quit` remain available while the
 model is generating; ordinary prompts stay in the input buffer until it is
@@ -196,6 +204,21 @@ the user explicitly confirms the exact command, including when approval is set t
 arguments are validated, read-only calls may run concurrently, and mutations
 and commands run serially. The default agent limit is 25 turns.
 
+## Skills
+
+CodeFarmer supports Codex-compatible skills: a skill is a directory containing a `SKILL.md` file
+with `name` and `description` frontmatter. It discovers `.agents/skills` from the workspace up to
+the filesystem root, then user and system locations; `$CODEX_HOME/skills` and `~/.codex/skills`
+are also supported for compatibility. Use `codefarmer skills list`, `codefarmer skills show <ref>`,
+or `codefarmer run --skill <ref> "task"`; in the TUI use `/skills`, `/skill <ref>`, and `/skill off`.
+
+Only a compact catalog is added to the initial model instructions. The agent reads a full skill with
+the read-only `read_skill` tool when needed, and can read UTF-8 resources inside that skill with
+`read_skill_resource`. Duplicate names remain separate and receive scoped references in the catalog.
+Skills and their resources are untrusted instructions and cannot override approval, path, or command
+restrictions. Skill scripts are never run implicitly; any execution still goes through `run_command`
+and its normal approval and safety checks.
+
 ## Configuration
 
 Configuration uses this precedence, with the first source winning:
@@ -210,6 +233,7 @@ Example project configuration:
 
 ```json
 {
+  "provider": "openai",
   "model": "gpt-5.6-sol",
   "baseURL": "https://api.openai.com/v1",
   "reasoning": "auto",
@@ -231,6 +255,7 @@ Supported environment overrides are:
 
 | Configuration key    | Environment variable               | Default                       |
 | -------------------- | ---------------------------------- | ----------------------------- |
+| `provider`           | `CODEFARMER_PROVIDER`              | `openai`                      |
 | `model`              | `CODEFARMER_MODEL`                 | `gpt-5.6-sol`                 |
 | `baseURL`            | `CODEFARMER_BASE_URL`              | `https://api.openai.com/v1`   |
 | `reasoning`          | `CODEFARMER_REASONING`             | `auto`                        |
@@ -249,6 +274,21 @@ Supported environment overrides are:
 `CODEFARMER_IGNORED_PATHS` accepts a JSON string array or a comma-separated
 list. Default exclusions cover `.git`, dependencies, builds, coverage, `.env`
 files, private keys, and certificates; `.env.example` remains readable.
+
+## Providers
+
+Choose `openai`, `gemini`, `grok`, `deepseek`, or `kimi` with `--provider`,
+`CODEFARMER_PROVIDER`, the setup wizard, or configuration. OpenAI uses the
+Responses API. Gemini, Grok, DeepSeek, and Kimi use their official OpenAI
+Chat Completions-compatible endpoints with explicit local conversation replay
+for tool calls and session continuation. Provider defaults are selected by
+`setup`; use `model` and `baseURL` only to override them.
+
+```bash
+codefarmer --provider deepseek run "review this repository"
+codefarmer config set provider gemini --project
+codefarmer setup
+```
 
 The efficient defaults use model-selected reasoning, low text verbosity, no
 visible reasoning summary, a 25-turn tool limit, and 32 KiB per-tool output.
@@ -302,6 +342,10 @@ does not claim to support.
 Sessions are pinned to the Base URL used when they are created. Start a new
 session before changing endpoints; CodeFarmer refuses to resume a stored
 `response_id` against a different service.
+
+After the first turn, the model generates a short title from the conversation.
+The first-message title remains as a fallback when generation fails, and
+`sessions rename` always takes precedence.
 
 Local sessions store messages, response IDs, tool/audit summaries, approvals,
 patches, and hashes. Undo snapshots can contain prior source text. Pino writes

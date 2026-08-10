@@ -101,6 +101,20 @@ function hasOption(args: string[], options: string[]): boolean {
   });
 }
 
+/**
+ * Detect bundled single-letter short flags such as `-lc`, `-fc`, or `-ne`.
+ * These combine a harmless flag with an evaluation flag (`-c`/`-e`/`-p`); the
+ * exact and prefix checks above miss them when the dangerous letter is not
+ * first, so treat any bundle containing a dangerous letter as evaluation.
+ */
+function hasBundledShortFlag(args: string[], dangerousLetters: string): boolean {
+  return args.some((argument) => {
+    if (!/^-[a-z]{2,}$/u.test(argument)) return false;
+    const bundle = argument.slice(1);
+    return Array.from(dangerousLetters).some((letter) => bundle.includes(letter));
+  });
+}
+
 function classifyGit(args: string[]): CommandClassification {
   let index = 0;
   let currentArgument = args.at(index);
@@ -171,15 +185,23 @@ export function classifyCommand(executable: string, args: string[]): CommandClas
       '-encodedcommand',
       '-enc',
     ]);
-    if (hasAnyArgument(lowerArgs, shellFlags) || hasOption(lowerArgs, [...shellFlags])) {
+    if (
+      hasAnyArgument(lowerArgs, shellFlags) ||
+      hasOption(lowerArgs, [...shellFlags]) ||
+      hasBundledShortFlag(lowerArgs, 'c')
+    ) {
       return { risk: 'blocked', reason: 'Shell command evaluation is not allowed.' };
     }
     return { risk: 'mutating', reason: 'A shell script can have side effects.' };
   }
   if (
-    (name === 'node' && hasOption(lowerArgs, ['-e', '--eval', '-p', '--print'])) ||
-    (new Set(['python', 'python3']).has(name) && hasOption(lowerArgs, ['-c'])) ||
-    (new Set(['ruby', 'perl']).has(name) && hasOption(lowerArgs, ['-e']))
+    (name === 'node' &&
+      (hasOption(lowerArgs, ['-e', '--eval', '-p', '--print']) ||
+        hasBundledShortFlag(lowerArgs, 'ep'))) ||
+    (new Set(['python', 'python3']).has(name) &&
+      (hasOption(lowerArgs, ['-c']) || hasBundledShortFlag(lowerArgs, 'c'))) ||
+    (new Set(['ruby', 'perl']).has(name) &&
+      (hasOption(lowerArgs, ['-e']) || hasBundledShortFlag(lowerArgs, 'e')))
   ) {
     return { risk: 'blocked', reason: 'Interpreter evaluation is not allowed.' };
   }
@@ -214,7 +236,7 @@ export function classifyCommand(executable: string, args: string[]): CommandClas
 }
 
 const SENSITIVE_ENVIRONMENT_NAME =
-  /(?:OPENAI_API_KEY|AUTHORIZATION|CREDENTIAL|PRIVATE_?KEY|PASSWORD|PASSWD|SECRET|TOKEN)/iu;
+  /(?:AUTHORIZATION|CREDENTIAL|PRIVATE_?KEY|API_?KEY|ACCESS_?KEY|ACCOUNT_?KEY|PASSWORD|PASSWD|SECRET|TOKEN|_KEY$)/iu;
 
 export function sanitiseEnvironment(
   environment: NodeJS.ProcessEnv = process.env,

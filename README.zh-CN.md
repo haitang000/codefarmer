@@ -2,8 +2,8 @@
 
 CodeFarmer 是一个模块化 Coding Agent 命令行工具。它能够检查工作区、生成代码、
 通过可审查的补丁编辑文件、运行经审批的命令、查看 Git 状态，并恢复历史会话。
-它基于 OpenAI Responses API，默认使用 `gpt-5.6-sol` 模型，由模型自行决定推理强度，
-并使用低详细度输出以节省 token。
+它支持 OpenAI、Google Gemini、xAI Grok、DeepSeek 和 Kimi；OpenAI 默认使用
+Responses API 与 `gpt-5.6-sol` 模型。
 
 [English](README.md) | [架构](docs/ARCHITECTURE.md) |
 [安全模型](docs/SECURITY.md) | [安装与部署](docs/DEPLOYMENT.md)
@@ -24,7 +24,7 @@ Commander 负责参数解析，Clack 和 Chalk 负责终端交互，Zod 校验�
 ## 环境要求
 
 - Node.js 22 或更高版本
-- OpenAI API Key
+- OpenAI、Google Gemini、xAI Grok、DeepSeek 或 Kimi 的 API Key
 - Git（可选，供只读的 Git 状态、差异、历史和提交查看工具使用）
 - 从源码构建时需要 pnpm
 
@@ -36,9 +36,9 @@ Commander 负责参数解析，Clack 和 Chalk 负责终端交互，Zod 校验�
 npm install -g codefarmer
 ```
 
-在当前 shell 中设置 API Key。CodeFarmer 优先从 `OPENAI_API_KEY` 环境变量
-读取密钥；也可以运行 `codefarmer setup` 将密钥保存到用户配置目录下的
-本地凭据文件（不会进入项目或配置文件）。
+在当前 shell 中设置所选 Provider 的 API Key。运行 `codefarmer setup` 可以选择
+Provider、自动填入默认端点和模型，并将密钥保存到用户配置目录下的本地凭据文件
+（不会进入项目或配置文件）。
 
 ```bash
 export OPENAI_API_KEY="sk-..."
@@ -49,6 +49,11 @@ PowerShell：
 ```powershell
 $env:OPENAI_API_KEY = "sk-..."
 ```
+
+支持 `OPENAI_API_KEY`、`GEMINI_API_KEY`（或 `GOOGLE_API_KEY`）、
+`XAI_API_KEY`（或 `GROK_API_KEY`）、`DEEPSEEK_API_KEY`、
+`MOONSHOT_API_KEY`（或 `KIMI_API_KEY`）。使用 setup 时只需填写所选
+Provider 的 API Key。
 
 从本仓库进行开发安装：
 
@@ -73,8 +78,8 @@ codefarmer
 
 `init` 会在当前工作区生成带 JSON Schema 引用的
 `codefarmer.config.json`。如需引导式配置，可运行 `codefarmer setup`，
-它会交互式询问模型、Base URL、推理强度和审批策略，并可在写入前测试
-OpenAI 连接。工作区边界严格等于 `--cwd` 指定的目录，或
+它会交互式询问 Provider、模型、Base URL、推理强度和审批策略，并可在写入前测试
+所选 Provider 连接。工作区边界严格等于 `--cwd` 指定的目录，或
 CodeFarmer 启动时所在的目录；它不会自动扩大到上层 Git 仓库。
 
 ## CLI 命令
@@ -87,7 +92,10 @@ CodeFarmer 启动时所在的目录；它不会自动扩大到上层 Git 仓库�
 | `codefarmer setup`                              | 交互式向导配置模型、Base URL、推理强度和审批策略      |
 | `codefarmer chat`                               | 在 TUI 中启动会话                                     |
 | `codefarmer run "<任务>"`                       | 执行一次性任务，可用于脚本和 CI                       |
+| `codefarmer skills list`                         | 列出发现的 Codex 兼容 skill                           |
+| `codefarmer skills show <ref> [path]`            | 显示 skill 或其文本资源                               |
 | `codefarmer status`                             | 显示工作区、Git、有效配置和近期会话状态               |
+| `codefarmer stats`                              | 显示本地会话的 Token 用量与估算费用统计               |
 | `codefarmer undo`                               | 撤销最近一笔仍符合条件的补丁事务                      |
 | `codefarmer sessions list`                      | 列出当前工作区的本地会话                              |
 | `codefarmer sessions show <id>`                 | 显示会话和审计摘要                                    |
@@ -184,6 +192,19 @@ Ctrl+C 会退出 TUI。非交互 shell 中直接运行命令只显示帮助，�
 由用户明确确认完整命令。工具参数都会校验，输入和输出有大小限制；只读工具可以并行，文件
 变更和命令串行执行。Agent 默认最多运行 25 轮。
 
+## Skills
+
+CodeFarmer 支持与 Codex 兼容的 skill：skill 是包含 `SKILL.md` 的目录，文件 frontmatter
+需要提供 `name` 和 `description`。程序从工作区向上扫描 `.agents/skills`，随后扫描用户和
+系统目录；同时兼容 `$CODEX_HOME/skills` 与 `~/.codex/skills`。可使用
+`codefarmer skills list`、`codefarmer skills show <ref>`、`codefarmer run --skill <ref> "任务"`；
+TUI 提供 `/skills`、`/skill <ref>` 和 `/skill off`。
+
+初始 instructions 只包含紧凑的技能目录；Agent 需要时通过只读 `read_skill` 读取完整 skill，
+并可通过 `read_skill_resource` 读取其目录中的 UTF-8 资源。同名 skill 不会合并，目录会提供带
+scope 的引用。技能及其资源都属于不可信指令，不能绕过审批、路径或命令限制；skill 脚本绝不会
+被隐式执行，任何执行仍必须经过 `run_command` 的正常安全检查和审批。
+
 ## 配置
 
 配置优先级由高到低如下：
@@ -198,6 +219,7 @@ Ctrl+C 会退出 TUI。非交互 shell 中直接运行命令只显示帮助，�
 
 ```json
 {
+  "provider": "openai",
   "model": "gpt-5.6-sol",
   "baseURL": "https://api.openai.com/v1",
   "reasoning": "auto",
@@ -219,6 +241,7 @@ Ctrl+C 会退出 TUI。非交互 shell 中直接运行命令只显示帮助，�
 
 | 配置项               | 环境变量                           | 默认值                      |
 | -------------------- | ---------------------------------- | --------------------------- |
+| `provider`           | `CODEFARMER_PROVIDER`              | `openai`                    |
 | `model`              | `CODEFARMER_MODEL`                 | `gpt-5.6-sol`               |
 | `baseURL`            | `CODEFARMER_BASE_URL`              | `https://api.openai.com/v1` |
 | `reasoning`          | `CODEFARMER_REASONING`             | `auto`                      |
@@ -237,6 +260,20 @@ Ctrl+C 会退出 TUI。非交互 shell 中直接运行命令只显示帮助，�
 `CODEFARMER_IGNORED_PATHS` 可以是 JSON 字符串数组或逗号分隔列表。默认忽略
 `.git`、依赖目录、构建与覆盖率输出、`.env`、私钥和证书；`.env.example`
 仍允许读取。
+
+## Provider
+
+可通过 `--provider`、`CODEFARMER_PROVIDER`、setup 向导或配置文件选择
+`openai`、`gemini`、`grok`、`deepseek` 或 `kimi`。OpenAI 使用 Responses API；
+Gemini、Grok、DeepSeek 和 Kimi 使用官方 OpenAI Chat Completions 兼容端点，
+并通过本地显式回放会话历史来继续工具调用。setup 会自动填入各 Provider 的默认
+模型和端点；只有需要覆盖默认值时才设置 `model` 和 `baseURL`。
+
+```bash
+codefarmer --provider deepseek run "审查当前仓库"
+codefarmer config set provider gemini --project
+codefarmer setup
+```
 
 节省 token 的默认值包括：由模型自行决定推理强度、低详细度正文、不生成可见推理摘要、
 最多 25 个工具轮次，以及每个工具输出最多 32 KiB。需要更多上下文或解释时，
@@ -282,6 +319,9 @@ CodeFarmer v1 会拒绝 `store: false`。无状态续接需要完整回放推理
 
 每个会话都会绑定创建时使用的 Base URL。切换端点前应新建会话；CodeFarmer
 不会把已有的 `response_id` 发送到另一个服务。
+
+首轮对话完成后，模型会根据会话内容自动生成简短标题；生成失败时保留首条
+消息标题作为回退，`sessions rename` 设置的自定义标题始终优先。
 
 本地会话会保存消息、响应 ID、工具与审计摘要、审批结果、补丁和哈希；撤销快照
 可能包含修改前的源码。Pino 按天写入经过脱敏的 JSONL 日志并保留 14 天。

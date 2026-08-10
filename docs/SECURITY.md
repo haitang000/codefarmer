@@ -5,6 +5,15 @@ local programs. That is inherently privileged. Read approval prompts and
 review diffs, work from version control, and use a disposable environment for
 untrusted repositories.
 
+## Skills
+
+Skills are external instruction content, not trusted policy. `SKILL.md` files and skill resources may
+guide the agent but cannot relax CodeFarmer's workspace boundary, approval policy, or command blocklist.
+The skill tools are read-only, enforce containment within the resolved skill directory, accept UTF-8
+text only, and apply file/output limits. CodeFarmer never executes a skill script automatically; a
+model-requested script must use the existing `run_command` tool and pass its normal validation and
+approval flow.
+
 ## Approval policies
 
 | Policy          | Reads     | File changes           | Ordinary commands                    |
