@@ -1,10 +1,11 @@
-import { Box, renderToString } from 'ink';
+import { Box, renderToString, Text } from 'ink';
 import { describe, expect, it } from 'vitest';
 
 import type { AgentRuntime } from '../src/cli/runtime.js';
 import { DEFAULT_CONFIG } from '../src/infra/config.js';
 import {
   ClippedEntry,
+  ApprovalModal,
   EffortPicker,
   EntryView,
   TuiApp,
@@ -39,6 +40,30 @@ function mockRuntime(): AgentRuntime {
 }
 
 describe('TUI rendering', () => {
+  it('renders approval in flow between transcript content and the input', () => {
+    const output = renderToString(
+      <Box flexDirection="column">
+        <Text>Assistant response</Text>
+        <ApprovalModal
+          approval={{
+            request: {
+              kind: 'command',
+              title: 'Push Git changes',
+              detail: '["git","push","origin","main"]',
+            },
+          }}
+          columns={80}
+          rows={30}
+        />
+        <Text>Input prompt</Text>
+      </Box>,
+      { columns: 80 },
+    );
+
+    expect(output.indexOf('Assistant response')).toBeLessThan(output.indexOf('Approval required'));
+    expect(output.indexOf('Approval required')).toBeLessThan(output.indexOf('Input prompt'));
+  });
+
   it('renders a non-empty workspace screen without a live terminal', () => {
     const runtime = mockRuntime();
     const bridge = new TuiInteractionBridge();

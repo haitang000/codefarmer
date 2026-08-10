@@ -752,7 +752,7 @@ export function ClippedEntry({
   );
 }
 
-function ApprovalModal({
+export function ApprovalModal({
   approval,
   columns,
   rows,
@@ -762,15 +762,15 @@ function ApprovalModal({
   rows: number;
 }): React.ReactElement {
   const width = Math.max(1, Math.min(96, columns - 4));
-  const maximumLines = Math.max(2, rows - 11);
+  // Keep the modal bounded so its controls remain visible without covering
+  // the transcript or the command input.
+  const maximumHeight = Math.max(6, Math.min(16, rows - 8));
+  const maximumLines = Math.max(1, maximumHeight - 7);
   const clipped = clipApprovalDetail(approval.request.detail, width, maximumLines);
   return (
     <Box
-      position="absolute"
-      top={2}
-      left={2}
       width={width}
-      maxHeight={Math.max(6, rows - 4)}
+      maxHeight={maximumHeight}
       overflow="hidden"
       flexDirection="column"
       borderStyle="double"
@@ -1768,7 +1768,14 @@ export function TuiApp({
           {sessionId.slice(0, 12)} | {runtime.workspace}
         </Text>
       </Box>
-      <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingTop={1}>
+      <Box
+        flexDirection="column"
+        flexGrow={1}
+        flexShrink={1}
+        minHeight={0}
+        overflow="hidden"
+        paddingTop={1}
+      >
         {entries.length === 0 ? (
           <Text dimColor>No messages yet.</Text>
         ) : (
@@ -1809,6 +1816,9 @@ export function TuiApp({
         )}
         {busy ? <Spinner label={status} /> : null}
       </Box>
+      {approvalView === null ? null : (
+        <ApprovalModal approval={approvalView} columns={columns} rows={rows} />
+      )}
       {effortPicker === null ? null : (
         <EffortPicker current={runtime.config.reasoning} selected={effortPicker} />
       )}
@@ -1842,9 +1852,6 @@ export function TuiApp({
         </Text>
         <Text dimColor>{String(usage.totalTokens)} tokens</Text>
       </Box>
-      {approvalView === null ? null : (
-        <ApprovalModal approval={approvalView} columns={columns} rows={rows} />
-      )}
     </Box>
   );
 }
