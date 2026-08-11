@@ -1,5 +1,8 @@
 export * from './types.js';
 export * from './core/agent.js';
+export * from './core/session-orchestrator.js';
+export * from './core/permissions.js';
+export * from './core/hooks.js';
 export {
   discoverSkills,
   formatSkillCatalog,
@@ -19,6 +22,8 @@ export {
 } from './core/stats.js';
 export {
   PolicyApprovalController,
+  type ApprovalDecision,
+  type ApprovalScope,
   type ApprovalController,
   type ApprovalKind,
   type ApprovalRequest as CoreApprovalRequest,

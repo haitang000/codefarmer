@@ -3,8 +3,15 @@ import { constants } from 'node:fs';
 
 import type { Logger } from 'pino';
 
-import { PolicyApprovalController, type ApprovalRequest } from '../core/approval.js';
+import {
+  PolicyApprovalController,
+  type ApprovalDecision,
+  type ApprovalRequest,
+} from '../core/approval.js';
 import { AgentRunner } from '../core/agent.js';
+import { SessionOrchestrator } from '../core/session-orchestrator.js';
+import { PermissionStore } from '../core/permissions.js';
+import type { AgentHooks } from '../core/hooks.js';
 import { discoverSkills } from '../core/skills.js';
 import { SessionStore } from '../core/session-store.js';
 import { TransactionStore } from '../core/transaction-store.js';
@@ -17,13 +24,14 @@ import { OpenAIProvider } from '../providers/openai.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible.js';
 import { isProviderId, providerPreset } from '../providers/catalog.js';
 import { createToolRegistry } from '../tools/registry.js';
-import type { ToolLifecycleHooks } from '../tools/types.js';
+import type { ToolCall, ToolLifecycleHooks } from '../tools/types.js';
 import type {
   AgentProvider,
   CodeFarmerConfig,
   ProviderId,
   SessionRecord,
   SkillCatalog,
+  ToolResult,
 } from '../types.js';
 import { promptForApproval } from './ui.js';
 
@@ -53,14 +61,20 @@ export interface BaseRuntime {
 export interface AgentRuntime extends BaseRuntime {
   session?: SessionRecord;
   runner: AgentRunner;
+  orchestrator?: SessionOrchestrator;
+  permissions?: PermissionStore;
 }
 
 export interface AgentRuntimeOptions {
   sessionId?: string;
   history?: boolean;
   approvalPrompt?: (request: ApprovalRequest) => boolean | Promise<boolean>;
+  approvalDecisionPrompt?: (
+    request: ApprovalRequest,
+  ) => ApprovalDecision | Promise<ApprovalDecision>;
   interactive?: boolean;
   toolHooks?: ToolLifecycleHooks;
+  hooks?: AgentHooks;
 }
 
 function configOverrides(options: GlobalOptions): ConfigOverrides {
@@ -168,9 +182,10 @@ export async function createAgentRuntime(
     session.baseURL = config.baseURL;
     if (history) await runtimeBase.sessions.save(session);
   }
+  const permissions = await PermissionStore.create(runtimeBase.workspace);
   const approval = new PolicyApprovalController(
     config.approval,
-    agentOptions.approvalPrompt ?? promptForApproval,
+    agentOptions.approvalDecisionPrompt ?? agentOptions.approvalPrompt ?? promptForApproval,
     agentOptions.interactive ?? process.stdin.isTTY,
   );
   const tools = await createToolRegistry({
@@ -181,8 +196,8 @@ export async function createAgentRuntime(
     ignoredPaths: config.ignoredPaths,
     ...(runtimeBase.skills === undefined ? {} : { skillCatalog: runtimeBase.skills }),
     ...(session === undefined ? {} : { sessionId: session.id }),
-    approve: async (request) =>
-      approval.request({
+    approve: async (request) => {
+      const approvalRequest: ApprovalRequest = {
         kind: request.kind === 'file-mutation' ? 'patch' : 'command',
         title: request.title,
         detail: request.detail,
@@ -190,7 +205,11 @@ export async function createAgentRuntime(
         ...(request.requireConfirmation === undefined
           ? {}
           : { requireConfirmation: request.requireConfirmation }),
-      }),
+      };
+      if (permissions.has(approvalRequest) && request.requireConfirmation !== true) return true;
+      const decision: ApprovalDecision = await approval.decide(approvalRequest);
+      return permissions.apply(approvalRequest, decision);
+    },
     onMutation: async (mutation) => runtimeBase.transactions.record(mutation),
   });
   const provider: AgentProvider =
@@ -200,19 +219,76 @@ export async function createAgentRuntime(
           provider: config.provider,
           apiKey,
           baseURL: config.baseURL,
-        });
+      });
+  const baseToolHooks = agentOptions.toolHooks;
+  const hooks = agentOptions.hooks;
+  const toolHooks: ToolLifecycleHooks | undefined =
+    hooks === undefined && baseToolHooks === undefined
+      ? undefined
+      : {
+          beforeTool: async (call: ToolCall) => {
+            await hooks?.beforeTool?.({
+              turnId: session?.id ?? 'tool',
+              prompt: '',
+              workspace: runtimeBase.workspace,
+              ...(session?.id === undefined ? {} : { sessionId: session.id }),
+              call: {
+                callId: call.callId,
+                name: call.name,
+                arguments: typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments),
+              },
+            });
+          },
+          afterTool: async (call: ToolCall, result: ToolResult) => {
+            try {
+              await hooks?.afterTool?.(
+                {
+                  turnId: session?.id ?? 'tool',
+                  prompt: '',
+                  workspace: runtimeBase.workspace,
+                  ...(session?.id === undefined ? {} : { sessionId: session.id }),
+                  call: {
+                    callId: call.callId,
+                    name: call.name,
+                    arguments: typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments),
+                  },
+                },
+                result,
+              );
+            } catch {
+              // Post-tool integrations are observers.
+            }
+          },
+          ...(baseToolHooks?.onToolStart === undefined
+            ? {}
+            : { onToolStart: baseToolHooks.onToolStart }),
+          ...(baseToolHooks?.onToolResult === undefined
+            ? {}
+            : { onToolResult: baseToolHooks.onToolResult }),
+          ...(baseToolHooks?.onApprovalRequest === undefined
+            ? {}
+            : { onApprovalRequest: baseToolHooks.onApprovalRequest }),
+          ...(baseToolHooks?.onApprovalResolution === undefined
+            ? {}
+            : { onApprovalResolution: baseToolHooks.onApprovalResolution }),
+        };
   const runner = new AgentRunner({
     provider,
     tools,
     config,
     workspace: runtimeBase.workspace,
     ...(runtimeBase.skills === undefined ? {} : { skillCatalog: runtimeBase.skills }),
-    ...(agentOptions.toolHooks === undefined ? {} : { toolHooks: agentOptions.toolHooks }),
+    ...(toolHooks === undefined ? {} : { toolHooks }),
     ...(history ? { sessionStore: runtimeBase.sessions } : {}),
+  });
+  const orchestrator = new SessionOrchestrator(runner, {
+    workspace: runtimeBase.workspace,
+    ...(session === undefined ? {} : { session, sessionId: session.id }),
+    ...(agentOptions.hooks === undefined ? {} : { hooks: agentOptions.hooks }),
   });
   runtimeBase.logger.info(
     { sessionId: session?.id, history, provider: provider.name, baseURL: config.baseURL },
     'Agent runtime initialized',
   );
-  return { ...runtimeBase, ...(session === undefined ? {} : { session }), runner };
+  return { ...runtimeBase, ...(session === undefined ? {} : { session }), runner, orchestrator, permissions };
 }

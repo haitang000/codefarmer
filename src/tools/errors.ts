@@ -18,6 +18,7 @@ export type ToolErrorCode =
   | 'GIT_FAILED'
   | 'GIT_UNAVAILABLE'
   | 'TOOL_NOT_FOUND'
+  | 'HOOK_BLOCKED'
   | 'SKILL_NOT_FOUND'
   | 'SKILLS_UNAVAILABLE'
   | 'PATH_OUTSIDE_SKILL'

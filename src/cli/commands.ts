@@ -48,7 +48,7 @@ import { detectGitAvailability } from '../tools/git-tools.js';
 import type { AgentProvider, ProviderId, SessionRecord, SessionStatus } from '../types.js';
 import { createAgentRuntime, createBaseRuntime, type GlobalOptions } from './runtime.js';
 import { renderSessionExport, type SessionExportFormat } from './session-export.js';
-import { createEventRenderer, printJson, printResultMessage } from './ui.js';
+import { colorizeDiff, createEventRenderer, printJson, printResultMessage } from './ui.js';
 
 export interface RunOptions {
   json?: boolean;
@@ -219,7 +219,9 @@ async function showWorkspaceStatus(globalOptions: GlobalOptions): Promise<void> 
     }
   }
   process.stdout.write(`${chalk.bold('工作区')} ${runtime.workspace}\n`);
-  process.stdout.write(`${chalk.bold('Provider')} ${providerPreset(runtime.config.provider).label}\n`);
+  process.stdout.write(
+    `${chalk.bold('Provider')} ${providerPreset(runtime.config.provider).label}\n`,
+  );
   process.stdout.write(
     `${chalk.bold('模型')} ${runtime.config.model} (${runtime.config.reasoning}, ${runtime.config.verbosity})\n`,
   );
@@ -279,7 +281,7 @@ export async function chatAction(globalOptions: GlobalOptions, sessionId?: strin
       if (result.exitCode !== 0) {
         process.stdout.write(`${result.stderr.trim() || '无法显示 Git 差异'}\n`);
       } else {
-        process.stdout.write(`${result.stdout || '(无差异)'}\n`);
+        process.stdout.write(`${colorizeDiff(result.stdout || '(无差异)')}\n`);
       }
       continue;
     }
@@ -707,7 +709,9 @@ function printWorkspaceStats(stats: WorkspaceStats): void {
   const statusSummary = (Object.entries(stats.statusCounts) as [SessionStatus, number][])
     .map(([status, count]) => `${statusLabels[status]} ${String(count)}`)
     .join(' / ');
-  process.stdout.write(`${chalk.bold('会话')} ${String(stats.totalSessions)} 个（${statusSummary}）\n`);
+  process.stdout.write(
+    `${chalk.bold('会话')} ${String(stats.totalSessions)} 个（${statusSummary}）\n`,
+  );
   process.stdout.write(
     `${chalk.bold('Token 累计')} 输入 ${formatCount(stats.usage.inputTokens)} / ` +
       `输出 ${formatCount(stats.usage.outputTokens)} / 合计 ${formatCount(stats.usage.totalTokens)}` +
@@ -746,7 +750,9 @@ export async function statsAction(globalOptions: GlobalOptions, json = false): P
     return;
   }
   if (stats.totalSessions === 0) {
-    process.stdout.write('暂无会话；完成第一次 codefarmer run 后这里会显示 Token 用量与费用统计。\n');
+    process.stdout.write(
+      '暂无会话；完成第一次 codefarmer run 后这里会显示 Token 用量与费用统计。\n',
+    );
     return;
   }
   printWorkspaceStats(stats);
@@ -834,7 +840,9 @@ export async function configListAction(globalOptions: GlobalOptions): Promise<vo
     cli: {
       ...(globalOptions.provider === undefined ? {} : { provider: globalOptions.provider }),
       ...(globalOptions.model === undefined ? providerConfig : { model: globalOptions.model }),
-      ...(globalOptions.baseURL === undefined ? providerConfig : { baseURL: globalOptions.baseURL }),
+      ...(globalOptions.baseURL === undefined
+        ? providerConfig
+        : { baseURL: globalOptions.baseURL }),
       ...(globalOptions.reasoning === undefined ? {} : { reasoning: globalOptions.reasoning }),
       ...(globalOptions.verbosity === undefined ? {} : { verbosity: globalOptions.verbosity }),
       ...(globalOptions.reasoningSummary === undefined

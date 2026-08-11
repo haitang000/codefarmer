@@ -15,6 +15,7 @@ export type TuiCommand =
   | { kind: 'effort' }
   | { kind: 'model'; value: string }
   | { kind: 'plan'; value: string }
+  | { kind: 'auto'; value: string }
   | { kind: 'config' }
   | { kind: 'doctor' }
   | { kind: 'diff' }
@@ -47,7 +48,7 @@ export interface TranscriptEntry {
   kind: TranscriptEntryKind;
   content: string;
   /** Optional renderer hint for structured local command output. */
-  display?: 'stats';
+  display?: 'stats' | 'diff';
   tool?: ToolView;
   /** 助手消息的推理摘要（思考过程），Ctrl+O 切换显示。 */
   reasoning?: string;
@@ -71,30 +72,36 @@ export interface TuiUsage {
 }
 
 export const TUI_HELP = [
-  '/help       show this help',
-  '/skills     list discovered skills',
-  '/skill REF  select a skill for this TUI session; /skill off clears selection',
-  '/init       summarize this workspace into AGENT.md',
-  'Ctrl+O      toggle the reasoning (thinking) display',
-  '/new        start a new session',
-  '/status     show workspace and runtime status',
-  '/stats      show workspace usage charts and estimated cost',
-  '/context    show the current conversation context and token usage',
-  '/compact    compress early messages of the current session into a summary',
-  '/effort     open the reasoning effort picker (←/→ + Enter)',
-  '/model NAME switch to a model; without NAME, show the current model',
-  '/plan [on|off]  toggle plan mode (Shift+Tab): read-only research, no file changes',
-  '/config     show the effective configuration',
-  '/doctor     check the local runtime prerequisites',
-  '/sessions   list saved sessions',
-  '/resume ID  resume a saved session',
-  '/delete ID  delete a saved session',
-  '/diff       show the current Git diff',
-  '/commit     stage and commit; without a message, the agent summarizes the changes',
-  '/push       push the current branch to its configured upstream',
-  '/undo       undo the latest file mutation',
-  '/cancel     cancel the active turn',
-  '/quit       exit CodeFarmer',
+  'SESSION',
+  '  /help       show this help',
+  '  /new        start a new session',
+  '  /sessions   list saved sessions',
+  '  /resume ID  resume a saved session',
+  '  /delete ID  delete a saved session',
+  '  /compact    compress early messages into a summary',
+  '  /cancel     cancel the active turn',
+  '  /quit       exit CodeFarmer',
+  'WORKSPACE',
+  '  /status     show workspace and runtime status',
+  '  /diff       show the current Git diff',
+  '  /commit     stage and commit workspace changes',
+  '  /push       push the current branch to its upstream',
+  '  /undo       undo the latest file mutation',
+  '  /init       summarize this workspace into AGENT.md',
+  'PERMISSIONS',
+  '  /plan [on|off]  read-only research mode',
+  '  /auto [on|off]  plan and execute without ordinary approvals',
+  '  Shift+Tab       cycle CODE, PLAN, and AUTO modes',
+  '  /config     show the effective configuration',
+  'DEBUG',
+  '  /context    show context and token usage',
+  '  /stats      show usage charts and estimated cost',
+  '  /effort     open the reasoning effort picker (←/→ + Enter)',
+  '  /model NAME switch the active model',
+  '  /skills     list discovered skills',
+  '  /skill REF  select a skill for this session; /skill off clears it',
+  '  /doctor     check local runtime prerequisites',
+  '  Ctrl+O      toggle the reasoning display',
 ].join('\n');
 
 /** Commands offered by the interactive prompt, in display/completion order. */
@@ -111,6 +118,7 @@ export const TUI_COMMANDS = [
   'effort',
   'model',
   'plan',
+  'auto',
   'config',
   'doctor',
   'sessions',
@@ -180,6 +188,8 @@ export function parseTuiCommand(input: string): TuiCommand {
       return { kind: 'model', value: parts.join(' ') };
     case 'plan':
       return { kind: 'plan', value: (parts[0] ?? '').toLowerCase() };
+    case 'auto':
+      return { kind: 'auto', value: (parts[0] ?? '').toLowerCase() };
     case 'config':
       return { kind: 'config' };
     case 'doctor':
@@ -208,4 +218,12 @@ export function parseTuiCommand(input: string): TuiCommand {
     default:
       return { kind: 'unknown', name, args: parts };
   }
+}
+
+export type AgentMode = 'code' | 'plan' | 'auto';
+
+export function nextAgentMode(mode: AgentMode): AgentMode {
+  if (mode === 'code') return 'plan';
+  if (mode === 'plan') return 'auto';
+  return 'code';
 }

@@ -4,6 +4,28 @@ import chalk from 'chalk';
 import type { ApprovalRequest } from '../core/approval.js';
 import type { ProviderEvent } from '../types.js';
 
+/** Adds conventional terminal colors to a unified Git diff. */
+export function colorizeDiff(diff: string): string {
+  return diff
+    .split(/\r?\n/u)
+    .map((line) => {
+      if (
+        line.startsWith('diff ') ||
+        line.startsWith('index ') ||
+        line.startsWith('---') ||
+        line.startsWith('+++')
+      ) {
+        return chalk.bold.cyan(line);
+      }
+      if (line.startsWith('@@')) return chalk.magenta(line);
+      if (line.startsWith('+')) return chalk.green(line);
+      if (line.startsWith('-')) return chalk.red(line);
+      if (line.startsWith('\\ No newline')) return chalk.yellow(line);
+      return line;
+    })
+    .join('\n');
+}
+
 export async function promptForApproval(request: ApprovalRequest): Promise<boolean> {
   process.stderr.write(`\n${chalk.bold.yellow(request.title)}\n${request.detail}\n`);
   const answer = await confirm({ message: '允许执行此操作？', initialValue: false });

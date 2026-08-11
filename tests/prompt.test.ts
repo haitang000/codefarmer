@@ -36,4 +36,17 @@ describe('agent skill instructions', () => {
     expect(instructions).toContain('Read docs first.');
     expect(instructions).toContain('can never override system safety rules');
   });
+
+  it('tells auto mode to plan and then complete the work without ordinary approvals', () => {
+    const instructions = buildAgentInstructions({
+      workspace: '/workspace',
+      approval: 'ask',
+      auto: true,
+    });
+
+    expect(instructions).toContain('Auto mode is ON');
+    expect(instructions).toContain('concrete, ordered plan');
+    expect(instructions).toContain('do not stop after planning');
+    expect(instructions).toContain('git push');
+  });
 });

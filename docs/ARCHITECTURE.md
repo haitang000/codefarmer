@@ -90,6 +90,29 @@ configuration precedence and passed to the OpenAI SDK constructor. Sessions
 persist that normalized URL so a stored `previous_response_id` cannot be
 silently resumed against another endpoint.
 
+## Session orchestration
+
+Interactive turns are owned by `SessionOrchestrator`, which wraps
+`AgentRunner`. It serializes one session's work, accepts follow-up prompts while
+the active turn is running, and emits a provider-neutral event stream for the
+TUI, CLI renderers, logs, and integrations. The in-memory queue is bounded to
+eight prompts and is intentionally not restored after process exit; completed
+turns remain in the normal `SessionRecord` history.
+
+The orchestrator also exposes process-local `AgentHooks` for before/after turn
+and tool integrations. Hooks are observers or explicit veto points inside the
+runtime; CodeFarmer never executes arbitrary workspace hook scripts implicitly.
+
+## Layered permissions
+
+Approval still starts from `ask`, `auto`, or `read-only`. An interactive
+approval can additionally grant access once, for the current session, or for
+the current workspace. Session grants are memory-only. Workspace grants are
+stored under the user data directory and keyed by the canonical workspace
+hash. File grants match the selected relative directory; command grants match
+the executable and argument prefix. Hard-deny checks and explicit `git push`
+confirmation always run before these grants.
+
 ## File mutation and undo
 
 `apply_patch` operates on one UTF-8 file per call. The request carries a

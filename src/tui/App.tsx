@@ -6,7 +6,7 @@ import wrapAnsi from 'wrap-ansi';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
 
-import type { ApprovalRequest } from '../core/approval.js';
+import type { ApprovalDecision, ApprovalRequest } from '../core/approval.js';
 import type { AgentRunResult } from '../core/runtime-types.js';
 import type { AgentRuntime } from '../cli/runtime.js';
 import {
@@ -24,7 +24,7 @@ import {
 } from '../core/session-compact.js';
 import { formatSkillCatalog } from '../core/skills.js';
 import { computeWorkspaceStats, type WorkspaceStats } from '../core/stats.js';
-import { MarkdownLine, MarkdownView } from './markdown.js';
+import { DiffView, MarkdownLine, MarkdownView, diffLineColor } from './markdown.js';
 import {
   extractCommitMessage,
   formatToolResult,
@@ -34,10 +34,12 @@ import {
 import { formatTerminalTitle, normaliseSessionTitle } from './title.js';
 import {
   parseTuiCommand,
+  nextAgentMode,
   TUI_HELP,
   completeTuiCommand,
   tuiCommandAdvice,
   type ApprovalView,
+  type AgentMode,
   type ToolView,
   type TranscriptEntry,
   type TuiCommand,
@@ -60,6 +62,7 @@ const EFFORT_COLORS: Record<ReasoningEffort, string> = {
   xhigh: 'magenta',
   max: 'red',
 };
+const BRAND_COLOR = '#D97757';
 // Slash commands that stay available while a turn is running; plain prompts
 // typed meanwhile remain in the input buffer until the active turn finishes.
 const READ_ONLY_COMMANDS: ReadonlySet<TuiCommand['kind']> = new Set([
@@ -68,6 +71,7 @@ const READ_ONLY_COMMANDS: ReadonlySet<TuiCommand['kind']> = new Set([
   'context',
   'effort',
   'plan',
+  'auto',
   'status',
   'stats',
   'config',
@@ -121,7 +125,7 @@ export interface TuiAppProps {
 
 interface PendingApproval {
   request: ApprovalRequest;
-  resolve: (approved: boolean) => void;
+  resolve: (decision: ApprovalDecision) => void;
 }
 
 function id(prefix: string): string {
@@ -309,20 +313,78 @@ export function appendToolEntryAtResponseBoundary(
   return next;
 }
 
-function welcomeEntries(): TranscriptEntry[] {
-  return [
-    {
-      id: id('system'),
-      kind: 'system',
-      content: `欢迎使用 CodeFarmer · 交互式编码工作台。
-描述要完成的任务后按回车开始；/help 查看命令，Shift+Tab 切换计划模式，Ctrl+O 显示思考过程。`,
-    },
-  ];
+function runtimeEntriesWithWelcome(runtime: AgentRuntime): TranscriptEntry[] {
+  return runtimeEntries(runtime);
 }
 
-function runtimeEntriesWithWelcome(runtime: AgentRuntime): TranscriptEntry[] {
-  const entries = runtimeEntries(runtime);
-  return entries.length === 0 ? welcomeEntries() : entries;
+export function WelcomePanel({
+  workspace,
+  sessionTitle,
+  model,
+  columns,
+}: {
+  workspace: string;
+  sessionTitle: string;
+  model: string;
+  columns: number;
+}): React.ReactElement {
+  const compact = columns < 72;
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor={BRAND_COLOR} paddingX={2}>
+      <Box>
+        <Text color={BRAND_COLOR} bold>
+          {'CodeFarmer'}
+        </Text>
+        <Text dimColor>{'  v0.1.0'}</Text>
+      </Box>
+      <Box flexDirection={compact ? 'column' : 'row'}>
+        <Box
+          flexDirection="column"
+          width={compact ? Math.max(1, columns - 8) : '42%'}
+          alignItems="center"
+        >
+          <Text color="white" bold>
+            {'Welcome back!'}
+          </Text>
+          <Text color={BRAND_COLOR} bold>
+            {'      ◆'}
+          </Text>
+          <Text dimColor wrap="truncate-end">
+            {sessionTitle}
+          </Text>
+          <Text dimColor wrap="truncate-end">
+            {workspace}
+          </Text>
+          <Text dimColor wrap="truncate-end">
+            {model}
+          </Text>
+        </Box>
+        {compact ? null : <Text color={BRAND_COLOR}>{'│'}</Text>}
+        <Box flexDirection="column" paddingLeft={compact ? 0 : 2} flexGrow={1}>
+          <Text color={BRAND_COLOR} bold>
+            {'Tips for getting started'}
+          </Text>
+          <Text dimColor wrap="truncate-end">
+            {'Run /init to create workspace instructions for the agent.'}
+          </Text>
+          <Text dimColor wrap="truncate-end">
+            {'Describe a task in plain language and press Enter.'}
+          </Text>
+          <Text dimColor wrap="truncate-end">
+            {'Use /help for sessions, workspace, permissions, and debug commands.'}
+          </Text>
+          <Box marginTop={1}>
+            <Text color={BRAND_COLOR} bold>
+              {"What's new"}
+            </Text>
+          </Box>
+          <Text dimColor wrap="truncate-end">
+            {'Queued follow-up tasks, scoped approvals, and a quieter workbench.'}
+          </Text>
+        </Box>
+      </Box>
+    </Box>
+  );
 }
 
 function displayError(error: unknown): string {
@@ -385,8 +447,11 @@ export function formatWorkspaceStats(stats: WorkspaceStats): string {
           const model = stat.model.length > 28 ? `${stat.model.slice(0, 27)}…` : stat.model;
           return `  ${model.padEnd(28, ' ')} ${usageBar(stat.usage.totalTokens / maxTokens, 20)} ${formatNumber(stat.usage.totalTokens).padStart(10, ' ')}  ${cost}`;
         });
-  const statusLines = (Object.entries(stats.statusCounts) as [keyof WorkspaceStats['statusCounts'], number][]).map(
-    ([status, count]) => `  ${statusLabels[status].padEnd(9, ' ')} ${usageBar(count / maxStatus, 12)} ${String(count)}`,
+  const statusLines = (
+    Object.entries(stats.statusCounts) as [keyof WorkspaceStats['statusCounts'], number][]
+  ).map(
+    ([status, count]) =>
+      `  ${statusLabels[status].padEnd(9, ' ')} ${usageBar(count / maxStatus, 12)} ${String(count)}`,
   );
   return [
     `Sessions    ${formatNumber(stats.totalSessions)} (usage ${formatNumber(stats.sessionsWithUsage)})`,
@@ -420,7 +485,13 @@ function statsLineColor(line: string): StatsColor {
   return 'gray';
 }
 
-function StatsView({ content, marginBottom = 0 }: { content: string; marginBottom?: number }): React.ReactElement {
+function StatsView({
+  content,
+  marginBottom = 0,
+}: {
+  content: string;
+  marginBottom?: number;
+}): React.ReactElement {
   return (
     <Box paddingLeft={2} flexDirection="column" marginBottom={marginBottom}>
       {content.split('\n').map((line, index) => (
@@ -450,7 +521,57 @@ const THINKING_PHRASES = [
   '生成回复',
 ];
 
+// Thinking state renders as a scan-light text effect instead of a skeleton
+// bar or typewriter: the full phrase sits dimmed while a bright band sweeps
+// left-to-right across it, lighting up each character as it passes, like a
+// torch gliding over the text.
+const SCAN_BAND = 3; // number of characters lit up at once
+
+function ThinkingText(): React.ReactElement {
+  const [phraseIndex, setPhraseIndex] = useState(() =>
+    Math.floor(Math.random() * THINKING_PHRASES.length),
+  );
+  const [pos, setPos] = useState(0);
+  const phrase = THINKING_PHRASES[phraseIndex] ?? '分析上下文';
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setPos((previous) => {
+        // One full sweep (the band crosses every char), then move to the next phrase.
+        if (previous >= phrase.length + SCAN_BAND) {
+          setPhraseIndex((i) => (i + 1) % THINKING_PHRASES.length);
+          return 0;
+        }
+        return previous + 1;
+      });
+    }, 55);
+    return () => clearInterval(timer);
+  }, [phrase]);
+
+  const chars = Array.from(phrase);
+  return (
+    <Text bold>
+      {chars.map((ch, i) => {
+        const lit = i >= pos - SCAN_BAND && i < pos;
+        return lit ? (
+          <Text key={i} color="yellow">
+            {ch}
+          </Text>
+        ) : (
+          <Text key={i} color="yellow" dimColor>
+            {ch}
+          </Text>
+        );
+      })}
+      <Text dimColor>…</Text>
+    </Text>
+  );
+}
+
 function Spinner({ label }: { label: string }): React.ReactElement {
+  if (label === 'Thinking') {
+    return <ThinkingText />;
+  }
   const [frame, setFrame] = useState(0);
   const [phraseIndex, setPhraseIndex] = useState(() =>
     Math.floor(Math.random() * THINKING_PHRASES.length),
@@ -643,6 +764,14 @@ export function EntryView({
     return <StatsView content={entry.content} marginBottom={marginBottom} />;
   }
 
+  if (entry.display === 'diff') {
+    return (
+      <Box paddingLeft={2} flexDirection="column" marginBottom={marginBottom}>
+        <DiffView content={entry.content} />
+      </Box>
+    );
+  }
+
   return (
     <Box key={entry.id} marginBottom={marginBottom}>
       <Text color={entry.kind === 'error' ? 'red' : 'yellow'} wrap="wrap">
@@ -732,6 +861,14 @@ function estimateEntryLines(
       lines += wrapToLines(entry.tool.error, Math.max(1, width - 3)).length;
     }
     return margin + lines;
+  }
+  if (entry.display === 'diff') {
+    return (
+      margin +
+      entry.content
+        .split(/\r?\n/u)
+        .reduce((total, line) => total + wrapToLines(line, bodyWidth).length, 0)
+    );
   }
   return margin + wrapToLines(entry.content, width).length;
 }
@@ -890,6 +1027,21 @@ function ClippedEntryImpl({
         {line}
       </Text>
     ));
+  } else if (entry.display === 'diff') {
+    const lines = entry.content.split(/\r?\n/u);
+    takeLines(lines, (line, index) => {
+      const color = diffLineColor(line);
+      return (
+        <Text
+          key={index}
+          {...(color === undefined ? {} : { color })}
+          bold={color === 'cyan'}
+          wrap="truncate-end"
+        >
+          {`  ${line}`}
+        </Text>
+      );
+    });
   } else {
     takeLines(wrapToLines(entry.content, width), (line, index) => (
       <Text key={index} color={entry.kind === 'error' ? 'red' : 'yellow'} wrap="truncate-end">
@@ -933,7 +1085,7 @@ export function ApprovalModal({
       maxHeight={maximumHeight}
       overflow="hidden"
       flexDirection="column"
-      borderStyle="double"
+      borderStyle="single"
       borderColor="yellow"
       paddingX={2}
       paddingY={1}
@@ -949,10 +1101,17 @@ export function ApprovalModal({
       </Text>
       <Box marginTop={1}>
         <Text color="green" bold>
-          {'[Y] Allow'}{' '}
+          {'[Y] once'}{' '}
         </Text>
-        <Text dimColor>{'  '}</Text>
-        <Text color="red">{'[Enter / N / Esc] Deny'}</Text>
+        <Text color="cyan" bold>
+          {'[S] session'}
+          {'  '}
+        </Text>
+        <Text color="magenta" bold>
+          {'[W] workspace'}
+          {'  '}
+        </Text>
+        <Text color="red">{'[N / Enter] deny'}</Text>
       </Box>
     </Box>
   );
@@ -1044,7 +1203,7 @@ export function TuiApp({
   // accidentally starting a second turn or clearing the active one.
   const busyRef = useRef(false);
   const [status, setStatus] = useState('Ready');
-  const [planMode, setPlanMode] = useState(initialPlanMode);
+  const [agentMode, setAgentMode] = useState<AgentMode>(initialPlanMode ? 'plan' : 'code');
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   // Ctrl+O 切换：是否在助手消息上方展示推理摘要（思考过程）。
   const [showThinking, setShowThinking] = useState(initialShowThinking);
@@ -1107,8 +1266,8 @@ export function TuiApp({
     setApproval({ request: next.request });
   }, []);
 
-  const requestApproval = useCallback(
-    (request: ApprovalRequest): Promise<boolean> =>
+  const requestApprovalDecision = useCallback(
+    (request: ApprovalRequest): Promise<ApprovalDecision> =>
       new Promise((resolve) => {
         approvalQueueRef.current.push({ request, resolve });
         pumpApproval();
@@ -1116,13 +1275,19 @@ export function TuiApp({
     [pumpApproval],
   );
 
+  const requestApproval = useCallback(
+    async (request: ApprovalRequest): Promise<boolean> =>
+      (await requestApprovalDecision(request)).approved,
+    [requestApprovalDecision],
+  );
+
   const resolveApproval = useCallback(
-    (approved: boolean): void => {
+    (decision: ApprovalDecision): void => {
       const current = currentApprovalRef.current;
       if (current === undefined) return;
       currentApprovalRef.current = undefined;
       setApproval(null);
-      current.resolve(approved);
+      current.resolve(decision);
       pumpApproval();
     },
     [pumpApproval],
@@ -1130,12 +1295,16 @@ export function TuiApp({
 
   useEffect(() => {
     bridge.setApprovalHandler(requestApproval);
+    bridge.setApprovalDecisionHandler(requestApprovalDecision);
     return () => {
       bridge.setApprovalHandler(undefined);
+      bridge.setApprovalDecisionHandler(undefined);
       const current = currentApprovalRef.current;
       currentApprovalRef.current = undefined;
-      current?.resolve(false);
-      for (const pending of approvalQueueRef.current.splice(0)) pending.resolve(false);
+      current?.resolve({ approved: false, scope: 'once' });
+      for (const pending of approvalQueueRef.current.splice(0)) {
+        pending.resolve({ approved: false, scope: 'once' });
+      }
     };
   }, [bridge, requestApproval]);
 
@@ -1200,18 +1369,32 @@ export function TuiApp({
   }, [bridge, handleToolEvent]);
 
   const appendSystem = useCallback(
-    (content: string, kind: 'system' | 'error' = 'system', display?: 'stats'): void => {
-    setEntries((previous) => [
-      ...previous,
-      { id: id(kind), kind, content, ...(display === undefined ? {} : { display }) },
-    ]);
-  }, []);
+    (content: string, kind: 'system' | 'error' = 'system', display?: 'stats' | 'diff'): void => {
+      setEntries((previous) => [
+        ...previous,
+        { id: id(kind), kind, content, ...(display === undefined ? {} : { display }) },
+      ]);
+    },
+    [],
+  );
 
-  const togglePlanMode = useCallback((): void => {
-    const next = !planMode;
-    setPlanMode(next);
-    appendSystem(next ? 'Plan mode enabled: read-only research, no edits.' : 'Plan mode disabled.');
-  }, [appendSystem, planMode]);
+  const setMode = useCallback(
+    (mode: AgentMode): void => {
+      setAgentMode(mode);
+      appendSystem(
+        mode === 'plan'
+          ? 'Plan mode enabled: read-only research, no edits.'
+          : mode === 'auto'
+            ? 'Auto mode enabled: the agent will plan, execute, and auto-approve ordinary operations.'
+            : 'Code mode enabled: ordinary mutations require the configured approval policy.',
+      );
+    },
+    [appendSystem],
+  );
+
+  const cycleAgentMode = useCallback((): void => {
+    setMode(nextAgentMode(agentMode));
+  }, [agentMode, setMode]);
 
   const swapRuntime = useCallback((next: AgentRuntime): void => {
     runtimeRef.current = next;
@@ -1241,7 +1424,6 @@ export function TuiApp({
       options?: RunPromptOptions,
     ): Promise<AgentRunResult | undefined> => {
       const nested = options?.nested === true;
-      if (busyRef.current && !nested) return undefined;
       const assistantId = id('assistant');
       // A run may contain several model responses separated by tool calls.
       // Keep each response in its own transcript entry instead of appending
@@ -1273,92 +1455,111 @@ export function TuiApp({
       const controller = new AbortController();
       controllerRef.current = controller;
       const activeRuntime = runtimeRef.current;
+      const handleProviderEvent = (event: ProviderEvent): void => {
+        if (event.type === 'text_delta') {
+          const currentAssistantId = ensureAssistantEntry();
+          activeAssistant.hasOutput ||= event.delta.length > 0;
+          deltaBufferRef.current += event.delta;
+          deltaFlushTimerRef.current ??= setInterval(
+            () => flushDeltaBuffer(currentAssistantId),
+            60,
+          );
+        } else if (event.type === 'reasoning_delta') {
+          const currentAssistantId = ensureAssistantEntry();
+          activeAssistant.hasOutput ||= event.delta.length > 0;
+          reasoningBufferRef.current += event.delta;
+          deltaFlushTimerRef.current ??= setInterval(
+            () => flushDeltaBuffer(currentAssistantId),
+            60,
+          );
+        } else if (event.type === 'reasoning_effort') {
+          const previous = lastReasoningEffortRef.current;
+          lastReasoningEffortRef.current = event.effort;
+          if (previous === undefined)
+            appendSystem(`The model chose reasoning effort ${event.effort}.`);
+          else if (previous !== event.effort)
+            appendSystem(
+              `The model switched reasoning effort from ${previous} to ${event.effort}.`,
+            );
+        } else if (
+          event.type === 'response_completed' &&
+          event.outputText !== undefined &&
+          event.outputText.length > 0 &&
+          !activeAssistant.hasOutput
+        ) {
+          const currentAssistantId = ensureAssistantEntry();
+          activeAssistant.hasOutput = true;
+          deltaBufferRef.current += event.outputText;
+          deltaFlushTimerRef.current ??= setInterval(
+            () => flushDeltaBuffer(currentAssistantId),
+            60,
+          );
+        } else if (event.type === 'usage') {
+          setUsage(event.usage);
+        } else if (event.type === 'tool_call') {
+          const currentAssistantId = activeAssistant.id;
+          if (currentAssistantId !== undefined) flushDeltaBuffer(currentAssistantId);
+          activeAssistant.id = undefined;
+          activeAssistant.hasOutput = false;
+          const call = event.call;
+          const tool: ToolView = {
+            callId: call.callId,
+            name: call.name,
+            status: 'requested',
+            arguments: call.arguments,
+          };
+          setEntries((previous) => {
+            if (previous.some((entry) => entry.tool?.callId === call.callId)) return previous;
+            return appendToolEntryAtResponseBoundary(
+              previous,
+              currentAssistantId,
+              activeAssistant.hasOutput,
+              { id: `tool-${call.callId}`, kind: 'tool', content: call.name, tool },
+            );
+          });
+          setStatus(`Preparing ${call.name}`);
+        }
+      };
+      let unsubscribe: (() => void) | undefined;
       try {
-        const result = await activeRuntime.runner.run(prompt, {
-          ...(options?.ephemeral === true || activeRuntime.session === undefined
-            ? {}
-            : { session: activeRuntime.session }),
-          history: options?.ephemeral === true ? false : true,
-          signal: controller.signal,
-          ...(options?.plan === true || planMode ? { plan: true } : {}),
-          ...(selectedSkills.length === 0 ? {} : { skills: selectedSkills }),
-          onEvent: (event: ProviderEvent) => {
-            if (event.type === 'text_delta') {
-              const currentAssistantId = ensureAssistantEntry();
-              activeAssistant.hasOutput ||= event.delta.length > 0;
-              deltaBufferRef.current += event.delta;
-              deltaFlushTimerRef.current ??= setInterval(
-                () => flushDeltaBuffer(currentAssistantId),
-                60,
-              );
-            } else if (event.type === 'reasoning_delta') {
-              const currentAssistantId = ensureAssistantEntry();
-              activeAssistant.hasOutput ||= event.delta.length > 0;
-              reasoningBufferRef.current += event.delta;
-              deltaFlushTimerRef.current ??= setInterval(
-                () => flushDeltaBuffer(currentAssistantId),
-                60,
-              );
-            } else if (event.type === 'reasoning_effort') {
-              const previous = lastReasoningEffortRef.current;
-              lastReasoningEffortRef.current = event.effort;
-              if (previous === undefined) {
-                appendSystem(`The model chose reasoning effort ${event.effort}.`);
-              } else if (previous !== event.effort) {
-                appendSystem(
-                  `The model switched reasoning effort from ${previous} to ${event.effort}.`,
-                );
-              }
-            } else if (
-              event.type === 'response_completed' &&
-              event.outputText !== undefined &&
-              event.outputText.length > 0 &&
-              !activeAssistant.hasOutput
-            ) {
-              const currentAssistantId = ensureAssistantEntry();
-              activeAssistant.hasOutput = true;
-              deltaBufferRef.current += event.outputText;
-              deltaFlushTimerRef.current ??= setInterval(
-                () => flushDeltaBuffer(currentAssistantId),
-                60,
-              );
-            } else if (event.type === 'usage') {
-              setUsage(event.usage);
-            } else if (event.type === 'tool_call') {
-              const currentAssistantId = activeAssistant.id;
-              if (currentAssistantId !== undefined) {
-                flushDeltaBuffer(currentAssistantId);
-              }
-              // The next model response must start a fresh entry after the
-              // tool result instead of joining text from the prior turn.
-              activeAssistant.id = undefined;
-              activeAssistant.hasOutput = false;
-              const call = event.call;
-              const tool: ToolView = {
-                callId: call.callId,
-                name: call.name,
-                status: 'requested',
-                arguments: call.arguments,
-              };
-              setEntries((previous) => {
-                if (previous.some((entry) => entry.tool?.callId === call.callId)) return previous;
-                const toolEntry: TranscriptEntry = {
-                  id: `tool-${call.callId}`,
-                  kind: 'tool',
-                  content: call.name,
-                  tool,
-                };
-                return appendToolEntryAtResponseBoundary(
-                  previous,
-                  currentAssistantId,
-                  activeAssistant.hasOutput,
-                  toolEntry,
-                );
-              });
-              setStatus(`Preparing ${call.name}`);
+        const turnPlan = options?.plan === true || agentMode === 'plan';
+        const turnAuto = options?.plan !== true && agentMode === 'auto';
+        let result: AgentRunResult;
+        if (activeRuntime.orchestrator !== undefined && options?.ephemeral !== true) {
+          const queued = activeRuntime.orchestrator.enqueue(prompt, {
+            displayPrompt,
+            ...(turnPlan ? { plan: true } : {}),
+            ...(turnAuto ? { auto: true } : {}),
+            ...(selectedSkills.length === 0 ? {} : { skills: selectedSkills }),
+          });
+          unsubscribe = activeRuntime.orchestrator.subscribe((event) => {
+            if (event.type === 'provider_event' && event.turn.id === queued.turn.id) {
+              handleProviderEvent(event.event);
             }
-          },
-        });
+            if (event.type === 'turn_started' && event.turn.id === queued.turn.id)
+              setStatus('Thinking');
+            if (
+              event.type === 'turn_queued' &&
+              event.turn.id === queued.turn.id &&
+              event.position > 1
+            ) {
+              setStatus(`Queued (${String(event.position - 1)} ahead)`);
+            }
+          });
+          result = await queued.promise;
+        } else {
+          result = await activeRuntime.runner.run(prompt, {
+            ...(options?.ephemeral === true || activeRuntime.session === undefined
+              ? {}
+              : { session: activeRuntime.session }),
+            history: options?.ephemeral === true ? false : true,
+            signal: controller.signal,
+            ...(turnPlan ? { plan: true } : {}),
+            ...(turnAuto ? { auto: true } : {}),
+            ...(selectedSkills.length === 0 ? {} : { skills: selectedSkills }),
+            onEvent: handleProviderEvent,
+          });
+        }
         if (activeAssistant.id !== undefined) flushDeltaBuffer(activeAssistant.id);
         setUsage(result.usage);
         setEntries((previous) => {
@@ -1401,18 +1602,21 @@ export function TuiApp({
         setStatus('Error');
         return undefined;
       } finally {
+        unsubscribe?.();
         if (deltaFlushTimerRef.current !== undefined) {
           clearInterval(deltaFlushTimerRef.current);
           deltaFlushTimerRef.current = undefined;
         }
         controllerRef.current = undefined;
         if (!nested) {
-          busyRef.current = false;
-          setBusy(false);
+          const currentState = activeRuntime.orchestrator?.snapshot().state;
+          const stillBusy = currentState !== undefined && currentState !== 'idle';
+          busyRef.current = stillBusy;
+          setBusy(stillBusy);
         }
       }
     },
-    [appendSystem, flushDeltaBuffer, planMode, selectedSkills],
+    [agentMode, appendSystem, flushDeltaBuffer, selectedSkills],
   );
 
   const runCommand = useCallback(
@@ -1422,13 +1626,15 @@ export function TuiApp({
         return;
       }
       if (command.kind === 'quit') {
+        runtimeRef.current.orchestrator?.cancelActive();
         controllerRef.current?.abort();
         exit();
         return;
       }
       if (command.kind === 'cancel') {
-        if (controllerRef.current !== undefined) {
-          controllerRef.current.abort();
+        const cancelled = runtimeRef.current.orchestrator?.cancelActive() ?? false;
+        if (cancelled || controllerRef.current !== undefined) {
+          controllerRef.current?.abort();
           setStatus('Cancelling');
         } else {
           appendSystem('No active turn.');
@@ -1515,7 +1721,8 @@ export function TuiApp({
               `Session    ${active.session?.id ?? 'none'}`,
               `Model      ${active.config.model} (${active.config.reasoning}, ${active.config.verbosity})`,
               `Reasoning  summary ${active.config.reasoningSummary}`,
-              `Approval   ${active.config.approval}`,
+              `Mode       ${agentMode.toUpperCase()}`,
+              `Approval   ${agentMode === 'auto' ? 'auto (protected operations still confirm)' : active.config.approval}`,
               `Skills     ${selectedSkills.length === 0 ? 'none selected' : selectedSkills.join(', ')}`,
               `Base URL   ${active.config.baseURL}`,
               `Git        ${gitLine}`,
@@ -1641,15 +1848,23 @@ export function TuiApp({
           }
         } else if (command.kind === 'plan') {
           if (command.value.length === 0) {
-            togglePlanMode();
+            setMode(agentMode === 'plan' ? 'code' : 'plan');
           } else if (command.value === 'on') {
-            setPlanMode(true);
-            appendSystem('Plan mode enabled: read-only research, no edits.');
+            setMode('plan');
           } else if (command.value === 'off') {
-            setPlanMode(false);
-            appendSystem('Plan mode disabled.');
+            setMode('code');
           } else {
             appendSystem(`Invalid plan mode "${command.value}". Choices: on | off`, 'error');
+          }
+        } else if (command.kind === 'auto') {
+          if (command.value.length === 0) {
+            setMode(agentMode === 'auto' ? 'code' : 'auto');
+          } else if (command.value === 'on') {
+            setMode('auto');
+          } else if (command.value === 'off') {
+            setMode('code');
+          } else {
+            appendSystem(`Invalid auto mode "${command.value}". Choices: on | off`, 'error');
           }
         } else if (command.kind === 'config') {
           appendSystem(JSON.stringify(runtimeRef.current.config, null, 2));
@@ -1733,7 +1948,7 @@ export function TuiApp({
             if (result.exitCode !== 0) {
               appendSystem(result.stderr.trim() || 'Unable to show the Git diff.');
             } else {
-              appendSystem(result.stdout || '(no diff)');
+              appendSystem(result.stdout || '(no diff)', 'system', 'diff');
             }
           }
         } else if (command.kind === 'commit') {
@@ -1847,13 +2062,14 @@ export function TuiApp({
     },
     [
       appendSystem,
+      agentMode,
       exit,
       requestApproval,
       runPrompt,
       runtimeFactory,
       selectedSkills,
+      setMode,
       swapRuntime,
-      togglePlanMode,
       usage,
     ],
   );
@@ -1886,13 +2102,17 @@ export function TuiApp({
       if (input.startsWith('[<')) return;
       if (approval !== null) {
         if (key.ctrl && input.toLowerCase() === 'c') {
-          resolveApproval(false);
+          resolveApproval({ approved: false, scope: 'once' });
           controllerRef.current?.abort();
           setStatus('Cancelling');
         } else if (input.toLowerCase() === 'y') {
-          resolveApproval(true);
+          resolveApproval({ approved: true, scope: 'once' });
+        } else if (input.toLowerCase() === 's') {
+          resolveApproval({ approved: true, scope: 'session' });
+        } else if (input.toLowerCase() === 'w') {
+          resolveApproval({ approved: true, scope: 'workspace' });
         } else if (key.return || key.escape || input.toLowerCase() === 'n') {
-          resolveApproval(false);
+          resolveApproval({ approved: false, scope: 'once' });
         }
         return;
       }
@@ -1945,7 +2165,7 @@ export function TuiApp({
       // (non-alphanumeric keys arrive as ''), so the sequence must be matched
       // on the Key object, not on `input`.
       if (key.tab && key.shift) {
-        togglePlanMode();
+        cycleAgentMode();
         return;
       }
       if (key.tab) {
@@ -2141,44 +2361,54 @@ export function TuiApp({
   const cursorDraft = `${draft.slice(0, cursor)}|${draft.slice(cursor)}`;
   const advice = cursor === draft.length ? tuiCommandAdvice(draft) : '';
   const approvalView = approval;
-  const modeLabel = planMode ? 'PLAN' : 'CODE';
-  const modeColor = planMode ? 'magenta' : 'cyan';
+  const modeLabel = agentMode.toUpperCase();
+  const modeColor = agentMode === 'plan' ? 'magenta' : agentMode === 'auto' ? 'green' : 'cyan';
   const activityLabel = busy ? 'WORKING' : 'READY';
   const activityColor = busy ? 'yellow' : 'green';
+  const showWelcome = (runtime.session?.messages.length ?? 0) === 0 && entries.length === 0;
 
   return (
     <Box flexDirection="column" height="100%" width="100%" paddingX={1}>
-      <Box flexDirection="column" borderStyle="round" borderColor={modeColor} paddingX={1}>
-        <Box justifyContent="space-between">
-          <Text bold color="cyan">
-            {'CodeFarmer'} <Text dimColor>{'CODING WORKBENCH'}</Text>
-          </Text>
-          <Text color={activityColor} bold>
-            {`● ${activityLabel}`}
-          </Text>
+      {showWelcome ? null : (
+        <Box flexDirection="column" paddingX={1} backgroundColor="#1a1a1a">
+          <Box justifyContent="space-between">
+            <Text bold color="cyan">
+              {'CodeFarmer'} <Text dimColor>{'· WORKSPACE SESSION'}</Text>
+            </Text>
+            <Text color={activityColor} bold>
+              {`● ${activityLabel}`}
+            </Text>
+          </Box>
+          <Box justifyContent="space-between">
+            <Text dimColor wrap="truncate-middle">
+              <Text color="gray">{'workspace  '}</Text>
+              {runtime.workspace}
+            </Text>
+            <Text dimColor wrap="truncate-middle">
+              <Text color="gray">{'session  '}</Text>
+              {sessionTitle}
+              <Text color="gray">{`  ${sessionId.slice(0, 8)}`}</Text>
+            </Text>
+          </Box>
         </Box>
-        <Box justifyContent="space-between">
-          <Text dimColor wrap="truncate-middle">
-            <Text color="gray">{'WORKSPACE  '}</Text>
-            {runtime.workspace}
-          </Text>
-          <Text dimColor wrap="truncate-middle">
-            <Text color="gray">{'SESSION  '}</Text>
-            {sessionTitle}
-            <Text color="gray">{`  ${sessionId.slice(0, 8)}`}</Text>
-          </Text>
-        </Box>
-      </Box>
+      )}
       <Box
         flexDirection="column"
-        justifyContent={atBottom ? 'flex-end' : 'flex-start'}
+        justifyContent={showWelcome ? 'flex-start' : atBottom ? 'flex-end' : 'flex-start'}
         height={transcriptHeight}
         flexShrink={1}
         minHeight={0}
         overflow="hidden"
         paddingTop={1}
       >
-        {entries.length === 0 ? (
+        {showWelcome ? (
+          <WelcomePanel
+            workspace={runtime.workspace}
+            sessionTitle={sessionTitle}
+            model={runtime.config.model}
+            columns={contentWidth}
+          />
+        ) : entries.length === 0 ? (
           <Box flexDirection="column" paddingLeft={2}>
             <Text color="cyan" bold>
               {'Start a task'}
@@ -2229,29 +2459,33 @@ export function TuiApp({
       {effortPicker === null ? null : (
         <EffortPicker current={runtime.config.reasoning} selected={effortPicker} />
       )}
-      <Box
-        flexDirection="column"
-        borderStyle="round"
-        borderColor={busy ? 'yellow' : modeColor}
-        paddingX={1}
-      >
+      <Box justifyContent="flex-end" paddingX={1}>
+        <Text dimColor>
+          {'● '}
+          {runtime.config.reasoning}
+          {' · /effort'}
+        </Text>
+      </Box>
+      <Text color={busy ? 'yellow' : 'gray'}>{'─'.repeat(contentWidth)}</Text>
+      <Box flexDirection="column" paddingX={1}>
         <Text color={modeColor} bold>
-          {`${modeLabel} PROMPT`}
+          {'> '}
           <Text dimColor>
-            {busy ? '  Queue a follow-up while this turn runs' : '  Enter to run'}
+            {busy
+              ? `${String(runtime.orchestrator?.snapshot().queuedTurns.length ?? 0)} queued · Enter to add`
+              : 'Enter to run'}
           </Text>
         </Text>
         <Box>
-          <Text color={modeColor} bold>
-            {'› '}
-          </Text>
           {draft.length === 0 ? (
             <Text dimColor wrap="truncate-end">
               {busy
                 ? '输入下一条指令…'
-                : planMode
+                : agentMode === 'plan'
                   ? '计划模式仅进行只读探索'
-                  : '描述要完成的任务，或输入 /help'}
+                  : agentMode === 'auto'
+                    ? '自动模式将先制定计划，再执行并验证'
+                    : '描述要完成的任务，或输入 /help'}
             </Text>
           ) : (
             <Text wrap="truncate-end">
@@ -2261,15 +2495,15 @@ export function TuiApp({
           )}
         </Box>
       </Box>
+      <Text color={busy ? 'yellow' : 'gray'}>{'─'.repeat(contentWidth)}</Text>
       <Box justifyContent="space-between">
         <Text dimColor wrap="truncate-end">
-          {status} {' · '}
-          <Text color={modeColor}>{modeLabel}</Text>
-          {showThinking ? ' · thinking' : ''} {' · '}
-          {runtime.config.model}
+          {agentMode === 'auto' ? 'auto approval' : `${runtime.config.approval} approval`}
+          {' · Shift+Tab mode · ? /help'}
+          {showThinking ? ' · thinking' : ''}
           {atBottom ? '' : ` · ↑ ${String(clampedTop)}/${String(maximumTop)} (PgDn latest)`}
         </Text>
-        <Text dimColor>{`${String(usage.totalTokens)} tokens · ${runtime.config.approval}`}</Text>
+        <Text dimColor>{`${status} · ${modeLabel} · ${String(usage.totalTokens)} tokens`}</Text>
       </Box>
     </Box>
   );

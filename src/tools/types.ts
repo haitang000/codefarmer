@@ -69,6 +69,10 @@ export interface ToolCallResult {
 
 /** Notifications emitted while a registered tool is being evaluated. */
 export interface ToolLifecycleHooks {
+  /** A veto point for integrations that need to stop a tool before execution. */
+  beforeTool?: (call: ToolCall) => void | Promise<void>;
+  /** Post-tool observers must not change the tool result. */
+  afterTool?: (call: ToolCall, result: ToolResult) => void | Promise<void>;
   onToolStart?: (call: ToolCall) => void | Promise<void>;
   onToolResult?: (call: ToolCall, result: ToolResult) => void | Promise<void>;
   onApprovalRequest?: (request: ApprovalRequest, call?: ToolCall) => void | Promise<void>;
@@ -84,6 +88,8 @@ export interface ToolExecutionOptions {
   hooks?: ToolLifecycleHooks;
   /** When true, mutating tools are rejected with PLAN_MODE_FORBIDDEN. */
   plan?: boolean;
+  /** Auto-approve ordinary mutations for this turn; protected operations still prompt. */
+  autoApprove?: boolean;
   /** The originating call, populated by ToolRegistry for lifecycle observers. */
   call?: ToolCall;
 }

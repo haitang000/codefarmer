@@ -1,4 +1,4 @@
-import type { ApprovalRequest } from '../core/approval.js';
+import type { ApprovalDecision, ApprovalRequest } from '../core/approval.js';
 import {
   createAgentRuntime,
   type AgentRuntime,
@@ -11,6 +11,7 @@ import type { TuiToolEvent } from './types.js';
 import type { ProviderToolCall } from '../types.js';
 
 type ApprovalHandler = (request: ApprovalRequest) => Promise<boolean>;
+type ApprovalDecisionHandler = (request: ApprovalRequest) => Promise<ApprovalDecision>;
 type ToolEventHandler = (event: TuiToolEvent) => void;
 
 /**
@@ -20,11 +21,17 @@ type ToolEventHandler = (event: TuiToolEvent) => void;
  */
 export class TuiInteractionBridge {
   private approvalHandler: ApprovalHandler | undefined;
+  private approvalDecisionHandler: ApprovalDecisionHandler | undefined;
   private toolEventHandler: ToolEventHandler | undefined;
 
   public readonly approvalPrompt: ApprovalHandler = async (request) => {
     const handler = this.approvalHandler;
     return handler === undefined ? false : handler(request);
+  };
+
+  public readonly approvalDecisionPrompt: ApprovalDecisionHandler = async (request) => {
+    const handler = this.approvalDecisionHandler;
+    return handler === undefined ? { approved: false, scope: 'once' } : handler(request);
   };
 
   public readonly toolHooks: ToolLifecycleHooks = {
@@ -48,6 +55,10 @@ export class TuiInteractionBridge {
 
   public setApprovalHandler(handler: ApprovalHandler | undefined): void {
     this.approvalHandler = handler;
+  }
+
+  public setApprovalDecisionHandler(handler: ApprovalDecisionHandler | undefined): void {
+    this.approvalDecisionHandler = handler;
   }
 
   public setToolEventHandler(handler: ToolEventHandler | undefined): void {
@@ -97,6 +108,7 @@ export function createTuiRuntimeFactory(
     const agentOptions: AgentRuntimeOptions = {
       history: true,
       approvalPrompt: bridge.approvalPrompt,
+      approvalDecisionPrompt: bridge.approvalDecisionPrompt,
       interactive: true,
       toolHooks: bridge.toolHooks,
       ...(sessionId === undefined ? {} : { sessionId }),

@@ -614,6 +614,42 @@ describe('AgentRunner', () => {
     expect(provider.requests).toHaveLength(1);
   });
 
+  it('uses one small no-reasoning recovery for DeepSeek v4 length stops', async () => {
+    const workspace = await temporaryWorkspace();
+    const provider = new RecordingScriptedProvider([
+      [
+        {
+          type: 'response_completed',
+          responseId: 'response-deepseek-length',
+          finishReason: 'length',
+        },
+      ],
+      [
+        { type: 'text_delta', delta: '已完成。' },
+        {
+          type: 'response_completed',
+          responseId: 'response-deepseek-recovered',
+          outputText: '已完成。',
+        },
+      ],
+    ]);
+    const agent = await runner(workspace, provider, {
+      model: 'deepseek-v4-flash',
+      maxOutputTokens: 2_048,
+    });
+
+    const result = await agent.run('完成任务', { history: false });
+
+    expect(result.message).toBe('已完成。');
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests[1]).toMatchObject({
+      reasoning: 'none',
+      verbosity: 'low',
+      reasoningSummary: 'none',
+      maxOutputTokens: 768,
+    });
+  });
+
   it('completes when the stream ends without a response.completed event', async () => {
     const workspace = await temporaryWorkspace();
     const provider = new RecordingScriptedProvider([

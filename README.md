@@ -78,6 +78,12 @@ When attached to a TTY, `codefarmer` opens the full-screen terminal UI. The
 same UI is available explicitly with `codefarmer tui` or `codefarmer chat`.
 Use `run --json` for one-shot automation and CI.
 
+The full-screen session uses a single-workbench model: you can type follow-up
+tasks while a turn is running and CodeFarmer executes them serially from a
+bounded in-memory queue. File and command approvals support one-time, current
+session, and current workspace grants. Workspace grants are stored under the
+user data directory and never expand the workspace boundary.
+
 `init` creates `codefarmer.config.json` in the current workspace with a JSON
 Schema reference. Prefer a guided flow? `codefarmer setup` walks through
 provider, model, Base URL, reasoning effort, and approval policy interactively,
@@ -96,8 +102,8 @@ parent Git repository.
 | `codefarmer setup`                              | Interactive wizard for model, Base URL, reasoning, and approval          |
 | `codefarmer chat`                               | Open a TUI session (optionally with `--session`)                         |
 | `codefarmer run "<task>"`                       | Run one task, suitable for scripts and CI                                |
-| `codefarmer skills list`                         | List discovered Codex-compatible skills                                  |
-| `codefarmer skills show <ref> [path]`            | Print a skill or one of its text resources                               |
+| `codefarmer skills list`                        | List discovered Codex-compatible skills                                  |
+| `codefarmer skills show <ref> [path]`           | Print a skill or one of its text resources                               |
 | `codefarmer status`                             | Show workspace, Git, configuration, and recent-session status            |
 | `codefarmer stats`                              | Show aggregate token usage and estimated cost across local sessions      |
 | `codefarmer undo`                               | Revert the latest eligible patch transaction                             |
@@ -152,7 +158,15 @@ fails with exit code `3`; it is never implicitly accepted.
 The TUI keeps the conversation, tool lifecycle, approvals, workspace state, and
 session actions in one alternate-screen interface. It streams model output and
 shows each tool as it moves from running to succeeded or failed. Mutating tools
-pause in an approval modal; only an explicit `y` accepts the operation.
+pause in an approval modal under the default `ask` policy; only an explicit `y`
+accepts the operation.
+
+Press `Shift+Tab` to cycle through `CODE`, `PLAN`, and `AUTO`. `PLAN` is
+read-only and stops after producing an implementation plan. `AUTO` derives a
+plan from the prompt, then implements and validates it while automatically
+approving ordinary workspace operations. Protected operations such as
+`git push` still require explicit confirmation. The same modes can be selected
+with `/plan [on|off]` and `/auto [on|off]`.
 
 | TUI command     | Action                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------ |
@@ -162,11 +176,13 @@ pause in an approval modal; only an explicit `y` accepts the operation.
 | `/context`      | Show context messages and token usage                                                      |
 | `/compact`      | Compress early messages of the current session into a summary (suggested on long sessions) |
 | `/effort`       | Open the reasoning effort picker (↑/↓ + Enter)                                             |
+| `/plan [on/off]` | Enable or disable read-only planning mode                                                  |
+| `/auto [on/off]` | Enable or disable automatic plan-and-execute mode                                          |
 | `/config`       | Show effective configuration                                                               |
 | `/sessions`     | List saved sessions                                                                        |
 | `/resume <id>`  | Switch to a saved session                                                                  |
 | `/delete <id>`  | Delete a non-active local session                                                          |
-| `/diff`         | Show current Git diff                                                                      |
+| `/diff`         | Show current Git diff with colored additions, removals, headers, and hunks                 |
 | `/commit [msg]` | Stage and commit all workspace changes; without a message the agent summarizes the diff    |
 | `/push`         | Push the current branch to its configured upstream after confirmation                      |
 | `/undo`         | Undo the most recent eligible file mutation                                                |
@@ -297,6 +313,11 @@ reasoning summary, a 2,048-token hard completion limit per model request, a
 12-turn tool limit, and 12 KiB per-tool output. Raise `reasoning`,
 `maxOutputTokens`, `verbosity`, `reasoningSummary`, `maxAgentTurns`, or
 `maxToolOutputBytes` for tasks that need more capacity.
+
+For `deepseek-v4-flash` and `deepseek-v4-pro`, when reasoning consumes the entire output budget
+before any answer text is produced, CodeFarmer makes at most one low-cost recovery attempt with
+reasoning disabled, low verbosity, and a 768-token cap. It does not repeat the full-budget request;
+partial answers are kept as-is.
 
 Change the API endpoint globally, per project, or for one invocation:
 

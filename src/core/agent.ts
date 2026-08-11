@@ -41,6 +41,8 @@ const MAX_TOOL_OUTPUT_INPUT_CHARS = 24_000;
 /** Keep the title request cheap even when a resumed session is very long. */
 const MAX_TITLE_INPUT_CHARS = 12_000;
 const MAX_TITLE_LENGTH = 60;
+/** Keep the one-shot no-reasoning recovery deliberately small. */
+const LENGTH_RECOVERY_MAX_OUTPUT_TOKENS = 768;
 
 const TITLE_INSTRUCTIONS = `请根据提供的会话内容生成一个简洁、准确的会话标题。
 要求：
@@ -90,6 +92,13 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 function isRetryableProviderFailure(error: unknown): boolean {
   return error instanceof ProviderError && error.retryable;
+}
+
+function canRecoverLengthWithoutReasoning(
+  model: string,
+  reasoning: CodeFarmerConfig['reasoning'],
+): boolean {
+  return reasoning !== 'none' && /^deepseek-v4-(?:flash|pro)$/iu.test(model);
 }
 
 function sumUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
@@ -248,6 +257,8 @@ export interface RunTurnOptions {
   toolHooks?: ToolLifecycleHooks;
   /** Plan mode: expose only read-only tools and reject any mutating call. */
   plan?: boolean;
+  /** Auto mode: plan first, then execute ordinary operations without approval prompts. */
+  auto?: boolean;
   /** Explicit skill references to load for this turn. */
   skills?: string[];
 }
@@ -342,6 +353,8 @@ export class AgentRunner {
     }
     let lastOutputs: ProviderToolResultInput[] | undefined;
     let emptyTurns = 0;
+    let lengthRecoveryUsed = false;
+    let lengthRecoveryPending = false;
     // Agent instructions depend only on run-level settings, so render them
     // once instead of rebuilding the same string on every turn (including the
     // final summary request).
@@ -356,6 +369,7 @@ export class AgentRunner {
       ...(this.options.skillCatalog === undefined ? {} : { skills: this.options.skillCatalog }),
       ...(selectedSkills.length === 0 ? {} : { selectedSkills }),
       ...(runOptions.plan === true ? { plan: true } : {}),
+      ...(runOptions.auto === true ? { auto: true } : {}),
     });
 
     try {
@@ -366,17 +380,25 @@ export class AgentRunner {
         let streamedText = '';
         let streamedReasoning = '';
         let completedText = '';
+        const recoveringLength = lengthRecoveryPending;
+        lengthRecoveryPending = false;
 
         const input: string | ProviderInput[] = explicitHistory
           ? [...transcript]
           : (lastOutputs ?? prompt);
         const request = {
           model: this.options.config.model,
-          reasoning: this.options.config.reasoning,
-          verbosity: this.options.config.verbosity,
-          reasoningSummary: this.options.config.reasoningSummary,
-          maxOutputTokens: this.options.config.maxOutputTokens,
-          instructions,
+          reasoning: recoveringLength ? ('none' as const) : this.options.config.reasoning,
+          verbosity: recoveringLength ? ('low' as const) : this.options.config.verbosity,
+          reasoningSummary: recoveringLength
+            ? ('none' as const)
+            : this.options.config.reasoningSummary,
+          maxOutputTokens: recoveringLength
+            ? Math.min(this.options.config.maxOutputTokens, LENGTH_RECOVERY_MAX_OUTPUT_TOKENS)
+            : this.options.config.maxOutputTokens,
+          instructions: recoveringLength
+            ? `${instructions}\n只输出必要的结论或下一步，不要展开思考过程。`
+            : instructions,
           input,
           tools:
             runOptions.plan === true
@@ -491,8 +513,26 @@ export class AgentRunner {
           finalMessage = completedText || streamedText;
           if (finalMessage.trim() === '') {
             if (finishReason !== undefined && finishReason !== 'completed') {
+              if (
+                finishReason === 'length' &&
+                !lengthRecoveryUsed &&
+                canRecoverLengthWithoutReasoning(
+                  this.options.config.model,
+                  this.options.config.reasoning,
+                )
+              ) {
+                lengthRecoveryUsed = true;
+                lengthRecoveryPending = true;
+                runOptions.onEvent?.({
+                  type: 'text_delta',
+                  delta: '\n[输出预算主要用于思考，改用低 token 模式恢复一次]\n',
+                });
+                if (!explicitHistory) previousResponseId = responseId;
+                turn -= 1;
+                continue;
+              }
               throw new ProviderError(
-                `模型在生成正文前达到输出上限（状态：${finishReason}），已停止自动重试以避免额外 token 消耗。请提高 maxOutputTokens 后重试。`,
+                `模型在生成正文前达到输出上限（状态：${finishReason}）。已尝试一次低 token 恢复；为避免继续消耗 token，请降低 reasoning 或提高 maxOutputTokens 后再试。`,
                 { retryable: false, details: { finishReason } },
               );
             }
@@ -549,6 +589,7 @@ export class AgentRunner {
           ...(runOptions.signal === undefined ? {} : { signal: runOptions.signal }),
           ...(toolHooks === undefined ? {} : { hooks: toolHooks }),
           ...(runOptions.plan === true ? { plan: true } : {}),
+          ...(runOptions.auto === true ? { autoApprove: true } : {}),
         });
         for (const call of pendingCalls) {
           transcript.push({
@@ -556,9 +597,7 @@ export class AgentRunner {
             callId: call.callId,
             name: call.name,
             arguments: call.arguments,
-            ...(streamedReasoning.length === 0
-              ? {}
-              : { reasoningContent: streamedReasoning }),
+            ...(streamedReasoning.length === 0 ? {} : { reasoningContent: streamedReasoning }),
           });
         }
         lastOutputs = results.map(({ result }) => ({

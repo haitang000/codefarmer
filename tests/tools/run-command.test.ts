@@ -115,6 +115,43 @@ describe('run_command safety', () => {
     });
   });
 
+  it('auto-approves ordinary commands but still prompts for protected commands', async () => {
+    const workspace = await temporaryWorkspace();
+    const approve = vi.fn(() => false);
+    const registry = await createToolRegistry({ workspace, approve });
+    const script = path.join(workspace, 'automatic.cjs');
+    await writeFile(script, 'process.stdout.write("automatic")\n');
+
+    const automatic = await registry.execute(
+      {
+        callId: 'automatic',
+        name: 'run_command',
+        arguments: {
+          executable: process.execPath,
+          args: [script],
+        },
+      },
+      { autoApprove: true },
+    );
+    expect(automatic).toMatchObject({ success: true });
+    expect(automatic.output).toContain('automatic');
+    expect(approve).not.toHaveBeenCalled();
+
+    const protectedResult = await registry.execute(
+      {
+        callId: 'protected',
+        name: 'run_command',
+        arguments: { executable: 'git', args: ['push', 'origin', 'main'] },
+      },
+      { autoApprove: true },
+    );
+    expect(protectedResult).toMatchObject({
+      success: false,
+      error: { code: 'APPROVAL_DENIED' },
+    });
+    expect(approve).toHaveBeenCalledOnce();
+  });
+
   it('parses stringified null optional arguments from gateways', async () => {
     const workspace = await temporaryWorkspace();
     const registry = await createToolRegistry({ workspace, approve: () => false });
@@ -124,7 +161,12 @@ describe('run_command safety', () => {
     const version = await registry.execute({
       callId: 'version-null',
       name: 'run_command',
-      arguments: { executable: process.execPath, args: ['--version'], cwd: 'null', timeoutMs: 'null' },
+      arguments: {
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: 'null',
+        timeoutMs: 'null',
+      },
     });
     expect(version.success).toBe(true);
     expect(version.output).toMatch(/v\d+/u);

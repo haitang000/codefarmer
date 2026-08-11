@@ -29,6 +29,7 @@ import {
   readSkillResourceDefinition,
 } from './skill-tools.js';
 import type {
+  ApprovalRequest,
   RegisteredTool,
   ResolvedToolContext,
   ToolCall,
@@ -92,12 +93,20 @@ function executionContext(
   options: ToolExecutionOptions,
 ): ResolvedToolContext {
   const hooks = options.hooks;
-  const approval = context.approve;
+  const configuredApproval = context.approve;
+  const approval =
+    options.autoApprove === true
+      ? async (request: ApprovalRequest) =>
+          request.requireConfirmation === true
+            ? ((await configuredApproval?.(request)) ?? false)
+            : true
+      : configuredApproval;
   const signal = options.signal;
   if (approval === undefined && signal === undefined) return context;
 
   const effective = {
     ...context,
+    ...(approval === undefined ? {} : { approve: approval }),
     ...(signal === undefined ? {} : { signal }),
   };
   if (approval === undefined || hooks === undefined) return effective;
@@ -147,6 +156,20 @@ export class ToolRegistry {
       ...(hooks === undefined ? {} : { hooks }),
       call,
     };
+    try {
+      await hooks?.beforeTool?.(call);
+    } catch (error) {
+      const result = withDuration(
+        failedResult(
+          call.callId,
+          call.name,
+          new ToolError('HOOK_BLOCKED', error instanceof Error ? error.message : String(error)),
+        ),
+        startedAt,
+      );
+      await notifyHook(hooks?.onToolResult, call, result);
+      return result;
+    }
     await notifyHook(hooks?.onToolStart, call);
     const tool = this.tools.get(call.name);
     if (tool === undefined) {
@@ -184,6 +207,7 @@ export class ToolRegistry {
     } catch (error) {
       result = withDuration(failedResult(call.callId, call.name, error), startedAt);
     }
+    await notifyHook(hooks?.afterTool, call, result);
     await notifyHook(hooks?.onToolResult, call, result);
     return result;
   }
@@ -301,4 +325,3 @@ export async function createToolRegistry(options: ToolContextOptions): Promise<T
     options,
   );
 }
-

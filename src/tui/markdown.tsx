@@ -1,6 +1,46 @@
 import React from 'react';
 import { Text } from 'ink';
 
+export type DiffLineColor = 'green' | 'red' | 'cyan' | 'magenta' | 'yellow' | 'gray';
+
+/** Classifies a unified-diff line for terminal rendering. */
+export function diffLineColor(line: string): DiffLineColor | undefined {
+  if (
+    line.startsWith('diff ') ||
+    line.startsWith('index ') ||
+    line.startsWith('---') ||
+    line.startsWith('+++')
+  ) {
+    return 'cyan';
+  }
+  if (line.startsWith('@@')) return 'magenta';
+  if (line.startsWith('+')) return 'green';
+  if (line.startsWith('-')) return 'red';
+  if (line.startsWith('\\ No newline')) return 'yellow';
+  return undefined;
+}
+
+/** Renders a unified diff with conventional add/remove/hunk colors. */
+export function DiffView({ content }: { content: string }): React.ReactElement {
+  return (
+    <>
+      {content.split(/\r?\n/u).map((line, index) => {
+        const color = diffLineColor(line);
+        return (
+          <Text
+            key={`${String(index)}-${line}`}
+            {...(color === undefined ? {} : { color })}
+            bold={color === 'cyan'}
+            wrap="wrap"
+          >
+            {line.length === 0 ? ' ' : line}
+          </Text>
+        );
+      })}
+    </>
+  );
+}
+
 interface InlineSegment {
   key: number;
   text: string;

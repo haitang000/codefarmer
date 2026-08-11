@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { extractCommitMessage, TuiInteractionBridge } from '../src/tui/runtime.js';
 import {
   completeTuiCommand,
+  nextAgentMode,
   parseTuiCommand,
   TUI_HELP,
   tuiCommandAdvice,
@@ -34,6 +35,9 @@ describe('TUI command parser', () => {
     expect(parseTuiCommand('/plan')).toEqual({ kind: 'plan', value: '' });
     expect(parseTuiCommand('/plan ON')).toEqual({ kind: 'plan', value: 'on' });
     expect(parseTuiCommand('/plan off')).toEqual({ kind: 'plan', value: 'off' });
+    expect(parseTuiCommand('/auto')).toEqual({ kind: 'auto', value: '' });
+    expect(parseTuiCommand('/auto ON')).toEqual({ kind: 'auto', value: 'on' });
+    expect(parseTuiCommand('/auto off')).toEqual({ kind: 'auto', value: 'off' });
     expect(parseTuiCommand('/push')).toEqual({ kind: 'push', args: [] });
     expect(parseTuiCommand('/push origin main')).toEqual({
       kind: 'push',
@@ -57,9 +61,17 @@ describe('TUI command parser', () => {
     expect(TUI_HELP).toContain('/effort');
     expect(TUI_HELP).toContain('/model');
     expect(TUI_HELP).toContain('/plan');
+    expect(TUI_HELP).toContain('/auto');
+    expect(TUI_HELP).toContain('Shift+Tab');
     expect(TUI_HELP).toContain('/init');
     expect(TUI_HELP).toContain('/push');
     expect(TUI_HELP).toContain('/skills');
+  });
+
+  it('cycles through code, plan, and auto modes', () => {
+    expect(nextAgentMode('code')).toBe('plan');
+    expect(nextAgentMode('plan')).toBe('auto');
+    expect(nextAgentMode('auto')).toBe('code');
   });
 
   it('returns unknown commands without discarding their arguments', () => {

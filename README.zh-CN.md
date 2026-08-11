@@ -76,6 +76,11 @@ codefarmer
 `codefarmer tui` 或 `codefarmer chat` 显式启动。脚本和 CI 请使用
 `run --json`。
 
+全屏会话采用单一工作台模式：任务执行期间可以继续输入后续任务，CodeFarmer
+会按顺序排队执行，并在底部显示当前任务与队列状态。文件或命令审批支持
+“仅本次 / 本会话 / 当前工作区”授权；工作区授权保存在用户数据目录中，不会
+扩大现有工作区边界。`/help` 按会话、工作区、权限和调试分组显示常用命令。
+
 `init` 会在当前工作区生成带 JSON Schema 引用的
 `codefarmer.config.json`。如需引导式配置，可运行 `codefarmer setup`，
 它会交互式询问 Provider、模型、Base URL、推理强度和审批策略，并可在写入前测试
@@ -92,8 +97,8 @@ CodeFarmer 启动时所在的目录；它不会自动扩大到上层 Git 仓库�
 | `codefarmer setup`                              | 交互式向导配置模型、Base URL、推理强度和审批策略      |
 | `codefarmer chat`                               | 在 TUI 中启动会话                                     |
 | `codefarmer run "<任务>"`                       | 执行一次性任务，可用于脚本和 CI                       |
-| `codefarmer skills list`                         | 列出发现的 Codex 兼容 skill                           |
-| `codefarmer skills show <ref> [path]`            | 显示 skill 或其文本资源                               |
+| `codefarmer skills list`                        | 列出发现的 Codex 兼容 skill                           |
+| `codefarmer skills show <ref> [path]`           | 显示 skill 或其文本资源                               |
 | `codefarmer status`                             | 显示工作区、Git、有效配置和近期会话状态               |
 | `codefarmer stats`                              | 显示本地会话的 Token 用量与估算费用统计               |
 | `codefarmer undo`                               | 撤销最近一笔仍符合条件的补丁事务                      |
@@ -145,8 +150,13 @@ codefarmer --approval read-only run --json "查找可能的空指针错误"
 ### 终端 UI
 
 TUI 在同一个备用屏幕中承载对话、工具状态、审批、工作区状态和会话操作。
-模型输出会流式显示，修改文件或执行变更命令时会弹出审批框；只有明确按 `y`
-才会允许操作。
+模型输出会流式显示；使用默认 `ask` 策略时，修改文件或执行变更命令会弹出审批框，
+只有明确按 `y` 才会允许操作。
+
+按 `Shift+Tab` 可在 `CODE`、`PLAN` 和 `AUTO` 三种模式间循环切换。`PLAN`
+只进行只读探索并输出实施计划；`AUTO` 会根据 prompt 自动列出计划，随后直接实施和验证，
+普通工作区操作无需人工审批。`git push` 等受保护操作仍需显式确认。也可以使用
+`/plan [on|off]` 和 `/auto [on|off]` 直接选择模式。
 
 | TUI 命令        | 操作                                                                |
 | --------------- | ------------------------------------------------------------------- |
@@ -156,12 +166,14 @@ TUI 在同一个备用屏幕中承载对话、工具状态、审批、工作区�
 | `/context`      | 查看当前上下文消息与 Token 用量                                     |
 | `/compact`      | 把当前会话的早期消息压缩为摘要（长会话时自动提示）                  |
 | `/effort`       | 打开推理强度选择器（↑/↓ 选择，Enter 确认）                          |
+| `/plan [on/off]` | 开启或关闭只读计划模式                                              |
+| `/auto [on/off]` | 开启或关闭自动计划并执行模式                                        |
 | `/config`       | 显示有效配置                                                        |
 | `/doctor`       | 检查本地运行环境                                                    |
 | `/sessions`     | 列出本地会话                                                        |
 | `/resume <id>`  | 切换到已有会话                                                      |
 | `/delete <id>`  | 删除非当前会话                                                      |
-| `/diff`         | 显示当前 Git 差异                                                   |
+| `/diff`         | 彩色显示当前 Git 差异（新增、删除、文件头和区块范围）               |
 | `/commit [msg]` | 暂存并提交工作区全部更改；不提供信息时由 agent 总结差异生成提交信息 |
 | `/push`         | 确认后将当前分支推送到已配置的上游                                  |
 | `/undo`         | 撤销最近一笔符合条件的文件事务                                      |
@@ -281,6 +293,10 @@ codefarmer setup
 最多 2048 个完成 token、最多 12 个工具轮次，以及每个工具输出最多 12 KiB。需要更多容量时，
 可以提高 `reasoning`、`maxOutputTokens`、`verbosity`、`reasoningSummary`、`maxAgentTurns`
 或 `maxToolOutputBytes`。
+
+对于 `deepseek-v4-flash` 和 `deepseek-v4-pro`，如果思考过程先耗尽输出预算且没有生成正文，
+CodeFarmer 只会自动尝试一次低成本恢复（关闭推理、低详细度、最多 768 个 token），不会重复
+发送同一轮的完整预算请求。已有部分正文时会直接保留，并提示后续处理。
 
 可以永久、按项目或仅为一次命令更换 API 端点：
 
