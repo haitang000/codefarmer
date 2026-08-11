@@ -1623,6 +1623,22 @@ export function TuiApp({
           // Enter (see the effortPicker branch in useInput).
           const index = EFFORT_CHOICES.indexOf(runtimeRef.current.config.reasoning);
           setEffortPicker(index < 0 ? 0 : index);
+        } else if (command.kind === 'model') {
+          const nextModel = command.value.trim();
+          const active = runtimeRef.current;
+          if (nextModel.length === 0) {
+            appendSystem(`Current model: ${active.config.model}\nUsage: /model <model-name>`);
+          } else if (nextModel === active.config.model) {
+            appendSystem(`Model is already set to ${nextModel}.`);
+          } else {
+            active.config.model = nextModel;
+            if (active.session !== undefined) {
+              active.session.model = nextModel;
+              await active.sessions.save(active.session);
+            }
+            setRuntime({ ...active });
+            appendSystem(`Model set to ${nextModel} for this session.`);
+          }
         } else if (command.kind === 'plan') {
           if (command.value.length === 0) {
             togglePlanMode();

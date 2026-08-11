@@ -26,6 +26,11 @@ describe('TUI command parser', () => {
     expect(parseTuiCommand('/compact')).toEqual({ kind: 'compact' });
     expect(parseTuiCommand('/effort')).toEqual({ kind: 'effort' });
     expect(parseTuiCommand('/reasoning')).toEqual({ kind: 'effort' });
+    expect(parseTuiCommand('/model')).toEqual({ kind: 'model', value: '' });
+    expect(parseTuiCommand('/model gpt-5.6-sol')).toEqual({
+      kind: 'model',
+      value: 'gpt-5.6-sol',
+    });
     expect(parseTuiCommand('/plan')).toEqual({ kind: 'plan', value: '' });
     expect(parseTuiCommand('/plan ON')).toEqual({ kind: 'plan', value: 'on' });
     expect(parseTuiCommand('/plan off')).toEqual({ kind: 'plan', value: 'off' });
@@ -50,6 +55,7 @@ describe('TUI command parser', () => {
     expect(TUI_HELP).toContain('/stats');
     expect(TUI_HELP).toContain('/compact');
     expect(TUI_HELP).toContain('/effort');
+    expect(TUI_HELP).toContain('/model');
     expect(TUI_HELP).toContain('/plan');
     expect(TUI_HELP).toContain('/init');
     expect(TUI_HELP).toContain('/push');

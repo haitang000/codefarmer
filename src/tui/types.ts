@@ -13,6 +13,7 @@ export type TuiCommand =
   | { kind: 'context' }
   | { kind: 'compact' }
   | { kind: 'effort' }
+  | { kind: 'model'; value: string }
   | { kind: 'plan'; value: string }
   | { kind: 'config' }
   | { kind: 'doctor' }
@@ -81,6 +82,7 @@ export const TUI_HELP = [
   '/context    show the current conversation context and token usage',
   '/compact    compress early messages of the current session into a summary',
   '/effort     open the reasoning effort picker (←/→ + Enter)',
+  '/model NAME switch to a model; without NAME, show the current model',
   '/plan [on|off]  toggle plan mode (Shift+Tab): read-only research, no file changes',
   '/config     show the effective configuration',
   '/doctor     check the local runtime prerequisites',
@@ -107,6 +109,7 @@ export const TUI_COMMANDS = [
   'context',
   'compact',
   'effort',
+  'model',
   'plan',
   'config',
   'doctor',
@@ -173,6 +176,8 @@ export function parseTuiCommand(input: string): TuiCommand {
     case 'effort':
     case 'reasoning':
       return { kind: 'effort' };
+    case 'model':
+      return { kind: 'model', value: parts.join(' ') };
     case 'plan':
       return { kind: 'plan', value: (parts[0] ?? '').toLowerCase() };
     case 'config':
