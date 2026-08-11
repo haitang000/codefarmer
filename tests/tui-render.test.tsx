@@ -187,6 +187,9 @@ describe('TUI rendering', () => {
 
     expect(output.indexOf('Assistant response')).toBeLessThan(output.indexOf('Approval required'));
     expect(output.indexOf('Approval required')).toBeLessThan(output.indexOf('Input prompt'));
+    expect(output).toContain('$ git push origin main');
+    expect(output).toContain('Allow for:');
+    expect(output).toContain('this workspace');
   });
 
   it('renders a non-empty workspace screen without a live terminal', () => {

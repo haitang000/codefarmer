@@ -663,6 +663,22 @@ function clipApprovalDetail(detail: string, width: number, maximumLines: number)
   return visible.join('\n');
 }
 
+function formatApprovalDetail(request: ApprovalRequest): string {
+  if (request.kind !== 'command') return request.detail;
+  try {
+    const parsed: unknown = JSON.parse(request.detail);
+    if (Array.isArray(parsed) && parsed.every((part): part is string => typeof part === 'string')) {
+      const command = parsed
+        .map((part) => (/^[\w./:=+@%-]+$/u.test(part) ? part : JSON.stringify(part)))
+        .join(' ');
+      return command.length === 0 ? request.detail : `$ ${command}`;
+    }
+  } catch {
+    // Keep the original detail visible when a tool sends non-JSON metadata.
+  }
+  return request.detail;
+}
+
 // 思考过程以暗色块渲染在助手正文之前；行数估算与裁剪渲染共用同一份
 // 行数据，保证滚动裁剪位置与实际布局一致。
 function thinkingLines(reasoning: string, width: number): string[] {
@@ -1073,12 +1089,16 @@ export function ApprovalModal({
   columns: number;
   rows: number;
 }): React.ReactElement {
-  const width = Math.max(1, Math.min(96, columns - 4));
-  // Keep the modal bounded so its controls remain visible without covering
-  // the transcript or the command input.
-  const maximumHeight = Math.max(6, Math.min(16, rows - 8));
-  const maximumLines = Math.max(1, maximumHeight - 7);
-  const clipped = clipApprovalDetail(approval.request.detail, width, maximumLines);
+  const width = Math.max(1, Math.min(78, columns - 8));
+  // Keep the approval card compact so it does not push the command deck out of view.
+  const maximumHeight = Math.max(12, Math.min(16, rows - 6));
+  const maximumLines = Math.max(1, maximumHeight - 11);
+  const clipped = clipApprovalDetail(formatApprovalDetail(approval.request), width, maximumLines);
+  const detailLabel = approval.request.kind === 'command' ? 'COMMAND' : 'FILE CHANGES';
+  const description =
+    approval.request.kind === 'command'
+      ? 'This action can change or publish workspace state.'
+      : 'Review the proposed file changes before applying them.';
   return (
     <Box
       width={width}
@@ -1086,32 +1106,55 @@ export function ApprovalModal({
       overflow="hidden"
       flexDirection="column"
       borderStyle="single"
-      borderColor="yellow"
+      borderColor={BRAND_COLOR}
       paddingX={2}
       paddingY={1}
     >
-      <Text color="yellow" bold>
-        {'!  Approval required'}
-      </Text>
-      <Text color="white" bold wrap="wrap">
-        {approval.request.title}
-      </Text>
-      <Text dimColor wrap="wrap">
-        {clipped}
-      </Text>
-      <Box marginTop={1}>
-        <Text color="green" bold>
-          {'[Y] once'}{' '}
+      <Box justifyContent="space-between">
+        <Text color="yellow" bold>
+          {'!  Approval required'}
         </Text>
-        <Text color="cyan" bold>
-          {'[S] session'}
-          {'  '}
+        <Text color="gray" bold>
+          {approval.request.kind === 'command' ? 'PROTECTED ACTION' : 'WORKSPACE CHANGE'}
         </Text>
-        <Text color="magenta" bold>
-          {'[W] workspace'}
-          {'  '}
+      </Box>
+      <Box flexDirection="column" marginTop={1}>
+        <Text color="white" bold wrap="wrap">
+          {approval.request.title}
         </Text>
-        <Text color="red">{'[N / Enter] deny'}</Text>
+        <Text dimColor wrap="wrap">
+          {description}
+        </Text>
+      </Box>
+      <Box flexDirection="column" marginTop={1} paddingLeft={1}>
+        <Text color="gray" bold>
+          {detailLabel}
+        </Text>
+        <Text color="cyan" wrap="wrap">
+          {clipped}
+        </Text>
+      </Box>
+      <Text color="gray">{'─'.repeat(Math.max(1, Math.min(56, width - 6)))}</Text>
+      <Box flexDirection="column" marginTop={1}>
+        <Text dimColor>{'Allow for:'}</Text>
+        <Box flexDirection="row" flexWrap="wrap">
+          <Text color="green" bold>
+            {'[Y]'}
+          </Text>
+          <Text>{' once   '}</Text>
+          <Text color="cyan" bold>
+            {'[S]'}
+          </Text>
+          <Text>{' this session   '}</Text>
+          <Text color="magenta" bold>
+            {'[W]'}
+          </Text>
+          <Text>{' this workspace'}</Text>
+        </Box>
+        <Text color="red">
+          <Text bold>{'[Enter / N]'}</Text>
+          {' deny'}
+        </Text>
       </Box>
     </Box>
   );
@@ -1204,6 +1247,7 @@ export function TuiApp({
   const busyRef = useRef(false);
   const [status, setStatus] = useState('Ready');
   const [agentMode, setAgentMode] = useState<AgentMode>(initialPlanMode ? 'plan' : 'code');
+  const agentModeRef = useRef<AgentMode>(initialPlanMode ? 'plan' : 'code');
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   // Ctrl+O 切换：是否在助手消息上方展示推理摘要（思考过程）。
   const [showThinking, setShowThinking] = useState(initialShowThinking);
@@ -1380,6 +1424,7 @@ export function TuiApp({
 
   const setMode = useCallback(
     (mode: AgentMode): void => {
+      agentModeRef.current = mode;
       setAgentMode(mode);
       appendSystem(
         mode === 'plan'
@@ -1393,8 +1438,8 @@ export function TuiApp({
   );
 
   const cycleAgentMode = useCallback((): void => {
-    setMode(nextAgentMode(agentMode));
-  }, [agentMode, setMode]);
+    setMode(nextAgentMode(agentModeRef.current));
+  }, [setMode]);
 
   const swapRuntime = useCallback((next: AgentRuntime): void => {
     runtimeRef.current = next;
@@ -1522,8 +1567,8 @@ export function TuiApp({
       };
       let unsubscribe: (() => void) | undefined;
       try {
-        const turnPlan = options?.plan === true || agentMode === 'plan';
-        const turnAuto = options?.plan !== true && agentMode === 'auto';
+        const turnPlan = options?.plan === true || agentModeRef.current === 'plan';
+        const turnAuto = options?.plan !== true && agentModeRef.current === 'auto';
         let result: AgentRunResult;
         if (activeRuntime.orchestrator !== undefined && options?.ephemeral !== true) {
           const queued = activeRuntime.orchestrator.enqueue(prompt, {
@@ -1616,7 +1661,7 @@ export function TuiApp({
         }
       }
     },
-    [agentMode, appendSystem, flushDeltaBuffer, selectedSkills],
+    [appendSystem, flushDeltaBuffer, selectedSkills],
   );
 
   const runCommand = useCallback(
@@ -1721,8 +1766,8 @@ export function TuiApp({
               `Session    ${active.session?.id ?? 'none'}`,
               `Model      ${active.config.model} (${active.config.reasoning}, ${active.config.verbosity})`,
               `Reasoning  summary ${active.config.reasoningSummary}`,
-              `Mode       ${agentMode.toUpperCase()}`,
-              `Approval   ${agentMode === 'auto' ? 'auto (protected operations still confirm)' : active.config.approval}`,
+              `Mode       ${agentModeRef.current.toUpperCase()}`,
+              `Approval   ${agentModeRef.current === 'auto' ? 'auto (protected operations still confirm)' : active.config.approval}`,
               `Skills     ${selectedSkills.length === 0 ? 'none selected' : selectedSkills.join(', ')}`,
               `Base URL   ${active.config.baseURL}`,
               `Git        ${gitLine}`,
@@ -1848,7 +1893,7 @@ export function TuiApp({
           }
         } else if (command.kind === 'plan') {
           if (command.value.length === 0) {
-            setMode(agentMode === 'plan' ? 'code' : 'plan');
+            setMode(agentModeRef.current === 'plan' ? 'code' : 'plan');
           } else if (command.value === 'on') {
             setMode('plan');
           } else if (command.value === 'off') {
@@ -1858,7 +1903,7 @@ export function TuiApp({
           }
         } else if (command.kind === 'auto') {
           if (command.value.length === 0) {
-            setMode(agentMode === 'auto' ? 'code' : 'auto');
+            setMode(agentModeRef.current === 'auto' ? 'code' : 'auto');
           } else if (command.value === 'on') {
             setMode('auto');
           } else if (command.value === 'off') {
@@ -2062,7 +2107,6 @@ export function TuiApp({
     },
     [
       appendSystem,
-      agentMode,
       exit,
       requestApproval,
       runPrompt,

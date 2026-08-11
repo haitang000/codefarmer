@@ -168,27 +168,27 @@ approving ordinary workspace operations. Protected operations such as
 `git push` still require explicit confirmation. The same modes can be selected
 with `/plan [on|off]` and `/auto [on|off]`.
 
-| TUI command     | Action                                                                                     |
-| --------------- | ------------------------------------------------------------------------------------------ |
-| `/help`         | Show local commands                                                                        |
-| `/init`         | Inspect the workspace and create or update `AGENT.md`                                      |
-| `/status`       | Show session, workspace, Git, and runtime                                                  |
-| `/context`      | Show context messages and token usage                                                      |
-| `/compact`      | Compress early messages of the current session into a summary (suggested on long sessions) |
-| `/effort`       | Open the reasoning effort picker (↑/↓ + Enter)                                             |
+| TUI command      | Action                                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------ |
+| `/help`          | Show local commands                                                                        |
+| `/init`          | Inspect the workspace and create or update `AGENT.md`                                      |
+| `/status`        | Show session, workspace, Git, and runtime                                                  |
+| `/context`       | Show context messages and token usage                                                      |
+| `/compact`       | Compress early messages of the current session into a summary (suggested on long sessions) |
+| `/effort`        | Open the reasoning effort picker (↑/↓ + Enter)                                             |
 | `/plan [on/off]` | Enable or disable read-only planning mode                                                  |
 | `/auto [on/off]` | Enable or disable automatic plan-and-execute mode                                          |
-| `/config`       | Show effective configuration                                                               |
-| `/sessions`     | List saved sessions                                                                        |
-| `/resume <id>`  | Switch to a saved session                                                                  |
-| `/delete <id>`  | Delete a non-active local session                                                          |
-| `/diff`         | Show current Git diff with colored additions, removals, headers, and hunks                 |
-| `/commit [msg]` | Stage and commit all workspace changes; without a message the agent summarizes the diff    |
-| `/push`         | Push the current branch to its configured upstream after confirmation                      |
-| `/undo`         | Undo the most recent eligible file mutation                                                |
-| `/new`          | Start a fresh session                                                                      |
-| `/cancel`       | Cancel the active request or tool                                                          |
-| `/quit`         | Leave the TUI and restore the terminal                                                     |
+| `/config`        | Show effective configuration                                                               |
+| `/sessions`      | List saved sessions                                                                        |
+| `/resume <id>`   | Switch to a saved session                                                                  |
+| `/delete <id>`   | Delete a non-active local session                                                          |
+| `/diff`          | Show current Git diff with colored additions, removals, headers, and hunks                 |
+| `/commit [msg]`  | Stage and commit all workspace changes; without a message the agent summarizes the diff    |
+| `/push`          | Push the current branch to its configured upstream after confirmation                      |
+| `/undo`          | Undo the most recent eligible file mutation                                                |
+| `/new`           | Start a fresh session                                                                      |
+| `/cancel`        | Cancel the active request or tool                                                          |
+| `/quit`          | Leave the TUI and restore the terminal                                                     |
 
 Read-only slash commands, `/cancel`, and `/quit` remain available while the
 model is generating; ordinary prompts stay in the input buffer until it is
