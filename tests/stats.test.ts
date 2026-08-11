@@ -54,13 +54,18 @@ function modelStat(stats: WorkspaceStats, model: string): ModelStat {
 
 describe('lookupModelPrice', () => {
   it('matches prices case-insensitively at family boundaries', () => {
+    expect(lookupModelPrice('gpt-5.6-sol')).toMatchObject({
+      inputPerMT: 5,
+      outputPerMT: 30,
+      cachedInputPerMT: 0.5,
+    });
     expect(lookupModelPrice('gpt-5-mini')?.inputPerMT).toBe(0.25);
     expect(lookupModelPrice('GPT-5-MINI')?.inputPerMT).toBe(0.25);
     // Longest matching prefix wins, not the first table entry.
     expect(lookupModelPrice('gpt-5')?.inputPerMT).toBe(1.25);
     expect(lookupModelPrice('gpt-5-mini')?.inputPerMT).not.toBe(1.25);
-    // A dot is not a family boundary: `gpt-5.6-sol` must not be priced as `gpt-5`.
-    expect(lookupModelPrice('gpt-5.6-sol')).toBeUndefined();
+    // A dot is not a family boundary: an unlisted variant must not be priced as `gpt-5`.
+    expect(lookupModelPrice('gpt-5.6-solish')).toBeUndefined();
     // Gateway-style names match through the segment after the last `/`.
     expect(lookupModelPrice('openai/gpt-4o-mini')?.inputPerMT).toBe(0.15);
     // Suffixes after a `-` are fine (version stamps like `-001`).
@@ -73,6 +78,12 @@ describe('lookupModelPrice', () => {
     for (const family of ['gpt-5', 'gpt-4', 'o1', 'gemini', 'grok', 'deepseek', 'kimi']) {
       expect(MODEL_PRICES_PER_MT.some(([prefix]) => prefix.startsWith(family))).toBe(true);
     }
+  });
+
+  it('uses the current public cache rates for Gemini 2.5 models', () => {
+    expect(lookupModelPrice('gemini-2.5-pro')?.cachedInputPerMT).toBe(0.125);
+    expect(lookupModelPrice('gemini-2.5-flash')?.cachedInputPerMT).toBe(0.03);
+    expect(lookupModelPrice('gemini-2.5-flash-lite')?.cachedInputPerMT).toBe(0.01);
   });
 });
 
@@ -233,12 +244,12 @@ describe('computeWorkspaceStats', () => {
   it('excludes unknown models from cost and reports them separately', () => {
     const sessions = [
       session({ model: 'gpt-5-mini', usage: usage(1_000_000, 0) }),
-      session({ model: 'gpt-5.6-sol', provider: 'openai', usage: usage(100, 100) }),
+      session({ model: 'gpt-5.6-solish', provider: 'openai', usage: usage(100, 100) }),
     ];
     const stats = computeWorkspaceStats(sessions);
 
-    expect(stats.costUnknownModels).toEqual(['gpt-5.6-sol']);
-    const unknown = modelStat(stats, 'gpt-5.6-sol');
+    expect(stats.costUnknownModels).toEqual(['gpt-5.6-solish']);
+    const unknown = modelStat(stats, 'gpt-5.6-solish');
     expect(unknown.priceMatched).toBe(false);
     expect(unknown.estimatedCostUsd).toBe(0);
     const known = modelStat(stats, 'gpt-5-mini');

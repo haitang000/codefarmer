@@ -9,6 +9,7 @@ export type TuiCommand =
   | { kind: 'init' }
   | { kind: 'new' }
   | { kind: 'status' }
+  | { kind: 'stats' }
   | { kind: 'context' }
   | { kind: 'compact' }
   | { kind: 'effort' }
@@ -44,6 +45,8 @@ export interface TranscriptEntry {
   id: string;
   kind: TranscriptEntryKind;
   content: string;
+  /** Optional renderer hint for structured local command output. */
+  display?: 'stats';
   tool?: ToolView;
   /** 助手消息的推理摘要（思考过程），Ctrl+O 切换显示。 */
   reasoning?: string;
@@ -74,6 +77,7 @@ export const TUI_HELP = [
   'Ctrl+O      toggle the reasoning (thinking) display',
   '/new        start a new session',
   '/status     show workspace and runtime status',
+  '/stats      show workspace usage charts and estimated cost',
   '/context    show the current conversation context and token usage',
   '/compact    compress early messages of the current session into a summary',
   '/effort     open the reasoning effort picker (←/→ + Enter)',
@@ -99,6 +103,7 @@ export const TUI_COMMANDS = [
   'init',
   'new',
   'status',
+  'stats',
   'context',
   'compact',
   'effort',
@@ -158,6 +163,8 @@ export function parseTuiCommand(input: string): TuiCommand {
       return { kind: 'new' };
     case 'status':
       return { kind: 'status' };
+    case 'stats':
+      return { kind: 'stats' };
     case 'context':
     case 'ctx':
       return { kind: 'context' };

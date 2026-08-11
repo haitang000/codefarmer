@@ -161,6 +161,7 @@ export async function compactSession(options: CompactSessionOptions): Promise<Co
     reasoning: options.config.reasoning,
     verbosity: options.config.verbosity,
     reasoningSummary: options.config.reasoningSummary,
+    maxOutputTokens: options.config.maxOutputTokens,
     instructions: COMPACTION_INSTRUCTIONS,
     input,
     tools: [],

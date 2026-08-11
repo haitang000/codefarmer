@@ -6,6 +6,7 @@ import type {
   ProviderEvent,
   ProviderInput,
   ProviderRequest,
+  ReasoningEffort,
   TokenUsage,
 } from '../types.js';
 
@@ -92,6 +93,21 @@ function providerError(error: unknown): ProviderEvent {
   return { type: 'error', error: { code: 'OPENAI_REQUEST_FAILED', message, retryable: false } };
 }
 
+// When the request left the effort to the model ('auto'), a completed response
+// may echo the concrete effort the model picked (e.g. 'high'). Surface it so
+// the UI can tell the user the agent chose or switched its thinking depth.
+// The effort is read straight off the SDK's Response.reasoning and widened to
+// a string because its ReasoningEffort also includes 'minimal', which our
+// public type deliberately does not expose.
+function modelEffortEvent(
+  request: ProviderRequest,
+  effort: string | null | undefined,
+): ProviderEvent | undefined {
+  if (request.reasoning !== 'auto') return undefined;
+  if (effort === undefined || effort === null || effort === 'auto') return undefined;
+  return { type: 'reasoning_effort', effort: effort as ReasoningEffort };
+}
+
 export interface OpenAIProviderOptions {
   apiKey?: string;
   baseURL?: string;
@@ -137,6 +153,9 @@ export class OpenAIProvider implements AgentProvider {
             ? {}
             : { previous_response_id: request.previousResponseId }),
           ...(request.tools === undefined ? {} : { tools: mapTools(request) ?? [] }),
+          ...(request.maxOutputTokens === undefined
+            ? {}
+            : { max_output_tokens: request.maxOutputTokens }),
           parallel_tool_calls: true,
           store: request.store ?? true,
           stream: true,
@@ -179,6 +198,8 @@ export class OpenAIProvider implements AgentProvider {
           if (event.response.usage !== undefined) {
             yield { type: 'usage', usage: mapUsage(event.response.usage) };
           }
+          const effortEvent = modelEffortEvent(request, event.response.reasoning?.effort);
+          if (effortEvent !== undefined) yield effortEvent;
           yield {
             type: 'response_completed',
             responseId: event.response.id,
@@ -200,6 +221,8 @@ export class OpenAIProvider implements AgentProvider {
             if (event.response.usage !== undefined) {
               yield { type: 'usage', usage: mapUsage(event.response.usage) };
             }
+            const effortEvent = modelEffortEvent(request, event.response.reasoning?.effort);
+            if (effortEvent !== undefined) yield effortEvent;
             yield {
               type: 'response_completed',
               responseId: event.response.id,

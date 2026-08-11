@@ -190,7 +190,7 @@ Ctrl+C 会退出 TUI。非交互 shell 中直接运行命令只显示帮助，�
 不支持 commit、checkout/switch、reset、clean、merge、rebase、tag 等 Git 写
 操作。Agent 只能通过 `run_command` 执行 `git push`，且无论审批策略为何，均须
 由用户明确确认完整命令。工具参数都会校验，输入和输出有大小限制；只读工具可以并行，文件
-变更和命令串行执行。Agent 默认最多运行 25 轮。
+变更和命令串行执行。Agent 默认最多运行 12 轮。
 
 ## Skills
 
@@ -222,16 +222,17 @@ scope 的引用。技能及其资源都属于不可信指令，不能绕过审�
   "provider": "openai",
   "model": "gpt-5.6-sol",
   "baseURL": "https://api.openai.com/v1",
-  "reasoning": "auto",
+  "reasoning": "low",
   "verbosity": "low",
   "reasoningSummary": "none",
   "approval": "ask",
   "stream": true,
   "store": true,
   "logLevel": "info",
-  "maxAgentTurns": 25,
+  "maxAgentTurns": 12,
+  "maxOutputTokens": 2048,
   "maxFileSizeBytes": 1048576,
-  "maxToolOutputBytes": 32768,
+  "maxToolOutputBytes": 12288,
   "commandTimeoutMs": 120000,
   "ignoredPaths": [".git/**", "node_modules/**", "dist/**", ".env"]
 }
@@ -244,16 +245,17 @@ scope 的引用。技能及其资源都属于不可信指令，不能绕过审�
 | `provider`           | `CODEFARMER_PROVIDER`              | `openai`                    |
 | `model`              | `CODEFARMER_MODEL`                 | `gpt-5.6-sol`               |
 | `baseURL`            | `CODEFARMER_BASE_URL`              | `https://api.openai.com/v1` |
-| `reasoning`          | `CODEFARMER_REASONING`             | `auto`                      |
+| `reasoning`          | `CODEFARMER_REASONING`             | `low`                       |
 | `verbosity`          | `CODEFARMER_VERBOSITY`             | `low`                       |
 | `reasoningSummary`   | `CODEFARMER_REASONING_SUMMARY`     | `none`                      |
 | `approval`           | `CODEFARMER_APPROVAL`              | `ask`                       |
 | `stream`             | `CODEFARMER_STREAM`                | `true`                      |
 | `store`              | `CODEFARMER_STORE`                 | `true`（v1 必须）           |
 | `logLevel`           | `CODEFARMER_LOG_LEVEL`             | `info`                      |
-| `maxAgentTurns`      | `CODEFARMER_MAX_AGENT_TURNS`       | `25`                        |
+| `maxAgentTurns`      | `CODEFARMER_MAX_AGENT_TURNS`       | `12`                        |
+| `maxOutputTokens`    | `CODEFARMER_MAX_OUTPUT_TOKENS`     | `2048`                      |
 | `maxFileSizeBytes`   | `CODEFARMER_MAX_FILE_SIZE_BYTES`   | `1048576`                   |
-| `maxToolOutputBytes` | `CODEFARMER_MAX_TOOL_OUTPUT_BYTES` | `32768`                     |
+| `maxToolOutputBytes` | `CODEFARMER_MAX_TOOL_OUTPUT_BYTES` | `12288`                     |
 | `commandTimeoutMs`   | `CODEFARMER_COMMAND_TIMEOUT_MS`    | `120000`                    |
 | `ignoredPaths`       | `CODEFARMER_IGNORED_PATHS`         | 受保护和生成目录            |
 
@@ -275,9 +277,10 @@ codefarmer config set provider gemini --project
 codefarmer setup
 ```
 
-节省 token 的默认值包括：由模型自行决定推理强度、低详细度正文、不生成可见推理摘要、
-最多 25 个工具轮次，以及每个工具输出最多 32 KiB。需要更多上下文或解释时，
-可以提高 `verbosity`、`reasoningSummary`、`maxAgentTurns` 或 `maxToolOutputBytes`。
+节省 token 的默认值包括：低推理强度、低详细度正文、不生成可见推理摘要、每次模型请求
+最多 2048 个完成 token、最多 12 个工具轮次，以及每个工具输出最多 12 KiB。需要更多容量时，
+可以提高 `reasoning`、`maxOutputTokens`、`verbosity`、`reasoningSummary`、`maxAgentTurns`
+或 `maxToolOutputBytes`。
 
 可以永久、按项目或仅为一次命令更换 API 端点：
 

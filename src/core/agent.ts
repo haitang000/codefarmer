@@ -269,6 +269,7 @@ export class AgentRunner {
         reasoning: 'none',
         verbosity: 'low',
         reasoningSummary: 'none',
+        maxOutputTokens: 128,
         instructions: TITLE_INSTRUCTIONS,
         input,
         store: false,
@@ -374,6 +375,7 @@ export class AgentRunner {
           reasoning: this.options.config.reasoning,
           verbosity: this.options.config.verbosity,
           reasoningSummary: this.options.config.reasoningSummary,
+          maxOutputTokens: this.options.config.maxOutputTokens,
           instructions,
           input,
           tools:
@@ -488,6 +490,12 @@ export class AgentRunner {
         if (pendingCalls.length === 0) {
           finalMessage = completedText || streamedText;
           if (finalMessage.trim() === '') {
+            if (finishReason !== undefined && finishReason !== 'completed') {
+              throw new ProviderError(
+                `模型在生成正文前达到输出上限（状态：${finishReason}），已停止自动重试以避免额外 token 消耗。请提高 maxOutputTokens 后重试。`,
+                { retryable: false, details: { finishReason } },
+              );
+            }
             // An empty response almost always comes from the gateway or the
             // model stopping early; retry before surfacing a hard error so
             // the user is never left with a silent "completed" run.
@@ -503,12 +511,8 @@ export class AgentRunner {
               turn -= 1;
               continue;
             }
-            const reason =
-              finishReason !== undefined && finishReason !== 'completed'
-                ? `本轮响应状态为 "${finishReason}"。`
-                : '';
             throw new ProviderError(
-              `模型连续返回空响应（没有文字也没有工具调用）。${reason}通常是网关中断、上游限流或模型提前停止导致；请重试，或更换模型/网关后再继续。`,
+              '模型连续返回空响应（没有文字也没有工具调用）。通常是网关中断、上游限流或模型提前停止导致；请重试，或更换模型/网关后再继续。',
               { retryable: true, details: { finishReason: finishReason ?? null } },
             );
           }
@@ -630,6 +634,7 @@ export class AgentRunner {
         reasoning: this.options.config.reasoning,
         verbosity: this.options.config.verbosity,
         reasoningSummary: this.options.config.reasoningSummary,
+        maxOutputTokens: this.options.config.maxOutputTokens,
         instructions,
         input: summaryInput,
         tools: [],

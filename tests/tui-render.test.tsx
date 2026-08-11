@@ -15,6 +15,7 @@ import {
   wrapToLines,
   estimateContextTokens,
   formatNumber,
+  formatWorkspaceStats,
   usageBar,
 } from '../src/tui/App.js';
 import { MarkdownView } from '../src/tui/markdown.js';
@@ -46,6 +47,47 @@ function mockRuntime(): AgentRuntime {
 }
 
 describe('TUI rendering', () => {
+  it('formats workspace stats with status and model usage charts', () => {
+    const output = formatWorkspaceStats({
+      totalSessions: 2,
+      sessionsWithUsage: 2,
+      statusCounts: { active: 0, completed: 1, cancelled: 0, failed: 1 },
+      usage: {
+        inputTokens: 1_200,
+        outputTokens: 300,
+        totalTokens: 1_500,
+        reasoningTokens: 0,
+        cachedInputTokens: 0,
+      },
+      totalMessages: 5,
+      totalToolCalls: 2,
+      recent: { last7Days: 2, last30Days: 2 },
+      byModel: [
+        {
+          model: 'gpt-5-mini',
+          provider: 'openai',
+          sessions: 2,
+          usage: {
+            inputTokens: 1_200,
+            outputTokens: 300,
+            totalTokens: 1_500,
+            reasoningTokens: 0,
+            cachedInputTokens: 0,
+          },
+          estimatedCostUsd: 0.003,
+          priceMatched: true,
+        },
+      ],
+      costUnknownModels: [],
+      estimatedCostUsd: 0.003,
+    });
+
+    expect(output).toContain('Status');
+    expect(output).toContain('Tokens by model');
+    expect(output).toContain('gpt-5-mini');
+    expect(output).toContain('█');
+  });
+
   it('keeps each streamed response before the tool that follows it', () => {
     const firstAssistant = {
       id: 'assistant-1',

@@ -177,9 +177,10 @@ describe('AgentRunner', () => {
     expect(provider.requests).toHaveLength(1);
     expect(provider.requests[0]).toMatchObject({
       model: 'gpt-5.6-sol',
-      reasoning: 'auto',
+      reasoning: 'low',
       verbosity: 'low',
       reasoningSummary: 'none',
+      maxOutputTokens: 2_048,
       input: 'Introduce yourself',
       store: true,
     });
@@ -590,6 +591,27 @@ describe('AgentRunner', () => {
       retryable: true,
     });
     expect(provider.requests.length).toBe(3);
+  });
+
+  it('does not retry a truncated response that contains no answer or tool call', async () => {
+    const workspace = await temporaryWorkspace();
+    const provider = new RecordingScriptedProvider([
+      [
+        {
+          type: 'response_completed',
+          responseId: 'response-length',
+          finishReason: 'length',
+        },
+      ],
+    ]);
+    const agent = await runner(workspace, provider);
+
+    await expect(agent.run('Say something', { history: false })).rejects.toMatchObject({
+      name: ProviderError.name,
+      code: 'PROVIDER_ERROR',
+      retryable: false,
+    });
+    expect(provider.requests).toHaveLength(1);
   });
 
   it('completes when the stream ends without a response.completed event', async () => {

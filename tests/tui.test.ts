@@ -20,6 +20,7 @@ describe('TUI command parser', () => {
     expect(parseTuiCommand('/skill docs')).toEqual({ kind: 'skill', ref: 'docs' });
     expect(parseTuiCommand('/skill off')).toEqual({ kind: 'skill', ref: 'off' });
     expect(parseTuiCommand('/status')).toEqual({ kind: 'status' });
+    expect(parseTuiCommand('/stats')).toEqual({ kind: 'stats' });
     expect(parseTuiCommand('/context')).toEqual({ kind: 'context' });
     expect(parseTuiCommand('/ctx')).toEqual({ kind: 'context' });
     expect(parseTuiCommand('/compact')).toEqual({ kind: 'compact' });
@@ -46,6 +47,7 @@ describe('TUI command parser', () => {
     expect(parseTuiCommand('/exit')).toEqual({ kind: 'quit' });
     expect(TUI_HELP).toContain('/undo');
     expect(TUI_HELP).toContain('/context');
+    expect(TUI_HELP).toContain('/stats');
     expect(TUI_HELP).toContain('/compact');
     expect(TUI_HELP).toContain('/effort');
     expect(TUI_HELP).toContain('/plan');
@@ -66,7 +68,7 @@ describe('TUI command parser', () => {
     expect(tuiCommandAdvice('/hel')).toBe('p');
     expect(completeTuiCommand('/hel')).toBe('/help');
     expect(tuiCommandAdvice('/')).toBe('help');
-    expect(tuiCommandAdvice('/st')).toBe('atus');
+    expect(tuiCommandAdvice('/st')).toBe('');
     expect(tuiCommandAdvice('/in')).toBe('it');
     expect(tuiCommandAdvice('/pu')).toBe('sh');
     expect(tuiCommandAdvice('/s')).toBe('');

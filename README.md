@@ -202,7 +202,7 @@ are not supported. The agent may run `git push` through `run_command` only after
 the user explicitly confirms the exact command, including when approval is set to
 `auto`. Tool input and output are bounded, model tool
 arguments are validated, read-only calls may run concurrently, and mutations
-and commands run serially. The default agent limit is 25 turns.
+and commands run serially. The default agent limit is 12 turns.
 
 ## Skills
 
@@ -236,16 +236,17 @@ Example project configuration:
   "provider": "openai",
   "model": "gpt-5.6-sol",
   "baseURL": "https://api.openai.com/v1",
-  "reasoning": "auto",
+  "reasoning": "low",
   "verbosity": "low",
   "reasoningSummary": "none",
   "approval": "ask",
   "stream": true,
   "store": true,
   "logLevel": "info",
-  "maxAgentTurns": 25,
+  "maxAgentTurns": 12,
+  "maxOutputTokens": 2048,
   "maxFileSizeBytes": 1048576,
-  "maxToolOutputBytes": 32768,
+  "maxToolOutputBytes": 12288,
   "commandTimeoutMs": 120000,
   "ignoredPaths": [".git/**", "node_modules/**", "dist/**", ".env"]
 }
@@ -258,16 +259,17 @@ Supported environment overrides are:
 | `provider`           | `CODEFARMER_PROVIDER`              | `openai`                      |
 | `model`              | `CODEFARMER_MODEL`                 | `gpt-5.6-sol`                 |
 | `baseURL`            | `CODEFARMER_BASE_URL`              | `https://api.openai.com/v1`   |
-| `reasoning`          | `CODEFARMER_REASONING`             | `auto`                        |
+| `reasoning`          | `CODEFARMER_REASONING`             | `low`                         |
 | `verbosity`          | `CODEFARMER_VERBOSITY`             | `low`                         |
 | `reasoningSummary`   | `CODEFARMER_REASONING_SUMMARY`     | `none`                        |
 | `approval`           | `CODEFARMER_APPROVAL`              | `ask`                         |
 | `stream`             | `CODEFARMER_STREAM`                | `true`                        |
 | `store`              | `CODEFARMER_STORE`                 | `true` (required in v1)       |
 | `logLevel`           | `CODEFARMER_LOG_LEVEL`             | `info`                        |
-| `maxAgentTurns`      | `CODEFARMER_MAX_AGENT_TURNS`       | `25`                          |
+| `maxAgentTurns`      | `CODEFARMER_MAX_AGENT_TURNS`       | `12`                          |
+| `maxOutputTokens`    | `CODEFARMER_MAX_OUTPUT_TOKENS`     | `2048`                        |
 | `maxFileSizeBytes`   | `CODEFARMER_MAX_FILE_SIZE_BYTES`   | `1048576`                     |
-| `maxToolOutputBytes` | `CODEFARMER_MAX_TOOL_OUTPUT_BYTES` | `32768`                       |
+| `maxToolOutputBytes` | `CODEFARMER_MAX_TOOL_OUTPUT_BYTES` | `12288`                       |
 | `commandTimeoutMs`   | `CODEFARMER_COMMAND_TIMEOUT_MS`    | `120000`                      |
 | `ignoredPaths`       | `CODEFARMER_IGNORED_PATHS`         | protected and generated paths |
 
@@ -290,10 +292,11 @@ codefarmer config set provider gemini --project
 codefarmer setup
 ```
 
-The efficient defaults use model-selected reasoning, low text verbosity, no
-visible reasoning summary, a 25-turn tool limit, and 32 KiB per-tool output.
-Raise `verbosity`, `reasoningSummary`, `maxAgentTurns`, or
-`maxToolOutputBytes` for tasks that need more context or explanation.
+The efficient defaults use low reasoning, low text verbosity, no visible
+reasoning summary, a 2,048-token hard completion limit per model request, a
+12-turn tool limit, and 12 KiB per-tool output. Raise `reasoning`,
+`maxOutputTokens`, `verbosity`, `reasoningSummary`, `maxAgentTurns`, or
+`maxToolOutputBytes` for tasks that need more capacity.
 
 Change the API endpoint globally, per project, or for one invocation:
 

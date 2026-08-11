@@ -50,6 +50,19 @@ interface CollectedToolCall {
   arguments: string;
 }
 
+/** DeepSeek v4 defaults to high reasoning, so auto must not silently become expensive. */
+function deepSeekGenerationOptions(request: ProviderRequest): Record<string, unknown> {
+  if (request.model !== 'deepseek-v4-flash' && request.model !== 'deepseek-v4-pro') return {};
+  if (request.reasoning === 'none') return { thinking: { type: 'disabled' } };
+  const effort =
+    request.reasoning === 'auto' || request.reasoning === 'low'
+      ? 'low'
+      : request.reasoning === 'medium' || request.reasoning === 'high'
+        ? 'high'
+        : 'max';
+  return { thinking: { type: 'enabled' }, reasoning_effort: effort };
+}
+
 function messages(input: string | ProviderInput[], instructions?: string): unknown[] {
   const result: unknown[] = [];
   if (instructions !== undefined) result.push({ role: 'system', content: instructions });
@@ -253,6 +266,8 @@ export class OpenAICompatibleProvider implements AgentProvider {
         body: JSON.stringify({
           model: request.model,
           messages: messages(request.input, request.instructions),
+          ...deepSeekGenerationOptions(request),
+          ...(request.maxOutputTokens === undefined ? {} : { max_tokens: request.maxOutputTokens }),
           ...(request.tools === undefined ? {} : { tools: tools(request.tools) }),
           ...(request.tools === undefined ? {} : { parallel_tool_calls: true }),
           stream: true,

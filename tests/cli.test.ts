@@ -199,7 +199,7 @@ describe('CodeFarmer CLI', () => {
       provider: 'openai',
       model: 'gpt-5.6-sol',
       baseURL: 'https://api.openai.com/v1',
-      reasoning: 'auto',
+      reasoning: 'low',
       verbosity: 'low',
       reasoningSummary: 'none',
       approval: 'ask',
@@ -232,11 +232,12 @@ describe('CodeFarmer CLI', () => {
     expect(listResult.code).toBe(0);
     expect(JSON.parse(listResult.stdout)).toMatchObject({
       model: 'test-model',
-      reasoning: 'auto',
+      reasoning: 'low',
       verbosity: 'low',
       reasoningSummary: 'none',
       approval: 'ask',
-      maxAgentTurns: 25,
+      maxAgentTurns: 12,
+      maxOutputTokens: 2048,
     });
   });
 
@@ -470,7 +471,6 @@ describe('CodeFarmer CLI', () => {
     expect(result.stdout).toContain('会话 3');
     expect(result.stdout).toContain('gpt-5-mini');
     expect(result.stdout).toContain('gpt-5.6-sol');
-    expect(result.stdout).toContain('未匹配价格表');
     expect(result.stdout).toContain('估算费用');
   });
 
@@ -528,15 +528,15 @@ describe('CodeFarmer CLI', () => {
       reasoningTokens: 10_000,
       cachedInputTokens: 500_000,
     });
-    expect(payload.costUnknownModels).toEqual(['gpt-5.6-sol']);
-    expect(payload.estimatedCostUsd).toBeCloseTo(0.338, 9);
+    expect(payload.costUnknownModels).toEqual([]);
+    expect(payload.estimatedCostUsd).toBeCloseTo(0.33835, 9);
     const gpt = payload.byModel.find((stat) => stat.model === 'gpt-5-mini');
     expect(gpt?.sessions).toBe(2);
     expect(gpt?.priceMatched).toBe(true);
     expect(gpt?.estimatedCostUsd).toBeCloseTo(0.338, 9);
-    const unknown = payload.byModel.find((stat) => stat.model === 'gpt-5.6-sol');
-    expect(unknown?.priceMatched).toBe(false);
-    expect(unknown?.estimatedCostUsd).toBe(0);
+    const current = payload.byModel.find((stat) => stat.model === 'gpt-5.6-sol');
+    expect(current?.priceMatched).toBe(true);
+    expect(current?.estimatedCostUsd).toBeCloseTo(0.00035, 9);
   });
 
   it('reports an empty workspace for stats', async () => {

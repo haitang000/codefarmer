@@ -28,6 +28,8 @@ export interface CodeFarmerConfig {
   store: true;
   logLevel: LogLevel;
   maxAgentTurns: number;
+  /** Hard per-request completion budget, including provider reasoning tokens. */
+  maxOutputTokens: number;
   maxFileSizeBytes: number;
   maxToolOutputBytes: number;
   commandTimeoutMs: number;
@@ -100,6 +102,10 @@ export type ProviderEvent =
   // Reasoning summary streamed by the provider (the model's visible thinking);
   // deltas concatenate into the full thinking text for one response turn.
   | { type: 'reasoning_delta'; delta: string }
+  // The provider echoes the concrete reasoning effort the model actually used.
+  // Emitted when the request left the effort to the model ('auto') so the UI
+  // can tell the user whenever the agent picks or switches its own depth.
+  | { type: 'reasoning_effort'; effort: ReasoningEffort }
   | { type: 'tool_call'; call: ProviderToolCall }
   | { type: 'usage'; usage: TokenUsage }
   | {
@@ -146,6 +152,8 @@ export interface ProviderRequest {
   reasoning: ReasoningEffort;
   verbosity?: TextVerbosity;
   reasoningSummary?: ReasoningSummary;
+  /** Hard per-request completion budget, including provider reasoning tokens. */
+  maxOutputTokens?: number;
   instructions?: string;
   input: string | ProviderInput[];
   previousResponseId?: string;

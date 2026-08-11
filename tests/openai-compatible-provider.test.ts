@@ -127,6 +127,7 @@ describe('OpenAICompatibleProvider', () => {
     for await (const event of provider.stream({
       model: 'deepseek-chat',
       reasoning: 'auto',
+      maxOutputTokens: 512,
       instructions: 'You are a coding assistant.',
       input: [
         { type: 'message', role: 'user', content: 'Read the README.' },
@@ -158,10 +159,14 @@ describe('OpenAICompatibleProvider', () => {
       events.push(event);
     }
 
-    const request = JSON.parse(received) as { messages: Record<string, unknown>[] };
+    const request = JSON.parse(received) as {
+      messages: Record<string, unknown>[];
+      max_tokens?: number;
+    };
     expect(request).toMatchObject({
       model: 'deepseek-chat',
       stream: true,
+      max_tokens: 512,
     });
     expect(request.messages[2]).toMatchObject({
       role: 'assistant',
@@ -186,6 +191,44 @@ describe('OpenAICompatibleProvider', () => {
       responseId: 'chatcmpl-1',
       outputText: 'I will inspect it.',
       finishReason: 'tool_calls',
+    });
+  });
+
+  it('pins DeepSeek v4 reasoning to the configured effort instead of its high default', async () => {
+    let received = '';
+    const server = createServer((request, response) => {
+      request.on('data', (chunk: Buffer) => {
+        received += chunk.toString('utf8');
+      });
+      request.on('end', () => {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ id: 'chatcmpl-low', choices: [{ message: { content: 'ok' } }] }));
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('Test server has no port');
+
+    const provider = new OpenAICompatibleProvider({
+      provider: 'deepseek',
+      apiKey: 'test-key',
+      baseURL: `http://127.0.0.1:${String(address.port)}/v1`,
+    });
+    for await (const event of provider.stream({
+      model: 'deepseek-v4-flash',
+      reasoning: 'low',
+      input: 'hello',
+      maxOutputTokens: 256,
+    })) {
+      // Drain the stream so the request completes.
+      void event;
+    }
+    expect(JSON.parse(received)).toMatchObject({
+      model: 'deepseek-v4-flash',
+      thinking: { type: 'enabled' },
+      reasoning_effort: 'low',
+      max_tokens: 256,
     });
   });
 

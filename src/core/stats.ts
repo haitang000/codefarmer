@@ -73,13 +73,19 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Approximate public list prices in USD per 1M tokens, keyed by model-family
- * prefix. Matching is case-insensitive, prefers the longest prefix, and only
- * matches at a family boundary (`-`, `/`, or end of name) so a hypothetical
+ * prefix. Verified from the providers' public price pages on 2026-08-10:
+ * OpenAI: https://platform.openai.com/docs/pricing
+ * Gemini: https://ai.google.dev/gemini-api/docs/pricing
+ * xAI: https://docs.x.ai/developers/pricing
+ * DeepSeek: https://api-docs.deepseek.com/quick_start/pricing
+ * Matching is case-insensitive, prefers the longest prefix, and only matches
+ * at a family boundary (`-`, `/`, or end of name) so a hypothetical
  * `gpt-5.6-sol` is not silently priced as `gpt-5`. Prices change over time;
  * treat cost output as an estimate and consult the provider for billing.
  */
 export const MODEL_PRICES_PER_MT: readonly (readonly [string, ModelPrice])[] = [
   // OpenAI
+  ['gpt-5.6-sol', { inputPerMT: 5, outputPerMT: 30, cachedInputPerMT: 0.5 }],
   ['gpt-5-nano', { inputPerMT: 0.05, outputPerMT: 0.4, cachedInputPerMT: 0.005 }],
   ['gpt-5-mini', { inputPerMT: 0.25, outputPerMT: 2, cachedInputPerMT: 0.025 }],
   ['gpt-5-pro', { inputPerMT: 2.5, outputPerMT: 20, cachedInputPerMT: 0.25 }],
@@ -99,18 +105,22 @@ export const MODEL_PRICES_PER_MT: readonly (readonly [string, ModelPrice])[] = [
   ['o1-mini', { inputPerMT: 3, outputPerMT: 12, cachedInputPerMT: 1.5 }],
   ['o1', { inputPerMT: 15, outputPerMT: 60, cachedInputPerMT: 7.5 }],
   // Google Gemini
-  ['gemini-2.5-pro', { inputPerMT: 1.25, outputPerMT: 10, cachedInputPerMT: 0.3125 }],
-  ['gemini-2.5-flash-lite', { inputPerMT: 0.1, outputPerMT: 0.4, cachedInputPerMT: 0.025 }],
-  ['gemini-2.5-flash', { inputPerMT: 0.3, outputPerMT: 2.5, cachedInputPerMT: 0.075 }],
+  // Gemini 2.5 Pro uses the published <=200k-token standard price tier.
+  ['gemini-2.5-pro', { inputPerMT: 1.25, outputPerMT: 10, cachedInputPerMT: 0.125 }],
+  ['gemini-2.5-flash-lite', { inputPerMT: 0.1, outputPerMT: 0.4, cachedInputPerMT: 0.01 }],
+  ['gemini-2.5-flash', { inputPerMT: 0.3, outputPerMT: 2.5, cachedInputPerMT: 0.03 }],
   ['gemini-2.0-flash', { inputPerMT: 0.1, outputPerMT: 0.4, cachedInputPerMT: 0.025 }],
   ['gemini-1.5-pro', { inputPerMT: 1.25, outputPerMT: 5, cachedInputPerMT: 0.3125 }],
   ['gemini-1.5-flash', { inputPerMT: 0.075, outputPerMT: 0.3, cachedInputPerMT: 0.01875 }],
   // xAI Grok
+  ['grok-4.5', { inputPerMT: 2, outputPerMT: 6, cachedInputPerMT: 0.3 }],
   ['grok-4', { inputPerMT: 3, outputPerMT: 15, cachedInputPerMT: 0.3 }],
   ['grok-3', { inputPerMT: 3, outputPerMT: 15, cachedInputPerMT: 0.3 }],
   ['grok-2', { inputPerMT: 2, outputPerMT: 10, cachedInputPerMT: 0.2 }],
   ['grok-beta', { inputPerMT: 5, outputPerMT: 15 }],
   // DeepSeek
+  ['deepseek-v4-flash', { inputPerMT: 0.14, outputPerMT: 0.28, cachedInputPerMT: 0.0028 }],
+  ['deepseek-v4-pro', { inputPerMT: 0.435, outputPerMT: 0.87, cachedInputPerMT: 0.003625 }],
   ['deepseek-chat', { inputPerMT: 0.27, outputPerMT: 1.1, cachedInputPerMT: 0.07 }],
   ['deepseek-reasoner', { inputPerMT: 0.55, outputPerMT: 2.19, cachedInputPerMT: 0.14 }],
   ['deepseek-coder', { inputPerMT: 0.14, outputPerMT: 0.28, cachedInputPerMT: 0.014 }],

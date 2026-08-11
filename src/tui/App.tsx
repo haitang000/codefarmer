@@ -23,6 +23,7 @@ import {
   sessionContextChars,
 } from '../core/session-compact.js';
 import { formatSkillCatalog } from '../core/skills.js';
+import { computeWorkspaceStats, type WorkspaceStats } from '../core/stats.js';
 import { MarkdownLine, MarkdownView } from './markdown.js';
 import {
   extractCommitMessage,
@@ -68,6 +69,7 @@ const READ_ONLY_COMMANDS: ReadonlySet<TuiCommand['kind']> = new Set([
   'effort',
   'plan',
   'status',
+  'stats',
   'config',
   'doctor',
   'sessions',
@@ -365,6 +367,75 @@ export function usageBar(ratio: number, width = 20): string {
   return `${'█'.repeat(filled)}${'░'.repeat(width - filled)}`;
 }
 
+/** Render aggregate usage as a compact terminal dashboard for the TUI. */
+export function formatWorkspaceStats(stats: WorkspaceStats): string {
+  const statusLabels: Record<keyof WorkspaceStats['statusCounts'], string> = {
+    active: 'active',
+    completed: 'done',
+    cancelled: 'cancelled',
+    failed: 'failed',
+  };
+  const maxStatus = Math.max(1, ...Object.values(stats.statusCounts));
+  const maxTokens = Math.max(1, ...stats.byModel.map((stat) => stat.usage.totalTokens));
+  const modelLines =
+    stats.byModel.length === 0
+      ? ['  (no recorded token usage)']
+      : stats.byModel.map((stat) => {
+          const cost = stat.priceMatched ? `$${stat.estimatedCostUsd.toFixed(4)}` : 'unknown';
+          const model = stat.model.length > 28 ? `${stat.model.slice(0, 27)}…` : stat.model;
+          return `  ${model.padEnd(28, ' ')} ${usageBar(stat.usage.totalTokens / maxTokens, 20)} ${formatNumber(stat.usage.totalTokens).padStart(10, ' ')}  ${cost}`;
+        });
+  const statusLines = (Object.entries(stats.statusCounts) as [keyof WorkspaceStats['statusCounts'], number][]).map(
+    ([status, count]) => `  ${statusLabels[status].padEnd(9, ' ')} ${usageBar(count / maxStatus, 12)} ${String(count)}`,
+  );
+  return [
+    `Sessions    ${formatNumber(stats.totalSessions)} (usage ${formatNumber(stats.sessionsWithUsage)})`,
+    `Messages    ${formatNumber(stats.totalMessages)}   Tools ${formatNumber(stats.totalToolCalls)}`,
+    `Activity    7d ${formatNumber(stats.recent.last7Days)}   30d ${formatNumber(stats.recent.last30Days)}`,
+    `Tokens      in ${formatNumber(stats.usage.inputTokens)} / out ${formatNumber(stats.usage.outputTokens)} / total ${formatNumber(stats.usage.totalTokens)}`,
+    `Cost        $${stats.estimatedCostUsd.toFixed(4)} estimated (matched models only)`,
+    '',
+    'Status',
+    ...statusLines,
+    '',
+    'Tokens by model (bar = relative usage)',
+    '  Model                        Usage                  Tokens       Cost',
+    ...modelLines,
+    ...(stats.costUnknownModels.length === 0
+      ? []
+      : ['', `Unknown price models: ${stats.costUnknownModels.join(', ')}`]),
+  ].join('\n');
+}
+
+type StatsColor = 'cyan' | 'green' | 'yellow' | 'magenta' | 'red' | 'gray';
+
+function statsLineColor(line: string): StatsColor {
+  if (line.startsWith('Status') || line.startsWith('Tokens by model')) return 'cyan';
+  if (line.startsWith('  Model')) return 'green';
+  if (/^\s{2}(active|done|cancelled|failed)\s/u.test(line)) return 'yellow';
+  if (line.startsWith('  ') && line.includes('█')) return 'green';
+  if (line.startsWith('Unknown price')) return 'red';
+  if (line.startsWith('Cost')) return 'yellow';
+  if (line.startsWith('Tokens')) return 'magenta';
+  return 'gray';
+}
+
+function StatsView({ content, marginBottom = 0 }: { content: string; marginBottom?: number }): React.ReactElement {
+  return (
+    <Box paddingLeft={2} flexDirection="column" marginBottom={marginBottom}>
+      {content.split('\n').map((line, index) => (
+        <Text
+          key={`${String(index)}-${line}`}
+          color={statsLineColor(line)}
+          bold={line === 'Status' || line.startsWith('Tokens by model')}
+        >
+          {line}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
 // Keep the active-turn indicator compact; tool-call labels still take over
 // verbatim when present (for example, "Preparing read_file").
 const SPINNER_FRAMES = ['◐', '◓', '◑', '◒'];
@@ -566,6 +637,10 @@ export function EntryView({
         ) : null}
       </Box>
     );
+  }
+
+  if (entry.display === 'stats') {
+    return <StatsView content={entry.content} marginBottom={marginBottom} />;
   }
 
   return (
@@ -803,6 +878,18 @@ function ClippedEntryImpl({
         </Text>
       ));
     }
+  } else if (entry.display === 'stats') {
+    const lines = entry.content.split('\n').flatMap((line) => wrapToLines(line, width));
+    takeLines(lines, (line, index) => (
+      <Text
+        key={index}
+        color={statsLineColor(line)}
+        bold={line === 'Status' || line.startsWith('Tokens by model')}
+        wrap="truncate-end"
+      >
+        {line}
+      </Text>
+    ));
   } else {
     takeLines(wrapToLines(entry.content, width), (line, index) => (
       <Text key={index} color={entry.kind === 'error' ? 'red' : 'yellow'} wrap="truncate-end">
@@ -970,6 +1057,9 @@ export function TuiApp({
   const controllerRef = useRef<AbortController | undefined>(undefined);
   const approvalQueueRef = useRef<PendingApproval[]>([]);
   const currentApprovalRef = useRef<PendingApproval | undefined>(undefined);
+  // Last reasoning effort the model reported; the UI tells the user whenever
+  // the agent picks ('auto') or switches its own thinking depth mid-session.
+  const lastReasoningEffortRef = useRef<ReasoningEffort | undefined>(undefined);
   const historyRef = useRef<string[]>([]);
   const historyIndexRef = useRef(-1);
   // Transcript scroll position in rendered lines from the top; -1 = pinned to the latest message.
@@ -1109,8 +1199,12 @@ export function TuiApp({
     return () => bridge.setToolEventHandler(undefined);
   }, [bridge, handleToolEvent]);
 
-  const appendSystem = useCallback((content: string, kind: 'system' | 'error' = 'system'): void => {
-    setEntries((previous) => [...previous, { id: id(kind), kind, content }]);
+  const appendSystem = useCallback(
+    (content: string, kind: 'system' | 'error' = 'system', display?: 'stats'): void => {
+    setEntries((previous) => [
+      ...previous,
+      { id: id(kind), kind, content, ...(display === undefined ? {} : { display }) },
+    ]);
   }, []);
 
   const togglePlanMode = useCallback((): void => {
@@ -1205,6 +1299,16 @@ export function TuiApp({
                 () => flushDeltaBuffer(currentAssistantId),
                 60,
               );
+            } else if (event.type === 'reasoning_effort') {
+              const previous = lastReasoningEffortRef.current;
+              lastReasoningEffortRef.current = event.effort;
+              if (previous === undefined) {
+                appendSystem(`The model chose reasoning effort ${event.effort}.`);
+              } else if (previous !== event.effort) {
+                appendSystem(
+                  `The model switched reasoning effort from ${previous} to ${event.effort}.`,
+                );
+              }
             } else if (
               event.type === 'response_completed' &&
               event.outputText !== undefined &&
@@ -1417,6 +1521,9 @@ export function TuiApp({
               `Git        ${gitLine}`,
             ].join('\n'),
           );
+        } else if (command.kind === 'stats') {
+          const sessions = await runtimeRef.current.sessions.list();
+          appendSystem(formatWorkspaceStats(computeWorkspaceStats(sessions)), 'system', 'stats');
         } else if (command.kind === 'context') {
           const active = runtimeRef.current;
           const session = active.session;

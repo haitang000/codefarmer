@@ -195,6 +195,7 @@ describe('OpenAIProvider Base URL', () => {
       reasoning: 'medium',
       verbosity: 'high',
       reasoningSummary: 'detailed',
+      maxOutputTokens: 512,
       input: 'hello',
       store: false,
     })) {
@@ -205,9 +206,11 @@ describe('OpenAIProvider Base URL', () => {
     const parsedBody = JSON.parse(requestBody) as {
       reasoning?: { summary?: string };
       text?: { verbosity?: string };
+      max_output_tokens?: number;
     };
     expect(parsedBody.reasoning?.summary).toBe('detailed');
     expect(parsedBody.text?.verbosity).toBe('high');
+    expect(parsedBody.max_output_tokens).toBe(512);
 
     const reasoningDeltas = events
       .filter((event): event is Extract<ProviderEvent, { type: 'reasoning_delta' }> =>
@@ -291,5 +294,64 @@ describe('OpenAIProvider Base URL', () => {
     expect(parsedBody.reasoning?.effort).toBeUndefined();
     expect(parsedBody.reasoning).toBeUndefined();
     expect(parsedBody.text?.verbosity).toBe('low');
+  });
+
+  it('surfaces the effort the model picked under auto so the UI can announce switches', async () => {
+    const server = createServer((_request, response) => {
+      response.setHeader('content-type', 'text/event-stream');
+      response.end(
+        [
+          `event: response.completed\ndata: ${JSON.stringify({
+            type: 'response.completed',
+            response: {
+              id: 'resp-effort',
+              object: 'response',
+              status: 'completed',
+              output_text: 'Done.',
+              reasoning: { effort: 'high' },
+              usage: { input_tokens: 5, output_tokens: 6, total_tokens: 11 },
+            },
+          })}\n\n`,
+        ].join(''),
+      );
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string')
+      throw new Error('Test server has no TCP port');
+
+    const provider = new OpenAIProvider({
+      apiKey: 'test-api-key',
+      baseURL: `http://127.0.0.1:${String(address.port)}/v1`,
+      maxRetries: 0,
+    });
+
+    const collect = async (reasoning: 'auto' | 'medium'): Promise<ProviderEvent[]> => {
+      const events: ProviderEvent[] = [];
+      for await (const event of provider.stream({
+        model: 'test-model',
+        reasoning,
+        verbosity: 'low',
+        reasoningSummary: 'none',
+        input: 'hello',
+        store: false,
+      })) {
+        events.push(event);
+      }
+      return events;
+    };
+
+    // 'auto' leaves the effort to the model; the echoed choice must surface.
+    const autoEvents = await collect('auto');
+    expect(
+      autoEvents.some(
+        (event) => event.type === 'reasoning_effort' && event.effort === 'high',
+      ),
+    ).toBe(true);
+
+    // An explicit effort was user-chosen, not agent-chosen; keep it silent.
+    const explicitEvents = await collect('medium');
+    expect(explicitEvents.some((event) => event.type === 'reasoning_effort')).toBe(false);
   });
 });
