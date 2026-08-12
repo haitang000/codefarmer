@@ -22,7 +22,7 @@ export function setTerminalTitle(title: string): void {
 export { TuiApp, type TuiAppProps } from './App.js';
 export { createTuiRuntimeFactory, TuiInteractionBridge } from './runtime.js';
 export { formatTerminalTitle, normaliseSessionTitle, TUI_PRODUCT_TITLE } from './title.js';
-export { parseTuiCommand, TUI_HELP } from './types.js';
+export { getTuiHelp, parseTuiCommand, TUI_HELP } from './types.js';
 export type {
   ApprovalView,
   ToolView,

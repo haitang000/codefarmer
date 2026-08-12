@@ -44,6 +44,7 @@ export interface GlobalOptions {
   verbosity?: CodeFarmerConfig['verbosity'];
   reasoningSummary?: CodeFarmerConfig['reasoningSummary'];
   approval?: CodeFarmerConfig['approval'];
+  language?: CodeFarmerConfig['language'];
   stream?: boolean;
   logLevel?: CodeFarmerConfig['logLevel'];
   verbose?: boolean;
@@ -90,6 +91,7 @@ function configOverrides(options: GlobalOptions): ConfigOverrides {
       ? {}
       : { reasoningSummary: options.reasoningSummary }),
     ...(options.approval === undefined ? {} : { approval: options.approval }),
+    ...(options.language === undefined ? {} : { language: options.language }),
     ...(options.stream === undefined ? {} : { stream: options.stream }),
     ...(options.logLevel === undefined ? {} : { logLevel: options.logLevel }),
   };

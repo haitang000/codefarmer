@@ -8,6 +8,25 @@ export type ReasoningEffort = 'auto' | 'none' | 'low' | 'medium' | 'high' | 'xhi
 export type TextVerbosity = 'low' | 'medium' | 'high';
 export type ReasoningSummary = 'none' | 'auto' | 'concise' | 'detailed';
 
+export const LANGUAGE_IDS = ['en', 'zh-CN'] as const;
+export type Language = (typeof LANGUAGE_IDS)[number];
+
+/** Accept common aliases used by the CLI and interactive command. */
+export function normaliseLanguage(value: string): Language | undefined {
+  const normalised = value.trim().toLowerCase().replace('_', '-');
+  if (normalised === 'en' || normalised === 'english' || normalised === '英文') return 'en';
+  if (
+    normalised === 'zh' ||
+    normalised === 'zh-cn' ||
+    normalised === 'chinese' ||
+    normalised === '中文' ||
+    normalised === '简体中文'
+  ) {
+    return 'zh-CN';
+  }
+  return undefined;
+}
+
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
 
 export type JsonPrimitive = string | number | boolean | null;
@@ -17,6 +36,7 @@ export interface JsonObject {
 }
 
 export interface CodeFarmerConfig {
+  language: Language;
   provider: ProviderId;
   model: string;
   baseURL: string;

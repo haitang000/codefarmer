@@ -43,6 +43,8 @@ const MAX_TITLE_INPUT_CHARS = 12_000;
 const MAX_TITLE_LENGTH = 60;
 /** Keep the one-shot no-reasoning recovery deliberately small. */
 const LENGTH_RECOVERY_MAX_OUTPUT_TOKENS = 768;
+/** DeepSeek can require long tool chains; its configured limit is a soft checkpoint. */
+const DEEPSEEK_HARD_TURN_LIMIT = 100;
 
 const TITLE_INSTRUCTIONS = `请根据提供的会话内容生成一个简洁、准确的会话标题。
 要求：
@@ -172,6 +174,47 @@ function trimTranscript(transcript: ProviderInput[], maximumChars: number): void
       next += 1;
     }
     firstCall = next < transcript.length ? next : -1;
+  }
+
+  // A conversation can also overflow without any tool calls (for example,
+  // repeated long user/assistant messages). Drop the oldest ordinary message
+  // entries as a final fallback instead of sending an over-limit request that
+  // DeepSeek will reject with HTTP 400.
+  while (total > maximumChars) {
+    const messageIndex = transcript.findIndex((item, index) => {
+      if (item.type !== 'message') return false;
+      // Keep the first message as the task anchor whenever possible.
+      return index > 0;
+    });
+    if (messageIndex < 0) break;
+    const [removed] = transcript.splice(messageIndex, 1);
+    if (removed !== undefined) total -= providerInputLength(removed);
+  }
+
+  // If one message alone is larger than the budget, keep a bounded prefix so
+  // the request remains valid and the model still sees the beginning of the
+  // task/output for orientation.
+  if (total > maximumChars) {
+    const largestIndex = transcript.reduce(
+      (largest, item, index) =>
+        providerInputLength(item) > providerInputLength(transcript[largest] ?? item)
+          ? index
+          : largest,
+      0,
+    );
+    const largest = transcript[largestIndex];
+    if (largest?.type === 'message' || largest?.type === 'function_call_output') {
+      const content = largest.type === 'message' ? largest.content : largest.output;
+      const keep = Math.max(1, maximumChars - (total - content.length));
+      const truncated =
+        content.length <= keep
+          ? content
+          : `${content.slice(0, Math.max(1, keep - 24))}\n…[context truncated]`;
+      transcript[largestIndex] =
+        largest.type === 'message'
+          ? { ...largest, content: truncated }
+          : { ...largest, output: truncated };
+    }
   }
 }
 
@@ -366,6 +409,7 @@ export class AgentRunner {
     const instructions = buildAgentInstructions({
       workspace: this.options.workspace,
       approval: this.options.config.approval,
+      language: this.options.config.language,
       ...(this.options.skillCatalog === undefined ? {} : { skills: this.options.skillCatalog }),
       ...(selectedSkills.length === 0 ? {} : { selectedSkills }),
       ...(runOptions.plan === true ? { plan: true } : {}),
@@ -373,7 +417,16 @@ export class AgentRunner {
     });
 
     try {
-      for (let turn = 0; turn < this.options.config.maxAgentTurns; turn += 1) {
+      const configuredTurnLimit = this.options.config.maxAgentTurns;
+      const canExtendDeepSeekTurns = this.options.provider.name === 'deepseek';
+      const turnLimit = canExtendDeepSeekTurns ? DEEPSEEK_HARD_TURN_LIMIT : configuredTurnLimit;
+      for (let turn = 0; turn < turnLimit; turn += 1) {
+        if (canExtendDeepSeekTurns && turn > 0 && turn % configuredTurnLimit === 0) {
+          runOptions.onEvent?.({
+            type: 'text_delta',
+            delta: `\n[DeepSeek tool budget extended from ${String(turn)} to ${String(Math.min(turnLimit, turn + configuredTurnLimit))} rounds; continuing the task]\n`,
+          });
+        }
         const pendingCalls: { callId: string; name: string; arguments: string }[] = [];
         let responseId: string | undefined;
         let finishReason: string | undefined;
@@ -627,7 +680,12 @@ export class AgentRunner {
           if (result === undefined) throw new ToolError(`工具未返回结果: ${call.name}`);
           const parsedArguments = parseArguments(call.arguments);
           const approved = approvalState(call.name, result);
-          toolCalls.push({ id: call.callId, name: call.name, arguments: parsedArguments, result });
+          toolCalls.push({
+            id: call.callId,
+            name: call.name,
+            arguments: parsedArguments,
+            result,
+          });
           session.toolCalls.push({
             callId: call.callId,
             toolName: call.name,
@@ -650,11 +708,11 @@ export class AgentRunner {
         if (store !== undefined) store.saveQueued(session);
       }
 
-      // The configured turn limit is strict. Give the model one concise,
-      // tool-free opportunity to report progress without extending the run.
-      const turnLimit = this.options.config.maxAgentTurns;
+      // Non-DeepSeek providers keep the configured limit strict. DeepSeek gets
+      // here only after its automatic budget extensions reach the hard cap.
+      const exhaustedTurnLimit = turnLimit;
       const summaryInstruction =
-        `已达到最大工具轮次 ${String(turnLimit)}，不能再调用任何工具。` +
+        `已达到最大工具轮次 ${String(exhaustedTurnLimit)}，不能再调用任何工具。` +
         '请简要总结已完成的修改、未完成事项、失败原因和下一步。';
       const summaryMessage: ProviderInput = {
         type: 'message',
@@ -712,7 +770,7 @@ export class AgentRunner {
         // not throw away the whole run: report what was actually done.
         const succeeded = toolCalls.filter((call) => call.result.success).length;
         finalMessage =
-          `已达到最大工具轮次 ${String(turnLimit)}，且收尾总结请求未能完成` +
+          `已达到最大工具轮次 ${String(exhaustedTurnLimit)}，且收尾总结请求未能完成` +
           (summaryToolCall
             ? '（模型仍尝试调用工具）'
             : summaryText.trim() === ''

@@ -119,6 +119,7 @@ parent Git repository.
 | `codefarmer config set <key> <value>`           | Write a user setting                                                     |
 | `codefarmer config set --project <key> <value>` | Write a project setting                                                  |
 | `codefarmer config path`                        | Print the configuration path                                             |
+| `codefarmer language [language]`                | Show or persist the interface and agent response language                |
 | `codefarmer doctor`                             | Check Node, key, config, permissions, optional Git, and API connectivity |
 | `codefarmer completions <shell>`                | Print a bash, zsh, or fish completion script                             |
 
@@ -129,6 +130,7 @@ options include:
 --cwd <path>
 --model <model>
 --base-url <url>
+--language <en|zh-CN>
 --reasoning <auto|none|low|medium|high|xhigh|max>
 --verbosity <low|medium|high>
 --reasoning-summary <none|auto|concise|detailed>
@@ -178,6 +180,7 @@ with `/plan [on|off]` and `/auto [on|off]`.
 | `/effort`        | Open the reasoning effort picker (↑/↓ + Enter)                                             |
 | `/plan [on/off]` | Enable or disable read-only planning mode                                                  |
 | `/auto [on/off]` | Enable or disable automatic plan-and-execute mode                                          |
+| `/language [en   | zh-CN]`                                                                                    | Switch the interface and agent response language for the current TUI session |
 | `/config`        | Show effective configuration                                                               |
 | `/sessions`      | List saved sessions                                                                        |
 | `/resume <id>`   | Switch to a saved session                                                                  |
@@ -276,6 +279,7 @@ Supported environment overrides are:
 | `model`              | `CODEFARMER_MODEL`                 | `gpt-5.6-sol`                 |
 | `baseURL`            | `CODEFARMER_BASE_URL`              | `https://api.openai.com/v1`   |
 | `reasoning`          | `CODEFARMER_REASONING`             | `low`                         |
+| `language`           | `CODEFARMER_LANGUAGE`              | `en`                          |
 | `verbosity`          | `CODEFARMER_VERBOSITY`             | `low`                         |
 | `reasoningSummary`   | `CODEFARMER_REASONING_SUMMARY`     | `none`                        |
 | `approval`           | `CODEFARMER_APPROVAL`              | `ask`                         |
@@ -318,6 +322,17 @@ For `deepseek-v4-flash` and `deepseek-v4-pro`, when reasoning consumes the entir
 before any answer text is produced, CodeFarmer makes at most one low-cost recovery attempt with
 reasoning disabled, low verbosity, and a 768-token cap. It does not repeat the full-budget request;
 partial answers are kept as-is.
+
+DeepSeek streaming responses are parsed with the documented SSE keep-alive comments and `[DONE]`
+terminator. A dropped socket or truncated stream is treated as a transient provider failure and the
+same agent turn is replayed with exponential backoff (up to three attempts), so an incomplete stream
+cannot be mistaken for a successful task. Tool-call turns also replay the complete
+`reasoning_content` required by DeepSeek thinking mode.
+
+For DeepSeek, `maxAgentTurns` is a soft checkpoint rather than an immediate stop: when a long task
+reaches the configured number of tool rounds, CodeFarmer automatically extends the budget in chunks
+and continues with the existing transcript, up to a hard safety cap of 100 rounds. Other providers
+keep the configured limit strict.
 
 Change the API endpoint globally, per project, or for one invocation:
 

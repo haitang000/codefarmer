@@ -1,5 +1,6 @@
 import type { ApprovalRequest } from '../core/approval.js';
-import type { ProviderToolCall, TokenUsage, ToolResult } from '../types.js';
+import type { Language, ProviderToolCall, TokenUsage, ToolResult } from '../types.js';
+import { normaliseLanguage } from '../types.js';
 
 export type TuiCommand =
   | { kind: 'prompt'; value: string }
@@ -16,6 +17,7 @@ export type TuiCommand =
   | { kind: 'model'; value: string }
   | { kind: 'plan'; value: string }
   | { kind: 'auto'; value: string }
+  | { kind: 'language'; value: string }
   | { kind: 'config' }
   | { kind: 'doctor' }
   | { kind: 'diff' }
@@ -71,7 +73,7 @@ export interface TuiUsage {
   usage: TokenUsage;
 }
 
-export const TUI_HELP = [
+const TUI_HELP_EN = [
   'SESSION',
   '  /help       show this help',
   '  /new        start a new session',
@@ -91,6 +93,7 @@ export const TUI_HELP = [
   'PERMISSIONS',
   '  /plan [on|off]  read-only research mode',
   '  /auto [on|off]  plan and execute without ordinary approvals',
+  '  /language [en|zh-CN]  set the interface and agent response language',
   '  Shift+Tab       cycle CODE, PLAN, and AUTO modes',
   '  /config     show the effective configuration',
   'DEBUG',
@@ -103,6 +106,46 @@ export const TUI_HELP = [
   '  /doctor     check local runtime prerequisites',
   '  Ctrl+O      toggle the reasoning display',
 ].join('\n');
+
+const TUI_HELP_ZH = [
+  '会话',
+  '  /help       显示帮助',
+  '  /new        开始新会话',
+  '  /sessions   列出已保存会话',
+  '  /resume ID  恢复已保存会话',
+  '  /delete ID  删除已保存会话',
+  '  /compact    压缩早期消息为摘要',
+  '  /cancel     取消当前任务',
+  '  /quit       退出 CodeFarmer',
+  '工作区',
+  '  /status     显示工作区和运行状态',
+  '  /diff       显示当前 Git 差异',
+  '  /commit     暂存并提交工作区变更',
+  '  /push       推送当前分支到上游',
+  '  /undo       撤销最近一次文件变更',
+  '  /init       将工作区摘要写入 AGENT.md',
+  '权限',
+  '  /plan [on|off]  只读研究模式',
+  '  /auto [on|off]  计划并执行，自动批准普通操作',
+  '  /language [en|zh-CN]  设置界面和 Agent 回复语言',
+  '  Shift+Tab       循环切换 CODE、PLAN、AUTO 模式',
+  '  /config     显示生效配置',
+  '调试',
+  '  /context    显示上下文和 Token 用量',
+  '  /stats      显示用量图表和估算费用',
+  '  /effort     打开推理强度选择器（←/→ + Enter）',
+  '  /model NAME 切换当前模型',
+  '  /skills     列出已发现技能',
+  '  /skill REF  为本会话选择技能；/skill off 清除',
+  '  /doctor     检查本地运行环境',
+  '  Ctrl+O      切换推理摘要显示',
+].join('\n');
+
+export function getTuiHelp(language: Language = 'en'): string {
+  return language === 'zh-CN' ? TUI_HELP_ZH : TUI_HELP_EN;
+}
+
+export const TUI_HELP = TUI_HELP_EN;
 
 /** Commands offered by the interactive prompt, in display/completion order. */
 export const TUI_COMMANDS = [
@@ -119,6 +162,7 @@ export const TUI_COMMANDS = [
   'model',
   'plan',
   'auto',
+  'language',
   'config',
   'doctor',
   'sessions',
@@ -190,6 +234,12 @@ export function parseTuiCommand(input: string): TuiCommand {
       return { kind: 'plan', value: (parts[0] ?? '').toLowerCase() };
     case 'auto':
       return { kind: 'auto', value: (parts[0] ?? '').toLowerCase() };
+    case 'language':
+    case 'lang': {
+      const requested = parts.join(' ');
+      const canonical = requested.length === 0 ? '' : (normaliseLanguage(requested) ?? requested);
+      return { kind: 'language', value: canonical };
+    }
     case 'config':
       return { kind: 'config' };
     case 'doctor':

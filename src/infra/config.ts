@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import { PROVIDER_IDS } from '../types.js';
+import { normaliseLanguage, PROVIDER_IDS } from '../types.js';
 import type {
   ApprovalPolicy,
   CodeFarmerConfig,
@@ -32,6 +32,7 @@ export const DEFAULT_IGNORED_PATHS = [
 ] as const;
 
 export const DEFAULT_CONFIG: Readonly<CodeFarmerConfig> = {
+  language: 'en',
   provider: 'openai',
   model: 'gpt-5.6-sol',
   baseURL: 'https://api.openai.com/v1',
@@ -65,6 +66,7 @@ const baseURLSchema = z
   .transform((value) => value.replace(/\/+$/u, ''));
 
 const configShape = {
+  language: z.enum(['en', 'zh-CN']),
   provider: z.enum(PROVIDER_IDS),
   model: z.string().trim().min(1),
   baseURL: baseURLSchema,
@@ -156,6 +158,13 @@ function parseStore(value: string | undefined): true | undefined {
   return parsed;
 }
 
+function parseLanguage(value: string | undefined): CodeFarmerConfig['language'] | undefined {
+  if (value === undefined) return undefined;
+  const language = normaliseLanguage(value);
+  if (language === undefined) throw new ConfigError('CODEFARMER_LANGUAGE must be en or zh-CN.');
+  return language;
+}
+
 function parseIgnoredPaths(value: string | undefined): string[] | undefined {
   if (value === undefined) return undefined;
   const trimmed = value.trim();
@@ -184,6 +193,7 @@ export function configFromEnvironment(env: NodeJS.ProcessEnv = process.env): Con
   const providerConfig: Partial<Pick<CodeFarmerConfig, 'model' | 'baseURL'>> =
     provider !== undefined && isProviderId(provider) ? providerDefaults(provider) : {};
   return definedOnly({
+    language: parseLanguage(env.CODEFARMER_LANGUAGE),
     provider: provider as ProviderId | undefined,
     model: env.CODEFARMER_MODEL ?? providerConfig.model,
     baseURL: env.CODEFARMER_BASE_URL ?? env.OPENAI_BASE_URL ?? providerConfig.baseURL,

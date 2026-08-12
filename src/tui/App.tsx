@@ -15,7 +15,8 @@ import {
   inspectWorkingTree,
 } from '../tools/git-tools.js';
 import { sanitiseEnvironment } from '../tools/run-command.js';
-import type { ProviderEvent, ReasoningEffort, TokenUsage } from '../types.js';
+import type { Language, ProviderEvent, ReasoningEffort, TokenUsage } from '../types.js';
+import { normaliseLanguage } from '../types.js';
 import {
   COMPACT_HINT_MIN_CHARS,
   COMPACT_HINT_MIN_MESSAGES,
@@ -35,7 +36,7 @@ import { formatTerminalTitle, normaliseSessionTitle } from './title.js';
 import {
   parseTuiCommand,
   nextAgentMode,
-  TUI_HELP,
+  getTuiHelp,
   completeTuiCommand,
   tuiCommandAdvice,
   type ApprovalView,
@@ -63,6 +64,9 @@ const EFFORT_COLORS: Record<ReasoningEffort, string> = {
   max: 'red',
 };
 const BRAND_COLOR = '#D97757';
+const PANEL_BORDER_COLOR = '#5F5551';
+const SECONDARY_TEXT_COLOR = '#B8B2AE';
+const READY_COLOR = '#82B86B';
 // Slash commands that stay available while a turn is running; plain prompts
 // typed meanwhile remain in the input buffer until the active turn finishes.
 const READ_ONLY_COMMANDS: ReadonlySet<TuiCommand['kind']> = new Set([
@@ -72,6 +76,7 @@ const READ_ONLY_COMMANDS: ReadonlySet<TuiCommand['kind']> = new Set([
   'effort',
   'plan',
   'auto',
+  'language',
   'status',
   'stats',
   'config',
@@ -322,66 +327,106 @@ export function WelcomePanel({
   sessionTitle,
   model,
   columns,
+  language = 'en',
 }: {
   workspace: string;
   sessionTitle: string;
   model: string;
   columns: number;
+  language?: 'en' | 'zh-CN';
 }): React.ReactElement {
-  const compact = columns < 72;
+  const compact = columns < 76;
+  const zh = language === 'zh-CN';
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={BRAND_COLOR} paddingX={2}>
-      <Box>
-        <Text color={BRAND_COLOR} bold>
-          {'CodeFarmer'}
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={PANEL_BORDER_COLOR}
+      paddingX={2}
+      paddingY={1}
+    >
+      <Box justifyContent="space-between">
+        <Box>
+          <Text color={BRAND_COLOR} bold>
+            {'CodeFarmer'}
+          </Text>
+          <Text color={PANEL_BORDER_COLOR}>{'  /  '}</Text>
+          <Text color={SECONDARY_TEXT_COLOR}>{'v0.1.0'}</Text>
+        </Box>
+        <Text color={READY_COLOR} bold>
+          {zh ? '● 就绪' : '● READY'}
         </Text>
-        <Text dimColor>{'  v0.1.0'}</Text>
       </Box>
-      <Box flexDirection={compact ? 'column' : 'row'}>
+
+      <Box flexDirection={compact ? 'column' : 'row'} marginTop={1}>
         <Box
           flexDirection="column"
-          width={compact ? Math.max(1, columns - 8) : '42%'}
-          alignItems="center"
+          width={compact ? Math.max(1, columns - 8) : '38%'}
+          paddingRight={compact ? 0 : 3}
         >
-          <Text color="white" bold>
-            {'Welcome back!'}
-          </Text>
           <Text color={BRAND_COLOR} bold>
-            {'      ◆'}
+            {zh ? '欢迎回来' : 'WELCOME BACK'}
           </Text>
-          <Text dimColor wrap="truncate-end">
+          <Text color="white" bold wrap="truncate-end">
             {sessionTitle}
           </Text>
-          <Text dimColor wrap="truncate-end">
-            {workspace}
-          </Text>
-          <Text dimColor wrap="truncate-end">
-            {model}
-          </Text>
-        </Box>
-        {compact ? null : <Text color={BRAND_COLOR}>{'│'}</Text>}
-        <Box flexDirection="column" paddingLeft={compact ? 0 : 2} flexGrow={1}>
-          <Text color={BRAND_COLOR} bold>
-            {'Tips for getting started'}
-          </Text>
-          <Text dimColor wrap="truncate-end">
-            {'Run /init to create workspace instructions for the agent.'}
-          </Text>
-          <Text dimColor wrap="truncate-end">
-            {'Describe a task in plain language and press Enter.'}
-          </Text>
-          <Text dimColor wrap="truncate-end">
-            {'Use /help for sessions, workspace, permissions, and debug commands.'}
-          </Text>
           <Box marginTop={1}>
-            <Text color={BRAND_COLOR} bold>
-              {"What's new"}
+            <Text color={PANEL_BORDER_COLOR}>{'▸  '}</Text>
+            <Text color={SECONDARY_TEXT_COLOR} wrap="truncate-end">
+              {workspace}
             </Text>
           </Box>
-          <Text dimColor wrap="truncate-end">
-            {'Queued follow-up tasks, scoped approvals, and a quieter workbench.'}
-          </Text>
+          <Box>
+            <Text color={PANEL_BORDER_COLOR}>{'◇  '}</Text>
+            <Text color={SECONDARY_TEXT_COLOR} wrap="truncate-end">
+              {model}
+            </Text>
+          </Box>
         </Box>
+
+        <Box flexDirection="column" marginTop={compact ? 1 : 0} flexGrow={1}>
+          <Text color={BRAND_COLOR} bold>
+            {zh ? '快速开始' : 'QUICK START'}
+          </Text>
+          <Box>
+            <Text color={PANEL_BORDER_COLOR}>{'01  '}</Text>
+            <Text color="white" bold>
+              {'/init  '}
+            </Text>
+            <Text color={SECONDARY_TEXT_COLOR} wrap="truncate-end">
+              {zh ? '创建工作区说明' : 'Create workspace instructions'}
+            </Text>
+          </Box>
+          <Box>
+            <Text color={PANEL_BORDER_COLOR}>{'02  '}</Text>
+            <Text color="white" bold>
+              {'ENTER  '}
+            </Text>
+            <Text color={SECONDARY_TEXT_COLOR} wrap="truncate-end">
+              {zh ? '描述要完成的修改' : 'Describe the change you want to make'}
+            </Text>
+          </Box>
+          <Box>
+            <Text color={PANEL_BORDER_COLOR}>{'03  '}</Text>
+            <Text color="white" bold>
+              {'/help  '}
+            </Text>
+            <Text color={SECONDARY_TEXT_COLOR} wrap="truncate-end">
+              {zh ? '浏览会话、权限和工具' : 'Browse sessions, permissions, and tools'}
+            </Text>
+          </Box>
+        </Box>
+      </Box>
+
+      <Box marginTop={1}>
+        <Text color="cyan" bold>
+          {zh ? '新增  ' : 'NEW  '}
+        </Text>
+        <Text color={SECONDARY_TEXT_COLOR} wrap="truncate-end">
+          {zh
+            ? '排队跟进 · 分级审批 · 更安静的工作台'
+            : 'Queued follow-ups · Scoped approvals · Quieter workbench'}
+        </Text>
       </Box>
     </Box>
   );
@@ -511,15 +556,26 @@ function StatsView({
 // verbatim when present (for example, "Preparing read_file").
 const SPINNER_FRAMES = ['◐', '◓', '◑', '◒'];
 
-const THINKING_PHRASES = [
-  '分析上下文',
-  '规划下一步',
-  '整理工作区',
-  '检查实现细节',
-  '准备工具调用',
-  '验证执行结果',
-  '生成回复',
-];
+const THINKING_PHRASES: Record<Language, readonly string[]> = {
+  en: [
+    'Analysing context',
+    'Planning next step',
+    'Organising workspace',
+    'Checking implementation',
+    'Preparing tool call',
+    'Verifying result',
+    'Drafting reply',
+  ],
+  'zh-CN': [
+    '分析上下文',
+    '规划下一步',
+    '整理工作区',
+    '检查实现细节',
+    '准备工具调用',
+    '验证执行结果',
+    '生成回复',
+  ],
+};
 
 // Thinking state renders as a scan-light text effect instead of a skeleton
 // bar or typewriter: the full phrase sits dimmed while a bright band sweeps
@@ -527,26 +583,25 @@ const THINKING_PHRASES = [
 // torch gliding over the text.
 const SCAN_BAND = 3; // number of characters lit up at once
 
-function ThinkingText(): React.ReactElement {
-  const [phraseIndex, setPhraseIndex] = useState(() =>
-    Math.floor(Math.random() * THINKING_PHRASES.length),
-  );
+function ThinkingText({ language = 'en' }: { language?: Language }): React.ReactElement {
+  const phrases = THINKING_PHRASES[language];
+  const [phraseIndex, setPhraseIndex] = useState(() => Math.floor(Math.random() * phrases.length));
   const [pos, setPos] = useState(0);
-  const phrase = THINKING_PHRASES[phraseIndex] ?? '分析上下文';
+  const phrase = phrases[phraseIndex] ?? phrases[0] ?? 'Thinking';
 
   useEffect(() => {
     const timer = setInterval(() => {
       setPos((previous) => {
         // One full sweep (the band crosses every char), then move to the next phrase.
         if (previous >= phrase.length + SCAN_BAND) {
-          setPhraseIndex((i) => (i + 1) % THINKING_PHRASES.length);
+          setPhraseIndex((i) => (i + 1) % phrases.length);
           return 0;
         }
         return previous + 1;
       });
     }, 55);
     return () => clearInterval(timer);
-  }, [phrase]);
+  }, [phrase, phrases]);
 
   const chars = Array.from(phrase);
   return (
@@ -568,27 +623,32 @@ function ThinkingText(): React.ReactElement {
   );
 }
 
-function Spinner({ label }: { label: string }): React.ReactElement {
+function Spinner({
+  label,
+  language = 'en',
+}: {
+  label: string;
+  language?: Language;
+}): React.ReactElement {
   if (label === 'Thinking') {
-    return <ThinkingText />;
+    return <ThinkingText language={language} />;
   }
+  const phrases = THINKING_PHRASES[language];
   const [frame, setFrame] = useState(0);
-  const [phraseIndex, setPhraseIndex] = useState(() =>
-    Math.floor(Math.random() * THINKING_PHRASES.length),
-  );
+  const [phraseIndex, setPhraseIndex] = useState(() => Math.floor(Math.random() * phrases.length));
   useEffect(() => {
     const frameTimer = setInterval(() => {
       setFrame((previous) => (previous + 1) % SPINNER_FRAMES.length);
     }, 90);
     const phraseTimer = setInterval(() => {
-      setPhraseIndex((previous) => (previous + 1) % THINKING_PHRASES.length);
+      setPhraseIndex((previous) => (previous + 1) % phrases.length);
     }, 1500);
     return () => {
       clearInterval(frameTimer);
       clearInterval(phraseTimer);
     };
-  }, []);
-  const text = label === 'Thinking' ? (THINKING_PHRASES[phraseIndex] ?? '分析上下文') : label;
+  }, [phrases]);
+  const text = label === 'Thinking' ? (phrases[phraseIndex] ?? phrases[0] ?? 'Thinking') : label;
   return (
     <Text color="yellow" bold>
       {SPINNER_FRAMES[frame] ?? '◐'} {text}
@@ -1245,7 +1305,11 @@ export function TuiApp({
   // synchronous lock for model turns and prevents local commands from
   // accidentally starting a second turn or clearing the active one.
   const busyRef = useRef(false);
-  const [status, setStatus] = useState('Ready');
+  const [status, setStatus] = useState(
+    initialRuntime.config.language === 'zh-CN' ? '就绪' : 'Ready',
+  );
+  const [language, setLanguage] = useState<'en' | 'zh-CN'>(initialRuntime.config.language);
+  const languageRef = useRef<'en' | 'zh-CN'>(initialRuntime.config.language);
   const [agentMode, setAgentMode] = useState<AgentMode>(initialPlanMode ? 'plan' : 'code');
   const agentModeRef = useRef<AgentMode>(initialPlanMode ? 'plan' : 'code');
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
@@ -1446,9 +1510,11 @@ export function TuiApp({
     setRuntime(next);
     setEntries(runtimeEntries(next));
     setUsage(next.session?.usage ?? EMPTY_USAGE);
-    setStatus('Ready');
+    setStatus(next.config.language === 'zh-CN' ? '就绪' : 'Ready');
     setTopLine(-1);
     setSelectedSkills([]);
+    languageRef.current = next.config.language;
+    setLanguage(next.config.language);
   }, []);
 
   interface RunPromptOptions {
@@ -1706,7 +1772,7 @@ export function TuiApp({
       }
       try {
         if (command.kind === 'help') {
-          appendSystem(TUI_HELP);
+          appendSystem(getTuiHelp(languageRef.current));
         } else if (command.kind === 'skills') {
           const skills = runtimeRef.current.skills;
           appendSystem(
@@ -1910,6 +1976,36 @@ export function TuiApp({
             setMode('code');
           } else {
             appendSystem(`Invalid auto mode "${command.value}". Choices: on | off`, 'error');
+          }
+        } else if (command.kind === 'language') {
+          if (command.value.length === 0) {
+            appendSystem(
+              languageRef.current === 'zh-CN'
+                ? '当前语言：简体中文。用法：/language <en|zh-CN>'
+                : 'Current language: English. Usage: /language <en|zh-CN>',
+            );
+          } else {
+            const nextLanguage = normaliseLanguage(command.value);
+            if (nextLanguage === undefined) {
+              appendSystem(
+                languageRef.current === 'zh-CN'
+                  ? '不支持的语言。可选：en（English）或 zh-CN（简体中文）。'
+                  : 'Unsupported language. Choices: en (English) or zh-CN (简体中文).',
+                'error',
+              );
+            } else {
+              const active = runtimeRef.current;
+              active.config.language = nextLanguage;
+              languageRef.current = nextLanguage;
+              setLanguage(nextLanguage);
+              setStatus(nextLanguage === 'zh-CN' ? '就绪' : 'Ready');
+              setRuntime({ ...active });
+              appendSystem(
+                nextLanguage === 'zh-CN'
+                  ? '语言已切换为简体中文（仅当前会话；使用 `codefarmer language zh-CN` 可持久化）。'
+                  : 'Language switched to English for this session (use `codefarmer language en` to persist).',
+              );
+            }
           }
         } else if (command.kind === 'config') {
           appendSystem(JSON.stringify(runtimeRef.current.config, null, 2));
@@ -2407,7 +2503,13 @@ export function TuiApp({
   const approvalView = approval;
   const modeLabel = agentMode.toUpperCase();
   const modeColor = agentMode === 'plan' ? 'magenta' : agentMode === 'auto' ? 'green' : 'cyan';
-  const activityLabel = busy ? 'WORKING' : 'READY';
+  const activityLabel = busy
+    ? language === 'zh-CN'
+      ? '工作中'
+      : 'WORKING'
+    : language === 'zh-CN'
+      ? '就绪'
+      : 'READY';
   const activityColor = busy ? 'yellow' : 'green';
   const showWelcome = (runtime.session?.messages.length ?? 0) === 0 && entries.length === 0;
 
@@ -2451,13 +2553,18 @@ export function TuiApp({
             sessionTitle={sessionTitle}
             model={runtime.config.model}
             columns={contentWidth}
+            language={language}
           />
         ) : entries.length === 0 ? (
           <Box flexDirection="column" paddingLeft={2}>
             <Text color="cyan" bold>
-              {'Start a task'}
+              {language === 'zh-CN' ? '开始任务' : 'Start a task'}
             </Text>
-            <Text dimColor>{'Describe the change you want to make, or type /help.'}</Text>
+            <Text dimColor>
+              {language === 'zh-CN'
+                ? '描述要完成的修改，或输入 /help。'
+                : 'Describe the change you want to make, or type /help.'}
+            </Text>
           </Box>
         ) : (
           (() => {
@@ -2495,7 +2602,7 @@ export function TuiApp({
             return rendered;
           })()
         )}
-        {busy ? <Spinner label={status} /> : null}
+        {busy ? <Spinner label={status} language={language} /> : null}
       </Box>
       {approvalView === null ? null : (
         <ApprovalModal approval={approvalView} columns={columns} rows={rows} />
@@ -2516,8 +2623,12 @@ export function TuiApp({
           {'> '}
           <Text dimColor>
             {busy
-              ? `${String(runtime.orchestrator?.snapshot().queuedTurns.length ?? 0)} queued · Enter to add`
-              : 'Enter to run'}
+              ? language === 'zh-CN'
+                ? `${String(runtime.orchestrator?.snapshot().queuedTurns.length ?? 0)} 条排队 · 回车添加`
+                : `${String(runtime.orchestrator?.snapshot().queuedTurns.length ?? 0)} queued · Enter to add`
+              : language === 'zh-CN'
+                ? '回车执行'
+                : 'Enter to run'}
           </Text>
         </Text>
         <Box>
@@ -2526,10 +2637,16 @@ export function TuiApp({
               {busy
                 ? '输入下一条指令…'
                 : agentMode === 'plan'
-                  ? '计划模式仅进行只读探索'
+                  ? language === 'zh-CN'
+                    ? '计划模式仅进行只读探索'
+                    : 'Plan mode is read-only'
                   : agentMode === 'auto'
-                    ? '自动模式将先制定计划，再执行并验证'
-                    : '描述要完成的任务，或输入 /help'}
+                    ? language === 'zh-CN'
+                      ? '自动模式将先制定计划，再执行并验证'
+                      : 'Auto mode plans, executes, and validates'
+                    : language === 'zh-CN'
+                      ? '描述要完成的任务，或输入 /help'
+                      : 'Describe the task, or type /help'}
             </Text>
           ) : (
             <Text wrap="truncate-end">
@@ -2547,7 +2664,13 @@ export function TuiApp({
           {showThinking ? ' · thinking' : ''}
           {atBottom ? '' : ` · ↑ ${String(clampedTop)}/${String(maximumTop)} (PgDn latest)`}
         </Text>
-        <Text dimColor>{`${status} · ${modeLabel} · ${String(usage.totalTokens)} tokens`}</Text>
+        <Text>
+          <Text dimColor>{`${status} · `}</Text>
+          <Text color={modeColor} bold>
+            {modeLabel}
+          </Text>
+          <Text dimColor>{` · ${String(usage.totalTokens)} tokens`}</Text>
+        </Text>
       </Box>
     </Box>
   );

@@ -1,7 +1,7 @@
 import type { AgentProvider, ProviderEvent, ProviderRequest } from '../types.js';
 
 export class ScriptedProvider implements AgentProvider {
-  public readonly name = 'fake';
+  public readonly name: string = 'fake';
   private index = 0;
 
   public constructor(private readonly turns: ProviderEvent[][]) {}

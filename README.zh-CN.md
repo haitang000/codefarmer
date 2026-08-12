@@ -114,6 +114,7 @@ CodeFarmer 启动时所在的目录；它不会自动扩大到上层 Git 仓库�
 | `codefarmer config set <key> <value>`           | 写入用户配置                                          |
 | `codefarmer config set --project <key> <value>` | 写入项目配置                                          |
 | `codefarmer config path`                        | 显示配置文件路径                                      |
+| `codefarmer language [language]`                | 查看或持久化界面和 Agent 回复语言                     |
 | `codefarmer doctor`                             | 检查 Node、密钥、配置、权限、Git（可选）和 API 连通性 |
 | `codefarmer completions <shell>`                | 打印 bash、zsh 或 fish 补全脚本                       |
 
@@ -123,6 +124,7 @@ CodeFarmer 启动时所在的目录；它不会自动扩大到上层 Git 仓库�
 --cwd <路径>
 --model <模型>
 --base-url <URL>
+--language <en|zh-CN>
 --reasoning <auto|none|low|medium|high|xhigh|max>
 --verbosity <low|medium|high>
 --reasoning-summary <none|auto|concise|detailed>
@@ -168,6 +170,7 @@ TUI 在同一个备用屏幕中承载对话、工具状态、审批、工作区�
 | `/effort`        | 打开推理强度选择器（↑/↓ 选择，Enter 确认）                          |
 | `/plan [on/off]` | 开启或关闭只读计划模式                                              |
 | `/auto [on/off]` | 开启或关闭自动计划并执行模式                                        |
+| `/language [en   | zh-CN]`                                                             | 切换当前 TUI 会话的界面和 Agent 回复语言 |
 | `/config`        | 显示有效配置                                                        |
 | `/doctor`        | 检查本地运行环境                                                    |
 | `/sessions`      | 列出本地会话                                                        |
@@ -258,6 +261,7 @@ scope 的引用。技能及其资源都属于不可信指令，不能绕过审�
 | `model`              | `CODEFARMER_MODEL`                 | `gpt-5.6-sol`               |
 | `baseURL`            | `CODEFARMER_BASE_URL`              | `https://api.openai.com/v1` |
 | `reasoning`          | `CODEFARMER_REASONING`             | `low`                       |
+| `language`           | `CODEFARMER_LANGUAGE`              | `en`                        |
 | `verbosity`          | `CODEFARMER_VERBOSITY`             | `low`                       |
 | `reasoningSummary`   | `CODEFARMER_REASONING_SUMMARY`     | `none`                      |
 | `approval`           | `CODEFARMER_APPROVAL`              | `ask`                       |
@@ -297,6 +301,15 @@ codefarmer setup
 对于 `deepseek-v4-flash` 和 `deepseek-v4-pro`，如果思考过程先耗尽输出预算且没有生成正文，
 CodeFarmer 只会自动尝试一次低成本恢复（关闭推理、低详细度、最多 768 个 token），不会重复
 发送同一轮的完整预算请求。已有部分正文时会直接保留，并提示后续处理。
+
+DeepSeek 流式响应按官方 SSE 约定处理保活注释和 `[DONE]` 终止标记。连接掉线或响应截断会被
+识别为可恢复的临时错误，当前 agent 轮次会使用指数退避最多重放三次，截断内容不会被误判为
+成功完成。思考模式下的工具调用也会在后续请求中完整带回 DeepSeek 要求的
+`reasoning_content`。
+
+对 DeepSeek 而言，`maxAgentTurns` 是软检查点，不再是到达后立即停止的硬限制。长任务达到配置
+的工具轮次后，CodeFarmer 会分段自动扩展预算，继续使用现有上下文执行，最多到 100 轮安全上限；
+其他 Provider 仍严格遵守配置的轮次限制。
 
 可以永久、按项目或仅为一次命令更换 API 端点：
 

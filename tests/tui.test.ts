@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { extractCommitMessage, TuiInteractionBridge } from '../src/tui/runtime.js';
 import {
   completeTuiCommand,
+  getTuiHelp,
   nextAgentMode,
   parseTuiCommand,
   TUI_HELP,
@@ -38,6 +39,8 @@ describe('TUI command parser', () => {
     expect(parseTuiCommand('/auto')).toEqual({ kind: 'auto', value: '' });
     expect(parseTuiCommand('/auto ON')).toEqual({ kind: 'auto', value: 'on' });
     expect(parseTuiCommand('/auto off')).toEqual({ kind: 'auto', value: 'off' });
+    expect(parseTuiCommand('/language zh')).toEqual({ kind: 'language', value: 'zh-CN' });
+    expect(parseTuiCommand('/lang English')).toEqual({ kind: 'language', value: 'en' });
     expect(parseTuiCommand('/push')).toEqual({ kind: 'push', args: [] });
     expect(parseTuiCommand('/push origin main')).toEqual({
       kind: 'push',
@@ -66,6 +69,8 @@ describe('TUI command parser', () => {
     expect(TUI_HELP).toContain('/init');
     expect(TUI_HELP).toContain('/push');
     expect(TUI_HELP).toContain('/skills');
+    expect(TUI_HELP).toContain('/language');
+    expect(getTuiHelp('zh-CN')).toContain('设置界面和 Agent 回复语言');
   });
 
   it('cycles through code, plan, and auto modes', () => {

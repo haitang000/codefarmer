@@ -29,6 +29,10 @@ class RecordingScriptedProvider extends ScriptedProvider {
   }
 }
 
+class DeepSeekRecordingProvider extends RecordingScriptedProvider {
+  override readonly name = 'deepseek';
+}
+
 async function temporaryWorkspace(): Promise<string> {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'codefarmer-agent-'));
   temporaryDirectories.push(directory);
@@ -337,6 +341,58 @@ describe('AgentRunner', () => {
       type: 'message',
       role: 'user',
       content: expect.stringContaining('已达到最大工具轮次 2') as string,
+    });
+  });
+
+  it('extends DeepSeek tool rounds instead of interrupting at the soft checkpoint', async () => {
+    const workspace = await temporaryWorkspace();
+    const provider = new DeepSeekRecordingProvider([
+      [
+        {
+          type: 'tool_call',
+          call: { callId: 'deepseek-1', name: 'missing_tool', arguments: '{}' },
+        },
+        { type: 'response_completed', responseId: 'deepseek-response-1' },
+      ],
+      [
+        {
+          type: 'tool_call',
+          call: { callId: 'deepseek-2', name: 'missing_tool', arguments: '{}' },
+        },
+        { type: 'response_completed', responseId: 'deepseek-response-2' },
+      ],
+      [
+        {
+          type: 'tool_call',
+          call: { callId: 'deepseek-3', name: 'missing_tool', arguments: '{}' },
+        },
+        { type: 'response_completed', responseId: 'deepseek-response-3' },
+      ],
+      [
+        { type: 'text_delta', delta: 'DeepSeek finished.' },
+        {
+          type: 'response_completed',
+          responseId: 'deepseek-final',
+          outputText: 'DeepSeek finished.',
+        },
+      ],
+    ]);
+    const agent = await runner(workspace, provider, { maxAgentTurns: 2 });
+    const events: ProviderEvent[] = [];
+
+    const result = await agent.run('Keep working until the task is complete', {
+      history: false,
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.message).toBe('DeepSeek finished.');
+    expect(result.toolCalls).toHaveLength(3);
+    expect(provider.requests).toHaveLength(4);
+    expect(provider.requests[2]?.tools).not.toEqual([]);
+    expect(events).toContainEqual({
+      type: 'text_delta',
+      delta: '\n[DeepSeek tool budget extended from 2 to 4 rounds; continuing the task]\n',
     });
   });
 

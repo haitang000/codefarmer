@@ -17,6 +17,7 @@ import {
   formatNumber,
   formatWorkspaceStats,
   usageBar,
+  WelcomePanel,
 } from '../src/tui/App.js';
 import { MarkdownView } from '../src/tui/markdown.js';
 import { TuiInteractionBridge } from '../src/tui/runtime.js';
@@ -47,6 +48,43 @@ function mockRuntime(): AgentRuntime {
 }
 
 describe('TUI rendering', () => {
+  it('renders the welcome panel with a clear workspace and quick-start hierarchy', () => {
+    const output = renderToString(
+      <WelcomePanel
+        workspace="C:\\workspace"
+        sessionTitle="NEW SESSION"
+        model="test-model"
+        columns={100}
+      />,
+      { columns: 100 },
+    );
+
+    expect(output).toContain('CodeFarmer');
+    expect(output).toContain('● READY');
+    expect(output).toContain('WELCOME BACK');
+    expect(output).toContain('QUICK START');
+    expect(output).toContain('01  /init');
+    expect(output).toContain('03  /help');
+    expect(output).toContain('Queued follow-ups · Scoped approvals · Quieter workbench');
+  });
+
+  it('stacks the welcome panel sections in a narrow terminal', () => {
+    const output = renderToString(
+      <WelcomePanel
+        workspace="C:\\workspace"
+        sessionTitle="NEW SESSION"
+        model="test-model"
+        columns={60}
+      />,
+      { columns: 60 },
+    );
+    const lines = output.split('\n');
+
+    expect(lines.findIndex((line) => line.includes('QUICK START'))).toBeGreaterThan(
+      lines.findIndex((line) => line.includes('test-model')),
+    );
+  });
+
   it('formats workspace stats with status and model usage charts', () => {
     const output = formatWorkspaceStats({
       totalSessions: 2,

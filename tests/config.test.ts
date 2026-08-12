@@ -99,6 +99,7 @@ describe('configuration', () => {
         CODEFARMER_MAX_OUTPUT_TOKENS: '512',
         CODEFARMER_VERBOSITY: 'high',
         CODEFARMER_REASONING_SUMMARY: 'detailed',
+        CODEFARMER_LANGUAGE: 'zh',
         CODEFARMER_IGNORED_PATHS: '["vendor/**","*.secret"]',
       }),
     ).toMatchObject({
@@ -109,6 +110,7 @@ describe('configuration', () => {
       maxOutputTokens: 512,
       verbosity: 'high',
       reasoningSummary: 'detailed',
+      language: 'zh-CN',
       ignoredPaths: ['vendor/**', '*.secret'],
     });
   });

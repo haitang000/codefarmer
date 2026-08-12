@@ -86,14 +86,13 @@ function messages(input: string | ProviderInput[], instructions?: string): unkno
         const next = input[index];
         if (next?.type === 'function_call') calls.push(next);
       }
-      const reasoningContent = calls.find((call) => call.reasoningContent !== undefined)
-        ?.reasoningContent;
+      const reasoningContent = calls.find(
+        (call) => call.reasoningContent !== undefined,
+      )?.reasoningContent;
       result.push({
         role: 'assistant',
         content: null,
-        ...(reasoningContent === undefined
-          ? {}
-          : { reasoning_content: reasoningContent }),
+        ...(reasoningContent === undefined ? {} : { reasoning_content: reasoningContent }),
         tool_calls: calls.map((call) => ({
           id: call.callId,
           type: 'function',
@@ -173,7 +172,9 @@ function providerError(status: number, body: string): ProviderEvent {
 }
 
 function splitSseFrames(buffer: string): { frames: string[]; remainder: string } {
-  const normalized = buffer.replace(/\r\n/gu, '\n');
+  // DeepSeek uses CRLF in production and some proxies normalize it to lone
+  // CR. Normalize both forms before looking for SSE record boundaries.
+  const normalized = buffer.replace(/\r\n?/gu, '\n');
   const frames = normalized.split('\n\n');
   return { frames: frames.slice(0, -1), remainder: frames.at(-1) ?? '' };
 }
@@ -318,15 +319,40 @@ export class OpenAICompatibleProvider implements AgentProvider {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
-      for (;;) {
-        const read = await reader.read();
-        if (read.done) break;
-        buffer += decoder.decode(read.value as Uint8Array, { stream: true });
-        const split = splitSseFrames(buffer);
-        buffer = split.remainder;
-        for (const frame of split.frames) {
-          const data = ssePayload(frame);
-          if (data === undefined || data === '[DONE]') continue;
+      let sawDone = false;
+      try {
+        for (;;) {
+          const read = await reader.read();
+          if (read.done) break;
+          buffer += decoder.decode(read.value as Uint8Array, { stream: true });
+          const split = splitSseFrames(buffer);
+          buffer = split.remainder;
+          for (const frame of split.frames) {
+            const data = ssePayload(frame);
+            if (data === undefined) continue; // comments, including : keep-alive
+            if (data === '[DONE]') {
+              sawDone = true;
+              continue;
+            }
+            try {
+              const payload = JSON.parse(data) as ChatResponse;
+              const upstreamError = streamError(payload);
+              if (upstreamError !== undefined) {
+                yield upstreamError;
+                return;
+              }
+              for (const event of processResponse(payload)) yield event;
+            } catch (error) {
+              yield invalidStreamError(error);
+              return;
+            }
+          }
+        }
+        // Flush a UTF-8 code point split across the final network chunk.
+        buffer += decoder.decode();
+        const data = ssePayload(buffer);
+        if (data === '[DONE]') sawDone = true;
+        else if (data !== undefined) {
           try {
             const payload = JSON.parse(data) as ChatResponse;
             const upstreamError = streamError(payload);
@@ -340,22 +366,43 @@ export class OpenAICompatibleProvider implements AgentProvider {
             return;
           }
         }
+      } catch (error) {
+        // A dropped socket used to escape the generator and terminate the
+        // entire agent run. Surface it as retryable so AgentRunner can replay
+        // the same turn without losing the session.
+        const message = error instanceof Error ? error.message : String(error);
+        yield {
+          type: 'error',
+          error: { code: 'PROVIDER_STREAM_CONNECTION_ERROR', message, retryable: true },
+        };
+        return;
+      } finally {
+        reader.releaseLock();
       }
-      const data = ssePayload(buffer);
-      if (data !== undefined && data !== '[DONE]') {
-        try {
-          const payload = JSON.parse(data) as ChatResponse;
-          const upstreamError = streamError(payload);
-          if (upstreamError !== undefined) {
-            yield upstreamError;
-            return;
-          }
-          for (const event of processResponse(payload)) yield event;
-        } catch (error) {
-          yield invalidStreamError(error);
-          return;
-        }
+      if (this.options.provider === 'deepseek' && !sawDone) {
+        // DeepSeek documents [DONE] as the stream terminator. EOF without it
+        // means the response is truncated and must not be reported as a
+        // successful completed turn.
+        yield {
+          type: 'error',
+          error: {
+            code: 'PROVIDER_STREAM_TRUNCATED',
+            message: 'DeepSeek stream ended before the [DONE] marker.',
+            retryable: true,
+          },
+        };
+        return;
       }
+    } else if (contentType.includes('text/event-stream')) {
+      yield {
+        type: 'error',
+        error: {
+          code: 'PROVIDER_STREAM_INVALID',
+          message: 'Provider returned an empty streaming response body.',
+          retryable: true,
+        },
+      };
+      return;
     } else {
       try {
         for (const event of processResponse((await response.json()) as ChatResponse)) yield event;

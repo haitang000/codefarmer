@@ -45,6 +45,7 @@ import { OpenAIProvider } from '../providers/openai.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible.js';
 import { isProviderId, providerPreset } from '../providers/catalog.js';
 import { detectGitAvailability } from '../tools/git-tools.js';
+import { normaliseLanguage } from '../types.js';
 import type { AgentProvider, ProviderId, SessionRecord, SessionStatus } from '../types.js';
 import { createAgentRuntime, createBaseRuntime, type GlobalOptions } from './runtime.js';
 import { renderSessionExport, type SessionExportFormat } from './session-export.js';
@@ -849,9 +850,31 @@ export async function configListAction(globalOptions: GlobalOptions): Promise<vo
         ? {}
         : { reasoningSummary: globalOptions.reasoningSummary }),
       ...(globalOptions.approval === undefined ? {} : { approval: globalOptions.approval }),
+      ...(globalOptions.language === undefined ? {} : { language: globalOptions.language }),
     },
   });
   printJson(details.config);
+}
+
+/** Show or persist the preferred interface/agent language. */
+export async function languageAction(
+  globalOptions: GlobalOptions,
+  value: string | undefined,
+  project = false,
+): Promise<void> {
+  const details = await loadConfigDetails({ cwd: globalOptions.cwd ?? process.cwd() });
+  if (value === undefined) {
+    process.stdout.write(`${details.config.language}\n`);
+    return;
+  }
+  const language = normaliseLanguage(value);
+  if (language === undefined) {
+    throw new ConfigError('语言必须是 en 或 zh-CN（也支持 zh、中文、English）。');
+  }
+  const target = project ? details.projectConfigPath : details.userConfigPath;
+  const current = (await readJsonFileIfExists<ConfigFile>(target)) ?? {};
+  await writeConfigFile(target, { ...current, language });
+  process.stdout.write(`已将语言设置为 ${language}（${target}）\n`);
 }
 
 export async function configGetAction(globalOptions: GlobalOptions, key: string): Promise<void> {
@@ -889,6 +912,18 @@ export async function configSetAction(
     }
     const candidate = { ...current, provider: value, ...providerDefaults(value) };
     await writeConfigFile(target, candidate);
+    process.stdout.write(`已更新 ${target}\n`);
+    return;
+  }
+  if (key === 'language') {
+    if (typeof value !== 'string') {
+      throw new ConfigError('language 必须是 en 或 zh-CN（也支持 zh、中文、English）。');
+    }
+    const language = normaliseLanguage(value);
+    if (language === undefined) {
+      throw new ConfigError('language 必须是 en 或 zh-CN（也支持 zh、中文、English）。');
+    }
+    await writeConfigFile(target, { ...current, language });
     process.stdout.write(`已更新 ${target}\n`);
     return;
   }

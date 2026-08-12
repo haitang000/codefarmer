@@ -7,6 +7,12 @@
   "additionalProperties": false,
   "properties": {
     "$schema": { "type": "string" },
+    "language": {
+      "type": "string",
+      "enum": ["en", "zh-CN"],
+      "default": "en",
+      "description": "Interface and agent response language."
+    },
     "provider": {
       "type": "string",
       "enum": ["openai", "gemini", "grok", "deepseek", "kimi"],

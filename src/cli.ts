@@ -17,6 +17,7 @@ import {
   configSetAction,
   doctorAction,
   initAction,
+  languageAction,
   pushAction,
   runAction,
   sessionsCompactAction,
@@ -42,6 +43,7 @@ function globals(command: Command): GlobalOptions {
     provider?: ProviderId;
     model?: string;
     baseUrl?: string;
+    language?: 'en' | 'zh-CN';
     reasoning?: ReasoningEffort;
     verbosity?: TextVerbosity;
     reasoningSummary?: ReasoningSummary;
@@ -58,6 +60,7 @@ function globals(command: Command): GlobalOptions {
     ...(options.provider === undefined ? {} : { provider: options.provider }),
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.baseUrl === undefined ? {} : { baseURL: options.baseUrl }),
+    ...(options.language === undefined ? {} : { language: options.language }),
     ...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
     ...(options.verbosity === undefined ? {} : { verbosity: options.verbosity }),
     ...(options.reasoningSummary === undefined
@@ -100,6 +103,7 @@ program
   .addOption(new Option('--provider <provider>', 'AI Provider').choices(['openai', 'gemini', 'grok', 'deepseek', 'kimi']))
   .option('--model <model>', '模型')
   .option('--base-url <url>', 'API Base URL')
+  .addOption(new Option('--language <language>', '界面和 Agent 回复语言').choices(['en', 'zh-CN']))
   .addOption(
     new Option('--reasoning <effort>', '推理强度').choices([
       'auto',
@@ -161,6 +165,15 @@ program
   .option('--force', '覆盖已有配置，不再询问')
   .action(async (options: { force?: boolean }, command: Command) =>
     setupAction(globals(command), options.force ?? false),
+  );
+
+program
+  .command('language')
+  .description('查看或设置界面和 Agent 回复语言')
+  .argument('[language]', 'en、zh-CN，也支持 zh、中文、English')
+  .option('--project', '写入当前项目配置（默认写入用户配置）')
+  .action(async (language: string | undefined, options: { project?: boolean }, command: Command) =>
+    languageAction(globals(command), language, options.project ?? false),
   );
 
 program

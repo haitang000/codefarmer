@@ -202,7 +202,9 @@ describe('OpenAICompatibleProvider', () => {
       });
       request.on('end', () => {
         response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ id: 'chatcmpl-low', choices: [{ message: { content: 'ok' } }] }));
+        response.end(
+          JSON.stringify({ id: 'chatcmpl-low', choices: [{ message: { content: 'ok' } }] }),
+        );
       });
     });
     servers.push(server);
@@ -305,5 +307,83 @@ describe('OpenAICompatibleProvider', () => {
       ),
     ).toBe(true);
     expect(events.some((event) => event.type === 'error')).toBe(false);
+  });
+
+  it('ignores DeepSeek keep-alive comments and rejects a truncated SSE stream', async () => {
+    const server = createServer((_request, response) => {
+      response.setHeader('content-type', 'text/event-stream');
+      response.end(
+        [
+          ': keep-alive\r',
+          `data: ${JSON.stringify({
+            id: 'chatcmpl-truncated',
+            choices: [{ delta: { content: 'partial output' } }],
+          })}\r\n\r\n`,
+        ].join(''),
+      );
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('Test server has no port');
+
+    const provider = new OpenAICompatibleProvider({
+      provider: 'deepseek',
+      apiKey: 'test-key',
+      baseURL: `http://127.0.0.1:${String(address.port)}/v1`,
+    });
+    const events: ProviderEvent[] = [];
+    for await (const event of provider.stream({
+      model: 'deepseek-chat',
+      reasoning: 'none',
+      input: 'Hello.',
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual({ type: 'text_delta', delta: 'partial output' });
+    expect(events).toContainEqual({
+      type: 'error',
+      error: {
+        code: 'PROVIDER_STREAM_TRUNCATED',
+        message: 'DeepSeek stream ended before the [DONE] marker.',
+        retryable: true,
+      },
+    });
+    expect(events.some((event) => event.type === 'response_completed')).toBe(false);
+  });
+
+  it('turns a dropped streaming socket into a retryable provider event', async () => {
+    const server = createServer((_request, response) => {
+      response.setHeader('content-type', 'text/event-stream');
+      response.write(
+        `data: ${JSON.stringify({
+          id: 'chatcmpl-dropped',
+          choices: [{ delta: { content: 'partial output' } }],
+        })}\n\n`,
+      );
+      response.destroy(new Error('socket reset'));
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('Test server has no port');
+
+    const provider = new OpenAICompatibleProvider({
+      provider: 'deepseek',
+      apiKey: 'test-key',
+      baseURL: `http://127.0.0.1:${String(address.port)}/v1`,
+    });
+    const events: ProviderEvent[] = [];
+    for await (const event of provider.stream({
+      model: 'deepseek-chat',
+      reasoning: 'none',
+      input: 'Hello.',
+    })) {
+      events.push(event);
+    }
+
+    expect(events.some((event) => event.type === 'error' && event.error.retryable)).toBe(true);
+    expect(events.some((event) => event.type === 'response_completed')).toBe(false);
   });
 });
