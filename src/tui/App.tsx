@@ -1315,8 +1315,8 @@ export function TuiApp({
   );
   const [language, setLanguage] = useState<'en' | 'zh-CN'>(initialRuntime.config.language);
   const languageRef = useRef<'en' | 'zh-CN'>(initialRuntime.config.language);
-  const [agentMode, setAgentMode] = useState<AgentMode>(initialPlanMode ? 'plan' : 'code');
-  const agentModeRef = useRef<AgentMode>(initialPlanMode ? 'plan' : 'code');
+  const [agentMode, setAgentMode] = useState<AgentMode>(initialPlanMode ? 'plan' : 'auto');
+  const agentModeRef = useRef<AgentMode>(initialPlanMode ? 'plan' : 'auto');
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   // Ctrl+O 切换：是否在助手消息上方展示推理摘要（思考过程）。
   const [showThinking, setShowThinking] = useState(initialShowThinking);
