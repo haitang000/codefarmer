@@ -321,7 +321,8 @@ reasoning summary, a 2,048-token hard completion limit per model request, a
 For `deepseek-v4-flash` and `deepseek-v4-pro`, when reasoning consumes the entire output budget
 before any answer text is produced, CodeFarmer makes at most one low-cost recovery attempt with
 reasoning disabled, low verbosity, and a 768-token cap. It does not repeat the full-budget request;
-partial answers are kept as-is.
+partial answers are kept as-is. If recovery needs tools, all follow-up requests stay in
+no-reasoning mode so DeepSeek does not reject tool history created without `reasoning_content`.
 
 DeepSeek streaming responses are parsed with the documented SSE keep-alive comments and `[DONE]`
 terminator. A dropped socket or truncated stream is treated as a transient provider failure and the

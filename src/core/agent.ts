@@ -397,7 +397,7 @@ export class AgentRunner {
     let lastOutputs: ProviderToolResultInput[] | undefined;
     let emptyTurns = 0;
     let lengthRecoveryUsed = false;
-    let lengthRecoveryPending = false;
+    let lengthRecoveryActive = false;
     // Agent instructions depend only on run-level settings, so render them
     // once instead of rebuilding the same string on every turn (including the
     // final summary request).
@@ -433,8 +433,10 @@ export class AgentRunner {
         let streamedText = '';
         let streamedReasoning = '';
         let completedText = '';
-        const recoveringLength = lengthRecoveryPending;
-        lengthRecoveryPending = false;
+        // Once recovery disables DeepSeek thinking, keep it disabled for any
+        // tool follow-ups. Re-enabling it would replay a no-thinking assistant
+        // tool message without the reasoning_content required in thinking mode.
+        const recoveringLength = lengthRecoveryActive;
 
         const input: string | ProviderInput[] = explicitHistory
           ? [...transcript]
@@ -575,7 +577,7 @@ export class AgentRunner {
                 )
               ) {
                 lengthRecoveryUsed = true;
-                lengthRecoveryPending = true;
+                lengthRecoveryActive = true;
                 runOptions.onEvent?.({
                   type: 'text_delta',
                   delta: '\n[输出预算主要用于思考，改用低 token 模式恢复一次]\n',

@@ -251,9 +251,10 @@ describe('TUI rendering', () => {
   });
 
   it('renders the effort picker as a horizontal slider with the cursor under the selection', () => {
-    const output = renderToString(<EffortPicker current="medium" selected={5} />, {
-      columns: 100,
-    });
+    const output = renderToString(
+      <EffortPicker current="medium" selected={5} language="zh-CN" />,
+      { columns: 100 },
+    );
 
     expect(output).toContain('思考深度');
     expect(output).toContain('（当前 medium）');
@@ -268,6 +269,17 @@ describe('TUI rendering', () => {
     if (labelsLine !== undefined && markerLine !== undefined) {
       expect(markerLine.indexOf('▲')).toBe(labelsLine.indexOf('xhigh') + 2);
     }
+  });
+
+  it('localizes the effort picker to English by default', () => {
+    const output = renderToString(<EffortPicker current="medium" selected={5} />, {
+      columns: 100,
+    });
+
+    expect(output).toContain('Effort (current medium)');
+    expect(output).toContain('←/→ adjust · Enter confirm · Esc cancel');
+    expect(output).not.toContain('思考深度');
+    expect(output).not.toContain('调整');
   });
 
   it('shows changed-line stats on successful file mutation tool lines', () => {

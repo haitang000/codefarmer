@@ -31,6 +31,7 @@ class RecordingScriptedProvider extends ScriptedProvider {
 
 class DeepSeekRecordingProvider extends RecordingScriptedProvider {
   override readonly name = 'deepseek';
+  readonly supportsResponseContinuation = false;
 }
 
 async function temporaryWorkspace(): Promise<string> {
@@ -703,6 +704,69 @@ describe('AgentRunner', () => {
       verbosity: 'low',
       reasoningSummary: 'none',
       maxOutputTokens: 768,
+    });
+  });
+
+  it('keeps DeepSeek thinking disabled across tool calls during length recovery', async () => {
+    const workspace = await temporaryWorkspace();
+    await writeFile(path.join(workspace, 'alpha.txt'), 'alpha\n', 'utf8');
+    const provider = new DeepSeekRecordingProvider([
+      [
+        {
+          type: 'response_completed',
+          responseId: 'response-deepseek-length',
+          finishReason: 'length',
+        },
+      ],
+      [
+        {
+          type: 'tool_call',
+          call: {
+            callId: 'call-recovery-list',
+            name: 'list_files',
+            arguments: JSON.stringify({ path: '.', maxDepth: 1 }),
+          },
+        },
+        {
+          type: 'response_completed',
+          responseId: 'response-deepseek-recovery-tool',
+          finishReason: 'tool_calls',
+        },
+      ],
+      [
+        { type: 'text_delta', delta: 'Found alpha.txt.' },
+        {
+          type: 'response_completed',
+          responseId: 'response-deepseek-recovered',
+          outputText: 'Found alpha.txt.',
+        },
+      ],
+    ]);
+    const agent = await runner(workspace, provider, {
+      model: 'deepseek-v4-flash',
+      maxOutputTokens: 2_048,
+    });
+
+    const result = await agent.run('Find alpha.txt', { history: false });
+
+    expect(result.message).toBe('Found alpha.txt.');
+    expect(provider.requests).toHaveLength(3);
+    for (const request of provider.requests.slice(1)) {
+      expect(request).toMatchObject({
+        reasoning: 'none',
+        verbosity: 'low',
+        reasoningSummary: 'none',
+        maxOutputTokens: 768,
+      });
+    }
+    const recoveryFollowUp = provider.requests[2]?.input;
+    expect(Array.isArray(recoveryFollowUp)).toBe(true);
+    if (!Array.isArray(recoveryFollowUp)) throw new Error('Expected explicit DeepSeek history');
+    expect(recoveryFollowUp).toContainEqual({
+      type: 'function_call',
+      callId: 'call-recovery-list',
+      name: 'list_files',
+      arguments: JSON.stringify({ path: '.', maxDepth: 1 }),
     });
   });
 

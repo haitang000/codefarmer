@@ -1229,11 +1229,14 @@ export function ApprovalModal({
 export function EffortPicker({
   current,
   selected,
+  language = 'en',
 }: {
   current: ReasoningEffort;
   selected: number;
+  language?: Language;
 }): React.ReactElement {
   const gap = '   ';
+  const zh = language === 'zh-CN';
   // 选项名均为 ASCII，字符串长度即显示宽度；累加前序选项宽度算出 ▲ 的
   // 前导缩进，使游标对准选中标签的中点。
   let markerPad = 0;
@@ -1249,9 +1252,9 @@ export function EffortPicker({
           REASONING EFFORT
         </Text>
         <Text dimColor>
-          {'  思考深度（当前 '}
+          {zh ? '  思考深度（当前 ' : '  Effort (current '}
           <Text color={EFFORT_COLORS[current]}>{current}</Text>
-          {'）'}
+          {zh ? '）' : ')'}
         </Text>
       </Box>
       <Box flexDirection="row">
@@ -1267,7 +1270,9 @@ export function EffortPicker({
         ))}
       </Box>
       <Text color={EFFORT_COLORS[chosen]}>{' '.repeat(markerPad)}▲</Text>
-      <Text dimColor>{'←/→ 调整 · Enter 确认 · Esc 取消'}</Text>
+      <Text dimColor>
+        {zh ? '←/→ 调整 · Enter 确认 · Esc 取消' : '←/→ adjust · Enter confirm · Esc cancel'}
+      </Text>
     </Box>
   );
 }
@@ -1990,7 +1995,7 @@ export function TuiApp({
               appendSystem(
                 languageRef.current === 'zh-CN'
                   ? '不支持的语言。可选：en（English）或 zh-CN（简体中文）。'
-                  : 'Unsupported language. Choices: en (English) or zh-CN (简体中文).',
+                  : 'Unsupported language. Choices: en (English) or zh-CN.',
                 'error',
               );
             } else {
@@ -2608,7 +2613,11 @@ export function TuiApp({
         <ApprovalModal approval={approvalView} columns={columns} rows={rows} />
       )}
       {effortPicker === null ? null : (
-        <EffortPicker current={runtime.config.reasoning} selected={effortPicker} />
+        <EffortPicker
+          current={runtime.config.reasoning}
+          selected={effortPicker}
+          language={language}
+        />
       )}
       <Box justifyContent="flex-end" paddingX={1}>
         <Text dimColor>
@@ -2635,7 +2644,9 @@ export function TuiApp({
           {draft.length === 0 ? (
             <Text dimColor wrap="truncate-end">
               {busy
-                ? '输入下一条指令…'
+                ? language === 'zh-CN'
+                  ? '输入下一条指令…'
+                  : 'Type your next instruction…'
                 : agentMode === 'plan'
                   ? language === 'zh-CN'
                     ? '计划模式仅进行只读探索'
