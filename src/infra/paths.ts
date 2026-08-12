@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdir, realpath } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import envPaths from 'env-paths';
 
@@ -22,7 +23,24 @@ export interface WorkspacePaths {
 }
 
 export function getAppPaths(): AppPaths {
-  const paths = envPaths('codefarmer', { suffix: '' });
+  // env-paths caches os.homedir() at module load time. On macOS this can make
+  // test processes that temporarily change HOME write to a different root
+  // than spawned CLI processes. Resolve the macOS layout at call time so the
+  // active environment is always reflected.
+  const paths =
+    process.platform === 'darwin'
+      ? (() => {
+          const home = process.env.HOME ?? os.homedir();
+          const library = path.join(home, 'Library');
+          return {
+            data: path.join(library, 'Application Support', 'codefarmer'),
+            config: path.join(library, 'Preferences', 'codefarmer'),
+            cache: path.join(library, 'Caches', 'codefarmer'),
+            log: path.join(library, 'Logs', 'codefarmer'),
+            temp: path.join(os.tmpdir(), 'codefarmer'),
+          };
+        })()
+      : envPaths('codefarmer', { suffix: '' });
   return {
     ...paths,
     userConfigFile: path.join(paths.config, 'codefarmer.config.json'),

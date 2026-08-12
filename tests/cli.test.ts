@@ -195,7 +195,7 @@ describe('CodeFarmer CLI', () => {
       await readFile(path.join(workspace, 'codefarmer.config.json'), 'utf8'),
     ) as Record<string, unknown>;
     expect(written).toEqual({
-      $schema: 'https://unpkg.com/codefarmer@0.1.0/schemas/codefarmer.config.schema.json',
+      $schema: 'https://unpkg.com/codefarmer@0.1.1/schemas/codefarmer.config.schema.json',
       provider: 'openai',
       model: 'gpt-5.6-sol',
       baseURL: 'https://api.openai.com/v1',

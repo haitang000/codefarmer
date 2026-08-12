@@ -6,6 +6,8 @@ All notable changes to CodeFarmer are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-12
+
 ### Added
 
 - Initial TypeScript CLI and modular agent runtime.
@@ -34,6 +36,8 @@ All notable changes to CodeFarmer are documented here. This project follows
 
 ### Fixed
 
+- On macOS, application paths are resolved from the active `HOME` value at
+  runtime, keeping spawned CLI processes and test environments aligned.
 - Reaching `maxAgentTurns` no longer interrupts a run: the agent now sends a
   single `继续` instruction and keeps the full tool set, so long tasks
   continue invisibly until the model finishes naturally. Only if the model
