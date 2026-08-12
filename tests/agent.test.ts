@@ -182,7 +182,7 @@ describe('AgentRunner', () => {
     expect(provider.requests).toHaveLength(1);
     expect(provider.requests[0]).toMatchObject({
       model: 'gpt-5.6-sol',
-      reasoning: 'low',
+      reasoning: 'high',
       verbosity: 'low',
       reasoningSummary: 'none',
       maxOutputTokens: 2_048,

@@ -80,9 +80,9 @@ The OpenAI provider uses the Responses API with `store: true` by default.
 Subsequent turns pass `previous_response_id`, which preserves server-side
 reasoning state without coupling the core to OpenAI response types. The loop
 stops after `maxAgentTurns` (12 by default), then makes at most one tool-free
-summary request. Efficient defaults use low reasoning, low text verbosity, no
-visible reasoning summary, a 2,048-token completion limit per request, and a
-24,000-character combined tool output budget per request. Invalid tool parameters are returned as structured
+summary request. Reasoning defaults to `high`; the remaining defaults favor
+efficiency: low text verbosity, no visible reasoning summary, a 2,048-token
+completion limit per request, and a 24,000-character combined tool output budget per request. Invalid tool parameters are returned as structured
 tool errors instead of terminating the process.
 
 `baseURL` is resolved through the normal CLI/environment/project/user/default

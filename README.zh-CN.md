@@ -237,7 +237,7 @@ scope 的引用。技能及其资源都属于不可信指令，不能绕过审�
   "provider": "openai",
   "model": "gpt-5.6-sol",
   "baseURL": "https://api.openai.com/v1",
-  "reasoning": "low",
+  "reasoning": "high",
   "verbosity": "low",
   "reasoningSummary": "none",
   "approval": "ask",
@@ -260,7 +260,7 @@ scope 的引用。技能及其资源都属于不可信指令，不能绕过审�
 | `provider`           | `CODEFARMER_PROVIDER`              | `openai`                    |
 | `model`              | `CODEFARMER_MODEL`                 | `gpt-5.6-sol`               |
 | `baseURL`            | `CODEFARMER_BASE_URL`              | `https://api.openai.com/v1` |
-| `reasoning`          | `CODEFARMER_REASONING`             | `low`                       |
+| `reasoning`          | `CODEFARMER_REASONING`             | `high`                      |
 | `language`           | `CODEFARMER_LANGUAGE`              | `en`                        |
 | `verbosity`          | `CODEFARMER_VERBOSITY`             | `low`                       |
 | `reasoningSummary`   | `CODEFARMER_REASONING_SUMMARY`     | `none`                      |
@@ -293,10 +293,11 @@ codefarmer config set provider gemini --project
 codefarmer setup
 ```
 
-节省 token 的默认值包括：低推理强度、低详细度正文、不生成可见推理摘要、每次模型请求
-最多 2048 个完成 token、最多 12 个工具轮次，以及每个工具输出最多 12 KiB。需要更多容量时，
-可以提高 `reasoning`、`maxOutputTokens`、`verbosity`、`reasoningSummary`、`maxAgentTurns`
-或 `maxToolOutputBytes`。
+推理强度默认使用 `high`，以应对复杂任务；其余默认值偏向节省 token：低详细度正文、
+不生成可见推理摘要、每次模型请求最多 2048 个完成 token、最多 12 个工具轮次，以及每个
+工具输出最多 12 KiB。任务简单或 token 预算紧张时可将 `reasoning` 调低（例如 `low` 或
+`none`）；需要更多容量时，可以提高 `maxOutputTokens`、`verbosity`、`reasoningSummary`、
+`maxAgentTurns` 或 `maxToolOutputBytes`。
 
 对于 `deepseek-v4-flash` 和 `deepseek-v4-pro`，如果思考过程先耗尽输出预算且没有生成正文，
 CodeFarmer 只会自动尝试一次低成本恢复（关闭推理、低详细度、最多 768 个 token），不会重复

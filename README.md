@@ -255,7 +255,7 @@ Example project configuration:
   "provider": "openai",
   "model": "gpt-5.6-sol",
   "baseURL": "https://api.openai.com/v1",
-  "reasoning": "low",
+  "reasoning": "high",
   "verbosity": "low",
   "reasoningSummary": "none",
   "approval": "ask",
@@ -278,7 +278,7 @@ Supported environment overrides are:
 | `provider`           | `CODEFARMER_PROVIDER`              | `openai`                      |
 | `model`              | `CODEFARMER_MODEL`                 | `gpt-5.6-sol`                 |
 | `baseURL`            | `CODEFARMER_BASE_URL`              | `https://api.openai.com/v1`   |
-| `reasoning`          | `CODEFARMER_REASONING`             | `low`                         |
+| `reasoning`          | `CODEFARMER_REASONING`             | `high`                        |
 | `language`           | `CODEFARMER_LANGUAGE`              | `en`                          |
 | `verbosity`          | `CODEFARMER_VERBOSITY`             | `low`                         |
 | `reasoningSummary`   | `CODEFARMER_REASONING_SUMMARY`     | `none`                        |
@@ -312,11 +312,13 @@ codefarmer config set provider gemini --project
 codefarmer setup
 ```
 
-The efficient defaults use low reasoning, low text verbosity, no visible
-reasoning summary, a 2,048-token hard completion limit per model request, a
-12-turn tool limit, and 12 KiB per-tool output. Raise `reasoning`,
-`maxOutputTokens`, `verbosity`, `reasoningSummary`, `maxAgentTurns`, or
-`maxToolOutputBytes` for tasks that need more capacity.
+Reasoning defaults to `high` for deeper thinking on hard tasks. The remaining
+defaults favor efficiency: low text verbosity, no visible reasoning summary, a
+2,048-token hard completion limit per model request, a 12-turn tool limit, and
+12 KiB per-tool output. Lower `reasoning` (for example `low` or `none`) for
+simple tasks or tight token budgets; raise `maxOutputTokens`, `verbosity`,
+`reasoningSummary`, `maxAgentTurns`, or `maxToolOutputBytes` for tasks that
+need more capacity.
 
 For `deepseek-v4-flash` and `deepseek-v4-pro`, when reasoning consumes the entire output budget
 before any answer text is produced, CodeFarmer makes at most one low-cost recovery attempt with

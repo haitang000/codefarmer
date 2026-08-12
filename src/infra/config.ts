@@ -36,7 +36,7 @@ export const DEFAULT_CONFIG: Readonly<CodeFarmerConfig> = {
   provider: 'openai',
   model: 'gpt-5.6-sol',
   baseURL: 'https://api.openai.com/v1',
-  reasoning: 'low',
+  reasoning: 'high',
   verbosity: 'low',
   reasoningSummary: 'none',
   approval: 'ask',

@@ -9,6 +9,9 @@ import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
 import type { ApprovalDecision, ApprovalRequest } from '../core/approval.js';
 import type { AgentRunResult } from '../core/runtime-types.js';
 import type { AgentRuntime } from '../cli/runtime.js';
+import { writeConfigFile, type ConfigFile } from '../infra/config.js';
+import { getAppPaths } from '../infra/paths.js';
+import { readJsonFileIfExists } from '../infra/persistence.js';
 import {
   commitWorkspaceChanges,
   detectGitAvailability,
@@ -2232,6 +2235,30 @@ export function TuiApp({
     void runCommand(command);
   }, [applyDraft, runCommand]);
 
+  // Applies the effort level chosen in the /effort picker and persists it to
+  // the user config so the choice survives restarts instead of falling back
+  // to the built-in default ('high') on the next launch.
+  const applyEffort = useCallback(
+    async (choice: ReasoningEffort): Promise<void> => {
+      // runner 每轮读取同一配置对象，原地更新即可在下一轮生效。
+      const active = runtimeRef.current;
+      active.config.reasoning = choice;
+      setRuntime({ ...active });
+      try {
+        const userConfigPath = getAppPaths().userConfigFile;
+        const current = (await readJsonFileIfExists<ConfigFile>(userConfigPath)) ?? {};
+        await writeConfigFile(userConfigPath, { ...current, reasoning: choice });
+        appendSystem(`Reasoning effort set to ${choice} and saved as your default.`);
+      } catch (error) {
+        appendSystem(
+          `Reasoning effort set to ${choice} for this session, but saving the default failed: ${displayError(error)}`,
+          'error',
+        );
+      }
+    },
+    [appendSystem],
+  );
+
   const contentWidth = Math.max(10, columns - 2);
   // Header, command deck, and footer have fixed heights in the normal view.
   // Reserving the transcript height explicitly lets the latest content anchor
@@ -2267,11 +2294,7 @@ export function TuiApp({
         } else if (key.return) {
           const choice = EFFORT_CHOICES[effortPicker];
           if (choice !== undefined) {
-            // runner 每轮读取同一配置对象，原地更新即可在下一轮生效。
-            const active = runtimeRef.current;
-            active.config.reasoning = choice;
-            setRuntime({ ...active });
-            appendSystem(`Reasoning effort set to ${choice} for this session.`);
+            void applyEffort(choice);
           }
           setEffortPicker(null);
         } else if (key.leftArrow) {
