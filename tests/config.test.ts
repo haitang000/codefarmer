@@ -100,6 +100,9 @@ describe('configuration', () => {
         CODEFARMER_VERBOSITY: 'high',
         CODEFARMER_REASONING_SUMMARY: 'detailed',
         CODEFARMER_LANGUAGE: 'zh',
+        CODEFARMER_AUTO_COMPACT: 'on',
+        CODEFARMER_AUTO_COMPACT_MIN_MESSAGES: '60',
+        CODEFARMER_AUTO_COMPACT_MIN_CHARS: '200000',
         CODEFARMER_IGNORED_PATHS: '["vendor/**","*.secret"]',
       }),
     ).toMatchObject({
@@ -111,6 +114,9 @@ describe('configuration', () => {
       verbosity: 'high',
       reasoningSummary: 'detailed',
       language: 'zh-CN',
+      autoCompact: true,
+      autoCompactMinMessages: 60,
+      autoCompactMinChars: 200_000,
       ignoredPaths: ['vendor/**', '*.secret'],
     });
   });

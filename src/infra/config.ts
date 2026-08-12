@@ -48,6 +48,9 @@ export const DEFAULT_CONFIG: Readonly<CodeFarmerConfig> = {
   maxFileSizeBytes: 1_048_576,
   maxToolOutputBytes: 12_288,
   commandTimeoutMs: 120_000,
+  autoCompact: false,
+  autoCompactMinMessages: 40,
+  autoCompactMinChars: 100_000,
   ignoredPaths: [...DEFAULT_IGNORED_PATHS],
 };
 
@@ -94,6 +97,9 @@ const configShape = {
     .int()
     .min(1_000)
     .max(60 * 60 * 1_000),
+  autoCompact: z.boolean(),
+  autoCompactMinMessages: z.number().int().min(2).max(100_000),
+  autoCompactMinChars: z.number().int().min(1_000).max(50 * 1024 * 1024),
   ignoredPaths: z.array(z.string().min(1)).max(1_000),
 };
 
@@ -220,6 +226,15 @@ export function configFromEnvironment(env: NodeJS.ProcessEnv = process.env): Con
     commandTimeoutMs: parseInteger(
       'CODEFARMER_COMMAND_TIMEOUT_MS',
       env.CODEFARMER_COMMAND_TIMEOUT_MS,
+    ),
+    autoCompact: parseBoolean('CODEFARMER_AUTO_COMPACT', env.CODEFARMER_AUTO_COMPACT),
+    autoCompactMinMessages: parseInteger(
+      'CODEFARMER_AUTO_COMPACT_MIN_MESSAGES',
+      env.CODEFARMER_AUTO_COMPACT_MIN_MESSAGES,
+    ),
+    autoCompactMinChars: parseInteger(
+      'CODEFARMER_AUTO_COMPACT_MIN_CHARS',
+      env.CODEFARMER_AUTO_COMPACT_MIN_CHARS,
     ),
     ignoredPaths: parseIgnoredPaths(env.CODEFARMER_IGNORED_PATHS),
   }) as ConfigOverrides;

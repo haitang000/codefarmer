@@ -16,7 +16,12 @@ import type {
 import { buildAgentInstructions } from './prompt.js';
 import type { AgentRunResult } from './runtime-types.js';
 import { deriveSessionTitle, type SessionStore } from './session-store.js';
-import { compactSession, type CompactResult } from './session-compact.js';
+import {
+  COMPACT_KEEP_RECENT_MESSAGES,
+  compactSession,
+  sessionContextChars,
+  type CompactResult,
+} from './session-compact.js';
 
 const EMPTY_USAGE: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
@@ -41,8 +46,6 @@ const MAX_TOOL_OUTPUT_INPUT_CHARS = 24_000;
 /** Keep the title request cheap even when a resumed session is very long. */
 const MAX_TITLE_INPUT_CHARS = 12_000;
 const MAX_TITLE_LENGTH = 60;
-/** Keep the one-shot no-reasoning recovery deliberately small. */
-const LENGTH_RECOVERY_MAX_OUTPUT_TOKENS = 768;
 /** DeepSeek can require long tool chains; its configured limit is a soft checkpoint. */
 const DEEPSEEK_HARD_TURN_LIMIT = 100;
 
@@ -94,13 +97,6 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 function isRetryableProviderFailure(error: unknown): boolean {
   return error instanceof ProviderError && error.retryable;
-}
-
-function canRecoverLengthWithoutReasoning(
-  model: string,
-  reasoning: CodeFarmerConfig['reasoning'],
-): boolean {
-  return reasoning !== 'none' && /^deepseek-v4-(?:flash|pro)$/iu.test(model);
 }
 
 function sumUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
@@ -363,6 +359,42 @@ export class AgentRunner {
             this.options.config.baseURL,
           ));
 
+    // Auto-compact: when a persisted session has grown large, fold the early
+    // part into a summary before this turn so the request stays small. The new
+    // prompt is added afterwards, so it is never part of the summarised span.
+    if (
+      this.options.config.autoCompact &&
+      session.messages.length > COMPACT_KEEP_RECENT_MESSAGES + 1 &&
+      (session.messages.length >= this.options.config.autoCompactMinMessages ||
+        sessionContextChars(session) >= this.options.config.autoCompactMinChars)
+    ) {
+      try {
+        const beforeMessages = session.messages.length;
+        const beforeChars = sessionContextChars(session);
+        const result = await compactSession({
+          session,
+          provider: this.options.provider,
+          config: this.options.config,
+          ...(runOptions.signal === undefined ? {} : { signal: runOptions.signal }),
+        });
+        if (store !== undefined) {
+          store.saveQueued(session);
+          await store.flush().catch(() => undefined);
+        }
+        runOptions.onEvent?.({
+          type: 'compacted',
+          message:
+            `自动压缩上下文：${String(result.compressedMessageCount)} 条早期消息折叠为摘要` +
+            `（${String(result.summary.length)} 字符），保留最近 ${String(result.keptMessageCount)} 条；` +
+            `上下文由约 ${String(beforeMessages)} 条消息 / ${String(beforeChars)} 字符降至 ` +
+            `约 ${String(session.messages.length)} 条 / ${String(sessionContextChars(session))} 字符。`,
+        });
+      } catch {
+        // Auto-compaction is an optimisation; a provider failure must not fail
+        // the coding turn. The user can still run /compact manually.
+      }
+    }
+
     session.status = 'active';
     session.messages.push({
       id: randomUUID(),
@@ -396,8 +428,6 @@ export class AgentRunner {
     }
     let lastOutputs: ProviderToolResultInput[] | undefined;
     let emptyTurns = 0;
-    let lengthRecoveryUsed = false;
-    let lengthRecoveryActive = false;
     // Agent instructions depend only on run-level settings, so render them
     // once instead of rebuilding the same string on every turn (including the
     // final summary request).
@@ -433,27 +463,16 @@ export class AgentRunner {
         let streamedText = '';
         let streamedReasoning = '';
         let completedText = '';
-        // Once recovery disables DeepSeek thinking, keep it disabled for any
-        // tool follow-ups. Re-enabling it would replay a no-thinking assistant
-        // tool message without the reasoning_content required in thinking mode.
-        const recoveringLength = lengthRecoveryActive;
-
         const input: string | ProviderInput[] = explicitHistory
           ? [...transcript]
           : (lastOutputs ?? prompt);
         const request = {
           model: this.options.config.model,
-          reasoning: recoveringLength ? ('none' as const) : this.options.config.reasoning,
-          verbosity: recoveringLength ? ('low' as const) : this.options.config.verbosity,
-          reasoningSummary: recoveringLength
-            ? ('none' as const)
-            : this.options.config.reasoningSummary,
-          maxOutputTokens: recoveringLength
-            ? Math.min(this.options.config.maxOutputTokens, LENGTH_RECOVERY_MAX_OUTPUT_TOKENS)
-            : this.options.config.maxOutputTokens,
-          instructions: recoveringLength
-            ? `${instructions}\n只输出必要的结论或下一步，不要展开思考过程。`
-            : instructions,
+          reasoning: this.options.config.reasoning,
+          verbosity: this.options.config.verbosity,
+          reasoningSummary: this.options.config.reasoningSummary,
+          maxOutputTokens: this.options.config.maxOutputTokens,
+          instructions,
           input,
           tools:
             runOptions.plan === true
@@ -568,26 +587,8 @@ export class AgentRunner {
           finalMessage = completedText || streamedText;
           if (finalMessage.trim() === '') {
             if (finishReason !== undefined && finishReason !== 'completed') {
-              if (
-                finishReason === 'length' &&
-                !lengthRecoveryUsed &&
-                canRecoverLengthWithoutReasoning(
-                  this.options.config.model,
-                  this.options.config.reasoning,
-                )
-              ) {
-                lengthRecoveryUsed = true;
-                lengthRecoveryActive = true;
-                runOptions.onEvent?.({
-                  type: 'text_delta',
-                  delta: '\n[输出预算主要用于思考，改用低 token 模式恢复一次]\n',
-                });
-                if (!explicitHistory) previousResponseId = responseId;
-                turn -= 1;
-                continue;
-              }
               throw new ProviderError(
-                `模型在生成正文前达到输出上限（状态：${finishReason}）。已尝试一次低 token 恢复；为避免继续消耗 token，请降低 reasoning 或提高 maxOutputTokens 后再试。`,
+                `模型在生成正文前达到输出上限（状态：${finishReason}）。请降低 reasoning 或提高 maxOutputTokens 后再试。`,
                 { retryable: false, details: { finishReason } },
               );
             }

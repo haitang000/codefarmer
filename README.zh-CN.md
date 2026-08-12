@@ -249,6 +249,9 @@ scope 的引用。技能及其资源都属于不可信指令，不能绕过审�
   "maxFileSizeBytes": 1048576,
   "maxToolOutputBytes": 12288,
   "commandTimeoutMs": 120000,
+  "autoCompact": false,
+  "autoCompactMinMessages": 40,
+  "autoCompactMinChars": 100000,
   "ignoredPaths": [".git/**", "node_modules/**", "dist/**", ".env"]
 }
 ```
@@ -273,11 +276,19 @@ scope 的引用。技能及其资源都属于不可信指令，不能绕过审�
 | `maxFileSizeBytes`   | `CODEFARMER_MAX_FILE_SIZE_BYTES`   | `1048576`                   |
 | `maxToolOutputBytes` | `CODEFARMER_MAX_TOOL_OUTPUT_BYTES` | `12288`                     |
 | `commandTimeoutMs`   | `CODEFARMER_COMMAND_TIMEOUT_MS`    | `120000`                    |
+| `autoCompact`        | `CODEFARMER_AUTO_COMPACT`          | `false`                     |
+| `autoCompactMinMessages` | `CODEFARMER_AUTO_COMPACT_MIN_MESSAGES` | `40`                    |
+| `autoCompactMinChars` | `CODEFARMER_AUTO_COMPACT_MIN_CHARS` | `100000`                   |
 | `ignoredPaths`       | `CODEFARMER_IGNORED_PATHS`         | 受保护和生成目录            |
 
 `CODEFARMER_IGNORED_PATHS` 可以是 JSON 字符串数组或逗号分隔列表。默认忽略
 `.git`、依赖目录、构建与覆盖率输出、`.env`、私钥和证书；`.env.example`
 仍允许读取。
+
+`autoCompact`（默认关闭）会在会话达到 `autoCompactMinMessages` 条消息或
+`autoCompactMinChars` 字符后，在下一轮开始前自动把早期消息压缩为摘要，
+并保留最近几轮逐字内容。每次自动压缩会产生一次额外的摘要请求；手动
+执行 `/compact` 也可获得相同效果。
 
 ## Provider
 
@@ -299,10 +310,9 @@ codefarmer setup
 `none`）；需要更多容量时，可以提高 `maxOutputTokens`、`verbosity`、`reasoningSummary`、
 `maxAgentTurns` 或 `maxToolOutputBytes`。
 
-对于 `deepseek-v4-flash` 和 `deepseek-v4-pro`，如果思考过程先耗尽输出预算且没有生成正文，
-CodeFarmer 只会自动尝试一次低成本恢复（关闭推理、低详细度、最多 768 个 token），不会重复
-发送同一轮的完整预算请求。已有部分正文时会直接保留，并提示后续处理。如果恢复过程需要调用
-工具，后续请求会持续关闭推理，避免 DeepSeek 因工具历史缺少 `reasoning_content` 而拒绝请求。
+如果模型在生成正文前耗尽全部输出预算，CodeFarmer 会直接给出明确错误，不会静默修改已配置的
+推理强度、详细度或输出预算。请显式提高 `maxOutputTokens` 或降低 `reasoning` 后重试；已有部分
+正文时会直接保留并提示内容可能不完整。
 
 DeepSeek 流式响应按官方 SSE 约定处理保活注释和 `[DONE]` 终止标记。连接掉线或响应截断会被
 识别为可恢复的临时错误，当前 agent 轮次会使用指数退避最多重放三次，截断内容不会被误判为

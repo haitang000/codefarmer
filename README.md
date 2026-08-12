@@ -267,6 +267,9 @@ Example project configuration:
   "maxFileSizeBytes": 1048576,
   "maxToolOutputBytes": 12288,
   "commandTimeoutMs": 120000,
+  "autoCompact": false,
+  "autoCompactMinMessages": 40,
+  "autoCompactMinChars": 100000,
   "ignoredPaths": [".git/**", "node_modules/**", "dist/**", ".env"]
 }
 ```
@@ -291,11 +294,20 @@ Supported environment overrides are:
 | `maxFileSizeBytes`   | `CODEFARMER_MAX_FILE_SIZE_BYTES`   | `1048576`                     |
 | `maxToolOutputBytes` | `CODEFARMER_MAX_TOOL_OUTPUT_BYTES` | `12288`                       |
 | `commandTimeoutMs`   | `CODEFARMER_COMMAND_TIMEOUT_MS`    | `120000`                      |
+| `autoCompact`        | `CODEFARMER_AUTO_COMPACT`          | `false`                       |
+| `autoCompactMinMessages` | `CODEFARMER_AUTO_COMPACT_MIN_MESSAGES` | `40`                      |
+| `autoCompactMinChars` | `CODEFARMER_AUTO_COMPACT_MIN_CHARS` | `100000`                     |
 | `ignoredPaths`       | `CODEFARMER_IGNORED_PATHS`         | protected and generated paths |
 
 `CODEFARMER_IGNORED_PATHS` accepts a JSON string array or a comma-separated
 list. Default exclusions cover `.git`, dependencies, builds, coverage, `.env`
 files, private keys, and certificates; `.env.example` remains readable.
+
+`autoCompact` (off by default) automatically compresses a long session into a
+summary before a turn once the conversation reaches `autoCompactMinMessages`
+messages or `autoCompactMinChars` characters of stored content, keeping the
+last few turns verbatim. Each auto-compaction costs one extra summarising
+request; run `/compact` manually for the same behaviour.
 
 ## Providers
 
@@ -320,11 +332,10 @@ simple tasks or tight token budgets; raise `maxOutputTokens`, `verbosity`,
 `reasoningSummary`, `maxAgentTurns`, or `maxToolOutputBytes` for tasks that
 need more capacity.
 
-For `deepseek-v4-flash` and `deepseek-v4-pro`, when reasoning consumes the entire output budget
-before any answer text is produced, CodeFarmer makes at most one low-cost recovery attempt with
-reasoning disabled, low verbosity, and a 768-token cap. It does not repeat the full-budget request;
-partial answers are kept as-is. If recovery needs tools, all follow-up requests stay in
-no-reasoning mode so DeepSeek does not reject tool history created without `reasoning_content`.
+When a model consumes the entire output budget before producing answer text, CodeFarmer stops with
+a clear error instead of silently changing the configured reasoning, verbosity, or output budget.
+Increase `maxOutputTokens` or lower `reasoning` explicitly before retrying. Partial answers are kept
+as-is.
 
 DeepSeek streaming responses are parsed with the documented SSE keep-alive comments and `[DONE]`
 terminator. A dropped socket or truncated stream is treated as a transient provider failure and the

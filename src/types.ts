@@ -53,6 +53,16 @@ export interface CodeFarmerConfig {
   maxFileSizeBytes: number;
   maxToolOutputBytes: number;
   commandTimeoutMs: number;
+  /**
+   * Automatically compress the early part of a session once it grows past
+   * `autoCompactMinMessages` or `autoCompactMinChars` characters, before a
+   * turn runs. Costs one extra summarising request per compaction.
+   */
+  autoCompact: boolean;
+  /** Auto-compact once the stored conversation exceeds this many messages. */
+  autoCompactMinMessages: number;
+  /** Auto-compact once the stored message content exceeds this many chars. */
+  autoCompactMinChars: number;
   ignoredPaths: string[];
 }
 
@@ -126,6 +136,9 @@ export type ProviderEvent =
   // Emitted when the request left the effort to the model ('auto') so the UI
   // can tell the user whenever the agent picks or switches its own depth.
   | { type: 'reasoning_effort'; effort: ReasoningEffort }
+  // Emitted by the agent when it automatically compacts a long session before
+  // a turn, so the UI can surface a notice to the user.
+  | { type: 'compacted'; message: string }
   | { type: 'tool_call'; call: ProviderToolCall }
   | { type: 'usage'; usage: TokenUsage }
   | {

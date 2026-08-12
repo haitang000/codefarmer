@@ -87,6 +87,25 @@
       "maximum": 3600000,
       "default": 120000
     },
+    "autoCompact": {
+      "type": "boolean",
+      "default": false,
+      "description": "Automatically compress the early part of a session once it grows past the autoCompact thresholds, before a turn runs."
+    },
+    "autoCompactMinMessages": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 100000,
+      "default": 40,
+      "description": "Auto-compact once the stored conversation exceeds this many messages."
+    },
+    "autoCompactMinChars": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 52428800,
+      "default": 100000,
+      "description": "Auto-compact once the stored message content exceeds this many characters."
+    },
     "ignoredPaths": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },

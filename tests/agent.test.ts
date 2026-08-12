@@ -671,7 +671,7 @@ describe('AgentRunner', () => {
     expect(provider.requests).toHaveLength(1);
   });
 
-  it('uses one small no-reasoning recovery for DeepSeek v4 length stops', async () => {
+  it('does not retry DeepSeek v4 after a length stop without answer text', async () => {
     const workspace = await temporaryWorkspace();
     const provider = new RecordingScriptedProvider([
       [
@@ -681,92 +681,23 @@ describe('AgentRunner', () => {
           finishReason: 'length',
         },
       ],
-      [
-        { type: 'text_delta', delta: '已完成。' },
-        {
-          type: 'response_completed',
-          responseId: 'response-deepseek-recovered',
-          outputText: '已完成。',
-        },
-      ],
     ]);
     const agent = await runner(workspace, provider, {
       model: 'deepseek-v4-flash',
       maxOutputTokens: 2_048,
     });
 
-    const result = await agent.run('完成任务', { history: false });
-
-    expect(result.message).toBe('已完成。');
-    expect(provider.requests).toHaveLength(2);
-    expect(provider.requests[1]).toMatchObject({
-      reasoning: 'none',
+    await expect(agent.run('完成任务', { history: false })).rejects.toMatchObject({
+      name: ProviderError.name,
+      code: 'PROVIDER_ERROR',
+      retryable: false,
+    });
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]).toMatchObject({
+      reasoning: 'high',
       verbosity: 'low',
       reasoningSummary: 'none',
-      maxOutputTokens: 768,
-    });
-  });
-
-  it('keeps DeepSeek thinking disabled across tool calls during length recovery', async () => {
-    const workspace = await temporaryWorkspace();
-    await writeFile(path.join(workspace, 'alpha.txt'), 'alpha\n', 'utf8');
-    const provider = new DeepSeekRecordingProvider([
-      [
-        {
-          type: 'response_completed',
-          responseId: 'response-deepseek-length',
-          finishReason: 'length',
-        },
-      ],
-      [
-        {
-          type: 'tool_call',
-          call: {
-            callId: 'call-recovery-list',
-            name: 'list_files',
-            arguments: JSON.stringify({ path: '.', maxDepth: 1 }),
-          },
-        },
-        {
-          type: 'response_completed',
-          responseId: 'response-deepseek-recovery-tool',
-          finishReason: 'tool_calls',
-        },
-      ],
-      [
-        { type: 'text_delta', delta: 'Found alpha.txt.' },
-        {
-          type: 'response_completed',
-          responseId: 'response-deepseek-recovered',
-          outputText: 'Found alpha.txt.',
-        },
-      ],
-    ]);
-    const agent = await runner(workspace, provider, {
-      model: 'deepseek-v4-flash',
       maxOutputTokens: 2_048,
-    });
-
-    const result = await agent.run('Find alpha.txt', { history: false });
-
-    expect(result.message).toBe('Found alpha.txt.');
-    expect(provider.requests).toHaveLength(3);
-    for (const request of provider.requests.slice(1)) {
-      expect(request).toMatchObject({
-        reasoning: 'none',
-        verbosity: 'low',
-        reasoningSummary: 'none',
-        maxOutputTokens: 768,
-      });
-    }
-    const recoveryFollowUp = provider.requests[2]?.input;
-    expect(Array.isArray(recoveryFollowUp)).toBe(true);
-    if (!Array.isArray(recoveryFollowUp)) throw new Error('Expected explicit DeepSeek history');
-    expect(recoveryFollowUp).toContainEqual({
-      type: 'function_call',
-      callId: 'call-recovery-list',
-      name: 'list_files',
-      arguments: JSON.stringify({ path: '.', maxDepth: 1 }),
     });
   });
 
@@ -1081,5 +1012,67 @@ describe('AgentRunner', () => {
       role: 'user',
       content: 'Continue the work',
     });
+  });
+
+  it('automatically compacts a long session before the next turn when autoCompact is enabled', async () => {
+    const workspace = await temporaryWorkspace();
+    const provider = new RecordingScriptedProvider([
+      [
+        { type: 'text_delta', delta: 'Auto summary.' },
+        {
+          type: 'response_completed',
+          responseId: 'response-auto',
+          outputText: 'Auto summary.',
+        },
+        { type: 'usage', usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 } },
+      ],
+      [
+        { type: 'text_delta', delta: 'After auto-compact.' },
+        {
+          type: 'response_completed',
+          responseId: 'response-after',
+          outputText: 'After auto-compact.',
+        },
+      ],
+    ]);
+    const agent = await runner(workspace, provider, { autoCompact: true });
+    const record = sessionRecord(50);
+    const events: ProviderEvent[] = [];
+
+    const result = await agent.run('Continue', {
+      session: record,
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.message).toBe('After auto-compact.');
+    // The early messages were folded into a stored summary before the turn.
+    expect(record.messages[0]).toMatchObject({ role: 'system', compressed: true });
+    expect(record.messages.some((message) => message.content === 'Continue')).toBe(true);
+    expect(events.some((event) => event.type === 'compacted')).toBe(true);
+    // One summarising request + one real turn.
+    expect(provider.requests).toHaveLength(2);
+  });
+
+  it('skips auto-compaction when disabled even on a long session', async () => {
+    const workspace = await temporaryWorkspace();
+    const provider = new RecordingScriptedProvider([
+      [
+        { type: 'text_delta', delta: 'Plain turn.' },
+        {
+          type: 'response_completed',
+          responseId: 'response-plain',
+          outputText: 'Plain turn.',
+        },
+      ],
+    ]);
+    const agent = await runner(workspace, provider, { autoCompact: false });
+    const record = sessionRecord(50);
+
+    const result = await agent.run('Continue', { session: record });
+
+    expect(result.status).toBe('completed');
+    expect(record.messages[0]).not.toMatchObject({ role: 'system', compressed: true });
+    expect(provider.requests).toHaveLength(1);
   });
 });

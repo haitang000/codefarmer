@@ -1615,6 +1615,8 @@ export function TuiApp({
           );
         } else if (event.type === 'usage') {
           setUsage(event.usage);
+        } else if (event.type === 'compacted') {
+          appendSystem(event.message);
         } else if (event.type === 'tool_call') {
           const currentAssistantId = activeAssistant.id;
           if (currentAssistantId !== undefined) flushDeltaBuffer(currentAssistantId);
