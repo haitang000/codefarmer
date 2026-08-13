@@ -165,6 +165,17 @@ describe('CodeFarmer CLI', () => {
     expect(result.stdout).toContain('doctor');
   });
 
+  it('reports the published CLI version', async () => {
+    const workspace = await temporaryDirectory();
+    const environmentRoot = await temporaryDirectory();
+
+    const result = await runCli(['--version'], workspace, environmentRoot);
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout.trim()).toBe('0.1.3');
+  });
+
   it('lists and shows skills without credentials or network access', async () => {
     const workspace = await temporaryDirectory();
     const environmentRoot = await temporaryDirectory();
@@ -195,7 +206,7 @@ describe('CodeFarmer CLI', () => {
       await readFile(path.join(workspace, 'codefarmer.config.json'), 'utf8'),
     ) as Record<string, unknown>;
     expect(written).toEqual({
-      $schema: 'https://unpkg.com/codefarmer@0.1.1/schemas/codefarmer.config.schema.json',
+      $schema: 'https://unpkg.com/codefarmer@0.1.3/schemas/codefarmer.config.schema.json',
       provider: 'openai',
       model: 'gpt-5.6-sol',
       baseURL: 'https://api.openai.com/v1',

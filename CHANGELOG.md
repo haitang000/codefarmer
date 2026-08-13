@@ -6,6 +6,13 @@ All notable changes to CodeFarmer are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-13
+
+### Fixed
+
+- Align CLI and TUI version labels, plus generated configuration schema URLs,
+  with the published package version.
+
 ## [0.1.2] - 2026-08-12
 
 ### Changed
