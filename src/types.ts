@@ -233,6 +233,8 @@ export interface SessionRecord {
   provider: string;
   model: string;
   baseURL?: string;
+  /** Reasoning effort the conversation was running at; restored on resume. */
+  reasoning?: ReasoningEffort;
   status: SessionStatus;
   title?: string;
   /** Whether the title was generated automatically or set by the user. */

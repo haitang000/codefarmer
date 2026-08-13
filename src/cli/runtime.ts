@@ -126,6 +126,11 @@ export function resolveSessionConfig(
     provider: session.provider,
     ...(options.model === undefined ? { model: session.model } : {}),
     ...(session.baseURL === undefined ? {} : { baseURL: session.baseURL }),
+    // 恢复该会话运行时的思考强度（对话设置的 effort 随会话继承），
+    // 显式 CLI 参数优先，与 model 的恢复规则一致。
+    ...(session.reasoning === undefined || options.reasoning !== undefined
+      ? {}
+      : { reasoning: session.reasoning }),
   };
 }
 

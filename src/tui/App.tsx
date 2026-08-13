@@ -1714,12 +1714,17 @@ export function TuiApp({
           const previous = lastReasoningEffortRef.current;
           lastReasoningEffortRef.current = event.effort;
           // 继承模型本轮选定的思考深度：原地写回运行配置，后续请求（含工具
-          // 调用轮次）与 /effort 选择器继续沿用该档位；用户配置保持不变，
-          // 重启后仍按默认档位启动。
+          // 调用轮次）与 /effort 选择器继续沿用该档位；同时写入当前会话记录，
+          // 让 /new、/resume 以及下次启动时恢复的会话继承该档位。用户配置
+          // 保持不变，显式 /effort 设置不会被模型选择覆盖。
           const active = runtimeRef.current;
           const next = inheritModelEffort(active.config.reasoning, event.effort);
           if (next !== active.config.reasoning) {
             active.config.reasoning = next;
+            if (active.session !== undefined) {
+              active.session.reasoning = next;
+              active.sessions.saveQueued(active.session);
+            }
             setRuntime({ ...active });
           }
           if (previous === undefined)
@@ -1941,6 +1946,16 @@ export function TuiApp({
           }
         } else if (command.kind === 'new') {
           const next = await runtimeFactory();
+          // 新会话继承当前对话的思考强度：模型在 auto 模式下选定的档位或
+          // /effort 设置的档位都随会话记录一并带入，而不是回到配置默认。
+          const previous = runtimeRef.current;
+          if (next.config.reasoning !== previous.config.reasoning) {
+            next.config.reasoning = previous.config.reasoning;
+            if (next.session !== undefined) {
+              next.session.reasoning = next.config.reasoning;
+              next.sessions.saveQueued(next.session);
+            }
+          }
           swapRuntime(next);
           appendSystem(`New session ${next.session?.id ?? ''}`);
         } else if (command.kind === 'resume') {
@@ -2389,6 +2404,12 @@ export function TuiApp({
       // runner 每轮读取同一配置对象，原地更新即可在下一轮生效。
       const active = runtimeRef.current;
       active.config.reasoning = choice;
+      // 与模型自动选定的档位一致，把该档位写入当前会话记录，恢复该会话时
+      // 继续沿用；/new 也会把当前档位带入新会话。
+      if (active.session !== undefined) {
+        active.session.reasoning = choice;
+        active.sessions.saveQueued(active.session);
+      }
       setRuntime({ ...active });
       try {
         const userConfigPath = getAppPaths().userConfigFile;

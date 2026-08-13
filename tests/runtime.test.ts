@@ -52,4 +52,37 @@ describe('session runtime configuration', () => {
       requested,
     );
   });
+
+  it('restores the reasoning effort a resumed session was running at', () => {
+    const resolved = resolveSessionConfig(
+      { ...DEFAULT_CONFIG, reasoning: 'auto' },
+      {},
+      { ...session(), reasoning: 'high' },
+      true,
+    );
+
+    expect(resolved.reasoning).toBe('high');
+  });
+
+  it('lets an explicit CLI reasoning override win over the stored session effort', () => {
+    const resolved = resolveSessionConfig(
+      { ...DEFAULT_CONFIG, reasoning: 'low' },
+      { reasoning: 'low' },
+      { ...session(), reasoning: 'high' },
+      true,
+    );
+
+    expect(resolved.reasoning).toBe('low');
+  });
+
+  it('keeps the config default for a resumed session without a stored effort', () => {
+    const resolved = resolveSessionConfig(
+      { ...DEFAULT_CONFIG, reasoning: 'medium' },
+      {},
+      session(),
+      true,
+    );
+
+    expect(resolved.reasoning).toBe('medium');
+  });
 });

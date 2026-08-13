@@ -6,6 +6,15 @@ All notable changes to CodeFarmer are documented here. This project follows
 
 ## [Unreleased]
 
+### Changed
+
+- The reasoning effort of a conversation is now stored with the session and
+  inherited: resuming a session restores the effort it ran at, and starting a
+  new conversation (`/new`) carries the current effort over instead of
+  reverting to the config default. The effort the model picks in `auto` mode
+  is written back to the session record too, so it survives conversation
+  switches and restarts instead of being re-decided from scratch.
+
 ## [0.1.3] - 2026-08-13
 
 ### Fixed
