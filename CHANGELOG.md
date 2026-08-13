@@ -6,6 +6,14 @@ All notable changes to CodeFarmer are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-13
+
+### Added
+
+- `/sessions` now opens a keyboard-operated session picker in the TUI.
+- The terminal title now reflects the agent's current activity while a task is
+  running.
+
 ### Changed
 
 - The reasoning effort of a conversation is now stored with the session and
@@ -14,6 +22,8 @@ All notable changes to CodeFarmer are documented here. This project follows
   reverting to the config default. The effort the model picks in `auto` mode
   is written back to the session record too, so it survives conversation
   switches and restarts instead of being re-decided from scratch.
+- The TUI effort picker is now a keyboard-friendly slider.
+- Tool labels in the TUI transcript are localized.
 
 ## [0.1.3] - 2026-08-13
 

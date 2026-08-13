@@ -350,7 +350,7 @@ export function WelcomePanel({
             {'CodeFarmer'}
           </Text>
           <Text color={PANEL_BORDER_COLOR}>{'  /  '}</Text>
-          <Text color={SECONDARY_TEXT_COLOR}>{'v0.1.3'}</Text>
+          <Text color={SECONDARY_TEXT_COLOR}>{'v0.1.4'}</Text>
         </Box>
         <Text color={READY_COLOR} bold>
           {zh ? '● 就绪' : '● READY'}
