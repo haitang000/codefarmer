@@ -293,13 +293,15 @@ describe('TUI rendering', () => {
     expect(output).toContain('Ready');
   });
 
-  it('renders the effort picker as a horizontal slider with the cursor under the selection', () => {
+  it('renders the effort picker as a Claude Code-style horizontal slider', () => {
     const output = renderToString(<EffortPicker current="medium" selected={5} language="zh-CN" />, {
       columns: 100,
     });
 
-    expect(output).toContain('思考深度');
-    expect(output).toContain('（当前 medium）');
+    expect(output).toContain('思考强度');
+    expect(output).toContain('更快');
+    expect(output).toContain('更聪明');
+    expect(output).toContain('当前：medium');
     expect(output).toContain('←/→ 调整 · Enter 确认 · Esc 取消');
 
     const lines = output.split('\n');
@@ -307,7 +309,7 @@ describe('TUI rendering', () => {
     const markerLine = lines.find((line) => line.includes('▲'));
     expect(labelsLine).toBeDefined();
     expect(markerLine).toBeDefined();
-    // Claude Code 式滑轨：▲ 游标必须对准选中标签 xhigh 的中点（偏移 2 列）。
+    // 游标必须对准选中标签 xhigh 的中点（偏移 2 列）。
     if (labelsLine !== undefined && markerLine !== undefined) {
       expect(markerLine.indexOf('▲')).toBe(labelsLine.indexOf('xhigh') + 2);
     }
@@ -318,7 +320,10 @@ describe('TUI rendering', () => {
       columns: 100,
     });
 
-    expect(output).toContain('Effort (current medium)');
+    expect(output).toContain('Effort');
+    expect(output).toContain('Faster');
+    expect(output).toContain('Smarter');
+    expect(output).toContain('Current: medium');
     expect(output).toContain('←/→ adjust · Enter confirm · Esc cancel');
     expect(output).not.toContain('思考深度');
     expect(output).not.toContain('调整');

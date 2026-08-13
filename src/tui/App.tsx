@@ -61,17 +61,7 @@ const EMPTY_USAGE: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 
 // also the left/right navigation order. 'auto' 不是具体强度，而是让模型自行
 // 决定思考深度，排在最左侧作为默认入口。
 const EFFORT_CHOICES = ['auto', 'none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
-// 每个思考深度有专属颜色，沿冷到暖的渐变递进（档位越高颜色越“热”），
-// 滑轨上一眼可辨当前所处位置；auto 用蓝色与具体档位区分。
-const EFFORT_COLORS: Record<ReasoningEffort, string> = {
-  auto: 'blue',
-  none: 'gray',
-  low: 'green',
-  medium: 'cyan',
-  high: 'yellow',
-  xhigh: 'magenta',
-  max: 'red',
-};
+const EFFORT_ACCENT_COLOR = '#B7B5FF';
 const BRAND_COLOR = '#D97757';
 const PANEL_BORDER_COLOR = '#5F5551';
 const SECONDARY_TEXT_COLOR = '#B8B2AE';
@@ -1266,8 +1256,8 @@ export function ApprovalModal({
 // adjusts the effort level with ←/→, confirms with Enter, and closes with
 // Esc (Ctrl+C works too) without changing anything.
 //
-// Claude Code 式横向滑轨：渲染在输入框上方的文档流中，选项标签排成一行，
-// ▲ 游标精确落在选中项正下方，不悬浮遮挡内容，也不会跑出可视区域。
+// Claude Code 式横向滑轨：渲染在输入框上方的文档流中，游标精确落在
+// 选中档位上方，不悬浮遮挡内容，也不会跑出可视区域。
 // 模型在 'auto' 模式下实际选定的思考深度应被继承：返回后续请求应使用的
 // 档位——保持模型的选择，而不是每一轮都回到 'auto' 让模型重新决定。
 // 显式设置（非 'auto'）的档位不会被模型选择覆盖；'auto' 不是具体强度，
@@ -1289,8 +1279,8 @@ export function EffortPicker({
   selected: number;
   language?: Language;
 }): React.ReactElement {
-  const gap = '   ';
   const zh = language === 'zh-CN';
+  const gap = '    ';
   // 选项名均为 ASCII，字符串长度即显示宽度；累加前序选项宽度算出 ▲ 的
   // 前导缩进，使游标对准选中标签的中点。
   let markerPad = 0;
@@ -1300,22 +1290,22 @@ export function EffortPicker({
   const chosen = EFFORT_CHOICES[selected] ?? 'none';
   markerPad += Math.floor(chosen.length / 2);
   return (
-    <Box flexDirection="column" paddingX={1} borderStyle="round" borderColor="blue">
-      <Box flexDirection="row">
-        <Text color="cyan" bold>
-          REASONING EFFORT
-        </Text>
-        <Text dimColor>
-          {zh ? '  思考深度（当前 ' : '  Effort (current '}
-          <Text color={EFFORT_COLORS[current]}>{current}</Text>
-          {zh ? '）' : ')'}
-        </Text>
+    <Box flexDirection="column" paddingX={3} paddingY={1} borderStyle="single" borderColor={EFFORT_ACCENT_COLOR}>
+      <Text bold>{zh ? '思考强度' : 'Effort'}</Text>
+      <Box marginTop={1} paddingLeft={6} width={68} justifyContent="space-between">
+        <Text dimColor>{zh ? '更快' : 'Faster'}</Text>
+        <Text dimColor>{zh ? '更聪明' : 'Smarter'}</Text>
       </Box>
-      <Box flexDirection="row">
+      <Box paddingLeft={6}>
+        <Text dimColor>{'─'.repeat(43)}</Text>
+        <Text color={EFFORT_ACCENT_COLOR}>{'┊' + '─'.repeat(12)}</Text>
+      </Box>
+      <Text color={EFFORT_ACCENT_COLOR}>{' '.repeat(6 + markerPad)}▲</Text>
+      <Box flexDirection="row" paddingLeft={6}>
         {EFFORT_CHOICES.map((choice, index) => (
           <Text
             key={choice}
-            color={EFFORT_COLORS[choice]}
+            {...(index === selected ? { color: EFFORT_ACCENT_COLOR } : {})}
             dimColor={index !== selected}
             bold={index === selected}
           >
@@ -1323,10 +1313,8 @@ export function EffortPicker({
           </Text>
         ))}
       </Box>
-      <Text color={EFFORT_COLORS[chosen]}>{' '.repeat(markerPad)}▲</Text>
-      <Text dimColor>
-        {zh ? '←/→ 调整 · Enter 确认 · Esc 取消' : '←/→ adjust · Enter confirm · Esc cancel'}
-      </Text>
+      <Text dimColor>{zh ? '←/→ 调整 · Enter 确认 · Esc 取消' : '←/→ adjust · Enter confirm · Esc cancel'}</Text>
+      <Text dimColor>{zh ? `当前：${current}` : `Current: ${current}`}</Text>
     </Box>
   );
 }
