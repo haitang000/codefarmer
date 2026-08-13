@@ -41,7 +41,7 @@ import {
   type TuiInteractionBridge,
   type TuiRuntimeFactory,
 } from './runtime.js';
-import { formatTerminalTitle, normaliseSessionTitle } from './title.js';
+import { formatTerminalTitle, normaliseSessionTitle, type TuiTitleStatus } from './title.js';
 import {
   parseTuiCommand,
   nextAgentMode,
@@ -1422,6 +1422,8 @@ export function TuiApp({
     setCursor(position);
   }, []);
   const [busy, setBusy] = useState(false);
+  // Terminal window title status: running while a turn executes, completed after it finishes, idle otherwise.
+  const [titleStatus, setTitleStatus] = useState<TuiTitleStatus>('idle');
   // React state may lag behind key events by one render. This ref is the
   // synchronous lock for model turns and prevents local commands from
   // accidentally starting a second turn or clearing the active one.
@@ -1490,8 +1492,8 @@ export function TuiApp({
   }, []);
 
   useEffect(() => {
-    onTerminalTitleChange?.(formatTerminalTitle(runtime.session?.title));
-  }, [onTerminalTitleChange, runtime.session?.title]);
+    onTerminalTitleChange?.(formatTerminalTitle(runtime.session?.title, titleStatus));
+  }, [onTerminalTitleChange, runtime.session?.title, titleStatus]);
 
   const pumpApproval = useCallback(() => {
     if (currentApprovalRef.current !== undefined) return;
@@ -1638,6 +1640,7 @@ export function TuiApp({
     setEntries(runtimeEntries(next));
     setUsage(next.session?.usage ?? EMPTY_USAGE);
     setStatus(next.config.language === 'zh-CN' ? '就绪' : 'Ready');
+    setTitleStatus('idle');
     setTopLine(-1);
     setSelectedSkills([]);
     languageRef.current = next.config.language;
@@ -1688,6 +1691,7 @@ export function TuiApp({
       if (!nested) {
         busyRef.current = true;
         setBusy(true);
+        setTitleStatus('running');
       }
       setStatus('Thinking');
       const controller = new AbortController();
@@ -1869,6 +1873,7 @@ export function TuiApp({
           const stillBusy = currentState !== undefined && currentState !== 'idle';
           busyRef.current = stillBusy;
           setBusy(stillBusy);
+          if (!stillBusy) setTitleStatus('completed');
         }
       }
     },
