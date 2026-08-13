@@ -6,11 +6,17 @@ All notable changes to CodeFarmer are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-12
+
 ### Changed
 
 - `/language` in the TUI now persists the choice to the user config file, so
   new sessions (`/new`, `/resume`) and later launches inherit the language
   instead of reverting to the previous default on the next runtime.
+- The reasoning effort the model chooses in `auto` mode now carries over to
+  subsequent requests in the same session (`inheritModelEffort`) instead of
+  being re-decided every turn; explicit `/effort` settings are never overridden
+  and `auto` is kept defensively when the model does not report a choice.
 
 ## [0.1.1] - 2026-08-12
 
