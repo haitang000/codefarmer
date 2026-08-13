@@ -2,7 +2,7 @@
   "provider": "deepseek",
   "model": "deepseek-v4-flash",
   "baseURL": "https://api.deepseek.com",
-  "reasoning": "low",
+  "reasoning": "high",
   "verbosity": "low",
   "reasoningSummary": "none",
   "maxAgentTurns": 12,

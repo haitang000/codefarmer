@@ -320,7 +320,7 @@ describe('TUI rendering', () => {
       { columns: 90 },
     );
 
-    expect(output).toContain('apply_patch');
+    expect(output).toContain('Edited');
     expect(output).toContain('+3 -2');
   });
 

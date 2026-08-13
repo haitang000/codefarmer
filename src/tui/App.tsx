@@ -668,11 +668,35 @@ export function mutationStats(output: string | undefined): string | undefined {
   return match === null ? undefined : match[1];
 }
 
+// Some tool names are shown with a friendlier, localized label instead of the
+// raw identifier. Labels use the perfective ("完成时") form so the transcript
+// reads as completed actions (e.g. 已浏览 / Listed) rather than in progress.
+const TOOL_DISPLAY_LABELS: Record<string, { zh: string; en: string }> = {
+  list_files: { zh: '已浏览', en: 'Listed' },
+  read_file: { zh: '已探索', en: 'Explored' },
+  search_text: { zh: '已搜索', en: 'Searched' },
+  apply_patch: { zh: '已编辑', en: 'Edited' },
+  write_file: { zh: '已写入', en: 'Written' },
+  run_command: { zh: '已执行', en: 'Ran' },
+  git_status: { zh: '已查Git状态', en: 'Git status checked' },
+  git_diff: { zh: '已查Git差异', en: 'Git diff checked' },
+  git_log: { zh: '已查Git历史', en: 'Git log checked' },
+  git_show: { zh: '已查Git提交', en: 'Git show checked' },
+  read_skill: { zh: '已读取技能', en: 'Read skill' },
+  read_skill_resource: { zh: '已读技能资源', en: 'Read skill resource' },
+};
+
+function toolDisplayName(name: string, language: Language): string {
+  const label = TOOL_DISPLAY_LABELS[name];
+  if (label === undefined) return name;
+  return language === 'zh-CN' ? label.zh : label.en;
+}
+
 // Tool calls render as compact single lines so long tool chains do not flood
 // the transcript; failures keep their full error output below the header.
 // Prefix (status glyph) and body (name + duration) are styled separately so
 // the glyph stays crisp even when the body is dimmed.
-function toolLine(tool: ToolView): {
+function toolLine(tool: ToolView, language: Language): {
   prefix: string;
   name: string;
   detail: string | undefined;
@@ -681,13 +705,14 @@ function toolLine(tool: ToolView): {
 } {
   const duration = tool.durationMs === undefined ? '' : ` ${formatDuration(tool.durationMs)}`;
   const detail = toolArgumentPreview(tool.arguments);
+  const name = toolDisplayName(tool.name, language);
   if (tool.status === 'failed') {
-    return { prefix: '✗', name: `${tool.name}${duration}`, detail, stats: undefined, color: 'red' };
+    return { prefix: '✗', name: `${name}${duration}`, detail, stats: undefined, color: 'red' };
   }
   if (tool.status === 'succeeded') {
     return {
       prefix: '✓',
-      name: `${tool.name}${duration}`,
+      name: `${name}${duration}`,
       detail,
       stats: mutationStats(tool.output),
       color: 'green',
@@ -695,7 +720,7 @@ function toolLine(tool: ToolView): {
   }
   return {
     prefix: '▸',
-    name: `${tool.name}${duration}…`,
+    name: `${name}${duration}…`,
     detail,
     stats: undefined,
     color: 'yellow',
@@ -753,12 +778,14 @@ export function EntryView({
   trailingGap = true,
   showThinking = false,
   width,
+  language = 'en',
 }: {
   entry: TranscriptEntry;
   trailingGap?: boolean;
   showThinking?: boolean;
   /** 转录区宽度；思考块按与行数估算相同的宽度预换行。 */
   width: number;
+  language?: Language;
 }): React.ReactElement {
   const marginBottom = trailingGap ? 1 : 0;
   if (entry.kind === 'user') {
@@ -809,7 +836,7 @@ export function EntryView({
 
   if (entry.kind === 'tool' && entry.tool !== undefined) {
     const tool = entry.tool;
-    const line = toolLine(tool);
+    const line = toolLine(tool, language);
     return (
       <Box key={entry.id} flexDirection="column" marginBottom={marginBottom} paddingLeft={1}>
         <Text>
@@ -985,6 +1012,7 @@ function ClippedEntryImpl({
   width,
   trailingGap = true,
   showThinking = false,
+  language = 'en',
 }: {
   entry: TranscriptEntry;
   skip: number;
@@ -992,6 +1020,7 @@ function ClippedEntryImpl({
   width: number;
   trailingGap?: boolean;
   showThinking?: boolean;
+  language?: Language;
 }): React.ReactElement | null {
   if (take <= 0) return null;
 
@@ -1005,6 +1034,7 @@ function ClippedEntryImpl({
           trailingGap={trailingGap}
           showThinking={showThinking}
           width={width}
+          language={language}
         />
       );
   }
@@ -1077,7 +1107,7 @@ function ClippedEntryImpl({
     }
   } else if (entry.kind === 'tool' && entry.tool !== undefined) {
     const tool = entry.tool;
-    const line = toolLine(tool);
+    const line = toolLine(tool, language);
     const stats = line.stats === undefined ? '' : `  ${line.stats}`;
     takeLines(
       [`${line.prefix} ${line.name}${line.detail === undefined ? '' : `  ${line.detail}`}${stats}`],
@@ -2664,6 +2694,7 @@ export function TuiApp({
                   width={contentWidth}
                   trailingGap={trailingGap}
                   showThinking={showThinking}
+                  language={language}
                 />,
               );
               budget -= Math.min(height - skip, budget);
