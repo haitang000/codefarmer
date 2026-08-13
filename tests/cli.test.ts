@@ -248,7 +248,6 @@ describe('CodeFarmer CLI', () => {
       reasoningSummary: 'none',
       approval: 'ask',
       maxAgentTurns: 12,
-      maxOutputTokens: 2048,
     });
   });
 

@@ -185,7 +185,6 @@ describe('AgentRunner', () => {
       reasoning: 'high',
       verbosity: 'low',
       reasoningSummary: 'none',
-      maxOutputTokens: 2_048,
       input: 'Introduce yourself',
       store: true,
     });
@@ -684,7 +683,6 @@ describe('AgentRunner', () => {
     ]);
     const agent = await runner(workspace, provider, {
       model: 'deepseek-v4-flash',
-      maxOutputTokens: 2_048,
     });
 
     await expect(agent.run('完成任务', { history: false })).rejects.toMatchObject({
@@ -697,8 +695,8 @@ describe('AgentRunner', () => {
       reasoning: 'high',
       verbosity: 'low',
       reasoningSummary: 'none',
-      maxOutputTokens: 2_048,
     });
+    expect(provider.requests[0]?.maxOutputTokens).toBeUndefined();
   });
 
   it('completes when the stream ends without a response.completed event', async () => {

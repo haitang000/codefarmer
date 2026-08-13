@@ -182,7 +182,7 @@ with `/plan [on|off]` and `/auto [on|off]`.
 | `/auto [on/off]` | Enable or disable automatic plan-and-execute mode                                          |
 | `/language [en   | zh-CN]`                                                                                    | Switch the interface and agent response language and save it as your default (inherited by later sessions) |
 | `/config`        | Show effective configuration                                                               |
-| `/sessions`      | List saved sessions                                                                        |
+| `/sessions`      | Open the saved-session picker (`↑/↓`, Enter to switch, Esc to close)                       |
 | `/resume <id>`   | Switch to a saved session                                                                  |
 | `/delete <id>`   | Delete a non-active local session                                                          |
 | `/diff`          | Show current Git diff with colored additions, removals, headers, and hunks                 |
@@ -263,7 +263,6 @@ Example project configuration:
   "store": true,
   "logLevel": "info",
   "maxAgentTurns": 12,
-  "maxOutputTokens": 2048,
   "maxFileSizeBytes": 1048576,
   "maxToolOutputBytes": 12288,
   "commandTimeoutMs": 120000,
@@ -276,28 +275,27 @@ Example project configuration:
 
 Supported environment overrides are:
 
-| Configuration key    | Environment variable               | Default                       |
-| -------------------- | ---------------------------------- | ----------------------------- |
-| `provider`           | `CODEFARMER_PROVIDER`              | `openai`                      |
-| `model`              | `CODEFARMER_MODEL`                 | `gpt-5.6-sol`                 |
-| `baseURL`            | `CODEFARMER_BASE_URL`              | `https://api.openai.com/v1`   |
-| `reasoning`          | `CODEFARMER_REASONING`             | `high`                        |
-| `language`           | `CODEFARMER_LANGUAGE`              | `en`                          |
-| `verbosity`          | `CODEFARMER_VERBOSITY`             | `low`                         |
-| `reasoningSummary`   | `CODEFARMER_REASONING_SUMMARY`     | `none`                        |
-| `approval`           | `CODEFARMER_APPROVAL`              | `ask`                         |
-| `stream`             | `CODEFARMER_STREAM`                | `true`                        |
-| `store`              | `CODEFARMER_STORE`                 | `true` (required in v1)       |
-| `logLevel`           | `CODEFARMER_LOG_LEVEL`             | `info`                        |
-| `maxAgentTurns`      | `CODEFARMER_MAX_AGENT_TURNS`       | `12`                          |
-| `maxOutputTokens`    | `CODEFARMER_MAX_OUTPUT_TOKENS`     | `2048`                        |
-| `maxFileSizeBytes`   | `CODEFARMER_MAX_FILE_SIZE_BYTES`   | `1048576`                     |
-| `maxToolOutputBytes` | `CODEFARMER_MAX_TOOL_OUTPUT_BYTES` | `12288`                       |
-| `commandTimeoutMs`   | `CODEFARMER_COMMAND_TIMEOUT_MS`    | `120000`                      |
-| `autoCompact`        | `CODEFARMER_AUTO_COMPACT`          | `false`                       |
-| `autoCompactMinMessages` | `CODEFARMER_AUTO_COMPACT_MIN_MESSAGES` | `40`                      |
-| `autoCompactMinChars` | `CODEFARMER_AUTO_COMPACT_MIN_CHARS` | `100000`                     |
-| `ignoredPaths`       | `CODEFARMER_IGNORED_PATHS`         | protected and generated paths |
+| Configuration key        | Environment variable                   | Default                       |
+| ------------------------ | -------------------------------------- | ----------------------------- |
+| `provider`               | `CODEFARMER_PROVIDER`                  | `openai`                      |
+| `model`                  | `CODEFARMER_MODEL`                     | `gpt-5.6-sol`                 |
+| `baseURL`                | `CODEFARMER_BASE_URL`                  | `https://api.openai.com/v1`   |
+| `reasoning`              | `CODEFARMER_REASONING`                 | `high`                        |
+| `language`               | `CODEFARMER_LANGUAGE`                  | `en`                          |
+| `verbosity`              | `CODEFARMER_VERBOSITY`                 | `low`                         |
+| `reasoningSummary`       | `CODEFARMER_REASONING_SUMMARY`         | `none`                        |
+| `approval`               | `CODEFARMER_APPROVAL`                  | `ask`                         |
+| `stream`                 | `CODEFARMER_STREAM`                    | `true`                        |
+| `store`                  | `CODEFARMER_STORE`                     | `true` (required in v1)       |
+| `logLevel`               | `CODEFARMER_LOG_LEVEL`                 | `info`                        |
+| `maxAgentTurns`          | `CODEFARMER_MAX_AGENT_TURNS`           | `12`                          |
+| `maxFileSizeBytes`       | `CODEFARMER_MAX_FILE_SIZE_BYTES`       | `1048576`                     |
+| `maxToolOutputBytes`     | `CODEFARMER_MAX_TOOL_OUTPUT_BYTES`     | `12288`                       |
+| `commandTimeoutMs`       | `CODEFARMER_COMMAND_TIMEOUT_MS`        | `120000`                      |
+| `autoCompact`            | `CODEFARMER_AUTO_COMPACT`              | `false`                       |
+| `autoCompactMinMessages` | `CODEFARMER_AUTO_COMPACT_MIN_MESSAGES` | `40`                          |
+| `autoCompactMinChars`    | `CODEFARMER_AUTO_COMPACT_MIN_CHARS`    | `100000`                      |
+| `ignoredPaths`           | `CODEFARMER_IGNORED_PATHS`             | protected and generated paths |
 
 `CODEFARMER_IGNORED_PATHS` accepts a JSON string array or a comma-separated
 list. Default exclusions cover `.git`, dependencies, builds, coverage, `.env`
@@ -328,13 +326,13 @@ Reasoning defaults to `high` for deeper thinking on hard tasks. The remaining
 defaults favor efficiency: low text verbosity, no visible reasoning summary, a
 2,048-token hard completion limit per model request, a 12-turn tool limit, and
 12 KiB per-tool output. Lower `reasoning` (for example `low` or `none`) for
-simple tasks or tight token budgets; raise `maxOutputTokens`, `verbosity`,
+simple tasks or tight token budgets; raise `verbosity`,
 `reasoningSummary`, `maxAgentTurns`, or `maxToolOutputBytes` for tasks that
 need more capacity.
 
 When a model consumes the entire output budget before producing answer text, CodeFarmer stops with
 a clear error instead of silently changing the configured reasoning, verbosity, or output budget.
-Increase `maxOutputTokens` or lower `reasoning` explicitly before retrying. Partial answers are kept
+Lower `reasoning` explicitly before retrying. Partial answers are kept
 as-is.
 
 DeepSeek streaming responses are parsed with the documented SSE keep-alive comments and `[DONE]`

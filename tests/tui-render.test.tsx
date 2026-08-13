@@ -11,6 +11,7 @@ import {
   appendToolEntryAtResponseBoundary,
   inheritModelEffort,
   runtimeEntries,
+  SessionPicker,
   TuiApp,
   assistantLines,
   wrapToLines,
@@ -84,6 +85,47 @@ describe('TUI rendering', () => {
     expect(lines.findIndex((line) => line.includes('QUICK START'))).toBeGreaterThan(
       lines.findIndex((line) => line.includes('test-model')),
     );
+  });
+
+  it('renders a keyboard session picker with the active session highlighted', () => {
+    const baseSession = mockRuntime().session;
+    if (baseSession === undefined) throw new Error('expected a mock session');
+    const output = renderToString(
+      <SessionPicker
+        sessions={[
+          {
+            ...baseSession,
+            id: 'active-session',
+            title: 'Fix login redirect',
+            status: 'completed',
+            messages: [
+              {
+                id: 'message-1',
+                role: 'user',
+                content: 'Fix it',
+                createdAt: new Date(0).toISOString(),
+              },
+            ],
+          },
+          {
+            ...baseSession,
+            id: 'other-session',
+            title: 'Update docs',
+            status: 'failed',
+          },
+        ]}
+        selected={1}
+        activeSessionId="active-session"
+        columns={100}
+      />,
+      { columns: 100 },
+    );
+
+    expect(output).toContain('SESSION SWITCHER');
+    expect(output).toContain('↑/↓ select · Enter switch · Esc close');
+    expect(output).toContain('● Fix login redirect');
+    expect(output).toContain('›   Update docs');
+    expect(output).toContain('1 messages');
   });
 
   it('formats workspace stats with status and model usage charts', () => {
@@ -252,10 +294,9 @@ describe('TUI rendering', () => {
   });
 
   it('renders the effort picker as a horizontal slider with the cursor under the selection', () => {
-    const output = renderToString(
-      <EffortPicker current="medium" selected={5} language="zh-CN" />,
-      { columns: 100 },
-    );
+    const output = renderToString(<EffortPicker current="medium" selected={5} language="zh-CN" />, {
+      columns: 100,
+    });
 
     expect(output).toContain('思考深度');
     expect(output).toContain('（当前 medium）');

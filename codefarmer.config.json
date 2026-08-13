@@ -6,7 +6,6 @@
   "verbosity": "low",
   "reasoningSummary": "none",
   "maxAgentTurns": 12,
-  "maxOutputTokens": 2048,
   "maxToolOutputBytes": 12288,
   "approval": "auto",
   "$schema": "https://unpkg.com/codefarmer@0.1.0/schemas/codefarmer.config.schema.json"

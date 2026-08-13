@@ -173,7 +173,7 @@ TUI 在同一个备用屏幕中承载对话、工具状态、审批、工作区�
 | `/language [en   | zh-CN]`                                                             | 切换界面和 Agent 回复语言（保存为默认语言，之后会话继承） |
 | `/config`        | 显示有效配置                                                        |
 | `/doctor`        | 检查本地运行环境                                                    |
-| `/sessions`      | 列出本地会话                                                        |
+| `/sessions`      | 打开本地会话选择器（`↑/↓` 选择，Enter 切换，Esc 关闭）              |
 | `/resume <id>`   | 切换到已有会话                                                      |
 | `/delete <id>`   | 删除非当前会话                                                      |
 | `/diff`          | 彩色显示当前 Git 差异（新增、删除、文件头和区块范围）               |
@@ -245,7 +245,6 @@ scope 的引用。技能及其资源都属于不可信指令，不能绕过审�
   "store": true,
   "logLevel": "info",
   "maxAgentTurns": 12,
-  "maxOutputTokens": 2048,
   "maxFileSizeBytes": 1048576,
   "maxToolOutputBytes": 12288,
   "commandTimeoutMs": 120000,
@@ -258,28 +257,27 @@ scope 的引用。技能及其资源都属于不可信指令，不能绕过审�
 
 支持的环境变量如下：
 
-| 配置项               | 环境变量                           | 默认值                      |
-| -------------------- | ---------------------------------- | --------------------------- |
-| `provider`           | `CODEFARMER_PROVIDER`              | `openai`                    |
-| `model`              | `CODEFARMER_MODEL`                 | `gpt-5.6-sol`               |
-| `baseURL`            | `CODEFARMER_BASE_URL`              | `https://api.openai.com/v1` |
-| `reasoning`          | `CODEFARMER_REASONING`             | `high`                      |
-| `language`           | `CODEFARMER_LANGUAGE`              | `en`                        |
-| `verbosity`          | `CODEFARMER_VERBOSITY`             | `low`                       |
-| `reasoningSummary`   | `CODEFARMER_REASONING_SUMMARY`     | `none`                      |
-| `approval`           | `CODEFARMER_APPROVAL`              | `ask`                       |
-| `stream`             | `CODEFARMER_STREAM`                | `true`                      |
-| `store`              | `CODEFARMER_STORE`                 | `true`（v1 必须）           |
-| `logLevel`           | `CODEFARMER_LOG_LEVEL`             | `info`                      |
-| `maxAgentTurns`      | `CODEFARMER_MAX_AGENT_TURNS`       | `12`                        |
-| `maxOutputTokens`    | `CODEFARMER_MAX_OUTPUT_TOKENS`     | `2048`                      |
-| `maxFileSizeBytes`   | `CODEFARMER_MAX_FILE_SIZE_BYTES`   | `1048576`                   |
-| `maxToolOutputBytes` | `CODEFARMER_MAX_TOOL_OUTPUT_BYTES` | `12288`                     |
-| `commandTimeoutMs`   | `CODEFARMER_COMMAND_TIMEOUT_MS`    | `120000`                    |
-| `autoCompact`        | `CODEFARMER_AUTO_COMPACT`          | `false`                     |
-| `autoCompactMinMessages` | `CODEFARMER_AUTO_COMPACT_MIN_MESSAGES` | `40`                    |
-| `autoCompactMinChars` | `CODEFARMER_AUTO_COMPACT_MIN_CHARS` | `100000`                   |
-| `ignoredPaths`       | `CODEFARMER_IGNORED_PATHS`         | 受保护和生成目录            |
+| 配置项                   | 环境变量                               | 默认值                      |
+| ------------------------ | -------------------------------------- | --------------------------- |
+| `provider`               | `CODEFARMER_PROVIDER`                  | `openai`                    |
+| `model`                  | `CODEFARMER_MODEL`                     | `gpt-5.6-sol`               |
+| `baseURL`                | `CODEFARMER_BASE_URL`                  | `https://api.openai.com/v1` |
+| `reasoning`              | `CODEFARMER_REASONING`                 | `high`                      |
+| `language`               | `CODEFARMER_LANGUAGE`                  | `en`                        |
+| `verbosity`              | `CODEFARMER_VERBOSITY`                 | `low`                       |
+| `reasoningSummary`       | `CODEFARMER_REASONING_SUMMARY`         | `none`                      |
+| `approval`               | `CODEFARMER_APPROVAL`                  | `ask`                       |
+| `stream`                 | `CODEFARMER_STREAM`                    | `true`                      |
+| `store`                  | `CODEFARMER_STORE`                     | `true`（v1 必须）           |
+| `logLevel`               | `CODEFARMER_LOG_LEVEL`                 | `info`                      |
+| `maxAgentTurns`          | `CODEFARMER_MAX_AGENT_TURNS`           | `12`                        |
+| `maxFileSizeBytes`       | `CODEFARMER_MAX_FILE_SIZE_BYTES`       | `1048576`                   |
+| `maxToolOutputBytes`     | `CODEFARMER_MAX_TOOL_OUTPUT_BYTES`     | `12288`                     |
+| `commandTimeoutMs`       | `CODEFARMER_COMMAND_TIMEOUT_MS`        | `120000`                    |
+| `autoCompact`            | `CODEFARMER_AUTO_COMPACT`              | `false`                     |
+| `autoCompactMinMessages` | `CODEFARMER_AUTO_COMPACT_MIN_MESSAGES` | `40`                        |
+| `autoCompactMinChars`    | `CODEFARMER_AUTO_COMPACT_MIN_CHARS`    | `100000`                    |
+| `ignoredPaths`           | `CODEFARMER_IGNORED_PATHS`             | 受保护和生成目录            |
 
 `CODEFARMER_IGNORED_PATHS` 可以是 JSON 字符串数组或逗号分隔列表。默认忽略
 `.git`、依赖目录、构建与覆盖率输出、`.env`、私钥和证书；`.env.example`
@@ -307,11 +305,11 @@ codefarmer setup
 推理强度默认使用 `high`，以应对复杂任务；其余默认值偏向节省 token：低详细度正文、
 不生成可见推理摘要、每次模型请求最多 2048 个完成 token、最多 12 个工具轮次，以及每个
 工具输出最多 12 KiB。任务简单或 token 预算紧张时可将 `reasoning` 调低（例如 `low` 或
-`none`）；需要更多容量时，可以提高 `maxOutputTokens`、`verbosity`、`reasoningSummary`、
+`none`）；需要更多容量时，可以提高 `verbosity`、`reasoningSummary`、
 `maxAgentTurns` 或 `maxToolOutputBytes`。
 
 如果模型在生成正文前耗尽全部输出预算，CodeFarmer 会直接给出明确错误，不会静默修改已配置的
-推理强度、详细度或输出预算。请显式提高 `maxOutputTokens` 或降低 `reasoning` 后重试；已有部分
+推理强度或详细度。请降低 `reasoning` 后重试；已有部分
 正文时会直接保留并提示内容可能不完整。
 
 DeepSeek 流式响应按官方 SSE 约定处理保活注释和 `[DONE]` 终止标记。连接掉线或响应截断会被

@@ -471,7 +471,6 @@ export class AgentRunner {
           reasoning: this.options.config.reasoning,
           verbosity: this.options.config.verbosity,
           reasoningSummary: this.options.config.reasoningSummary,
-          maxOutputTokens: this.options.config.maxOutputTokens,
           instructions,
           input,
           tools:
@@ -588,7 +587,7 @@ export class AgentRunner {
           if (finalMessage.trim() === '') {
             if (finishReason !== undefined && finishReason !== 'completed') {
               throw new ProviderError(
-                `模型在生成正文前达到输出上限（状态：${finishReason}）。请降低 reasoning 或提高 maxOutputTokens 后再试。`,
+                `模型在生成正文前停止（状态：${finishReason}）。请降低 reasoning 后再试。`,
                 { retryable: false, details: { finishReason } },
               );
             }
@@ -734,7 +733,6 @@ export class AgentRunner {
         reasoning: this.options.config.reasoning,
         verbosity: this.options.config.verbosity,
         reasoningSummary: this.options.config.reasoningSummary,
-        maxOutputTokens: this.options.config.maxOutputTokens,
         instructions,
         input: summaryInput,
         tools: [],

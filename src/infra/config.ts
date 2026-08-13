@@ -44,7 +44,6 @@ export const DEFAULT_CONFIG: Readonly<CodeFarmerConfig> = {
   store: true,
   logLevel: 'info',
   maxAgentTurns: 12,
-  maxOutputTokens: 2_048,
   maxFileSizeBytes: 1_048_576,
   maxToolOutputBytes: 12_288,
   commandTimeoutMs: 120_000,
@@ -81,7 +80,6 @@ const configShape = {
   store: z.literal(true),
   logLevel: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent']),
   maxAgentTurns: z.number().int().min(1).max(100),
-  maxOutputTokens: z.number().int().min(128).max(100_000),
   maxFileSizeBytes: z
     .number()
     .int()
@@ -211,10 +209,6 @@ export function configFromEnvironment(env: NodeJS.ProcessEnv = process.env): Con
     store: parseStore(env.CODEFARMER_STORE),
     logLevel: env.CODEFARMER_LOG_LEVEL as LogLevel | undefined,
     maxAgentTurns: parseInteger('CODEFARMER_MAX_AGENT_TURNS', env.CODEFARMER_MAX_AGENT_TURNS),
-    maxOutputTokens: parseInteger(
-      'CODEFARMER_MAX_OUTPUT_TOKENS',
-      env.CODEFARMER_MAX_OUTPUT_TOKENS,
-    ),
     maxFileSizeBytes: parseInteger(
       'CODEFARMER_MAX_FILE_SIZE_BYTES',
       env.CODEFARMER_MAX_FILE_SIZE_BYTES,

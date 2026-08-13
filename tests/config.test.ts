@@ -32,7 +32,6 @@ describe('configuration', () => {
 
     expect(config).toEqual(DEFAULT_CONFIG);
     expect(config.maxAgentTurns).toBe(12);
-    expect(config.maxOutputTokens).toBe(2_048);
     expect(config.maxToolOutputBytes).toBe(12_288);
     expect(config.reasoning).toBe('high');
     expect(config.verbosity).toBe('low');
@@ -96,7 +95,6 @@ describe('configuration', () => {
         CODEFARMER_STORE: '1',
         OPENAI_BASE_URL: 'https://gateway.example/v1',
         CODEFARMER_COMMAND_TIMEOUT_MS: '45000',
-        CODEFARMER_MAX_OUTPUT_TOKENS: '512',
         CODEFARMER_VERBOSITY: 'high',
         CODEFARMER_REASONING_SUMMARY: 'detailed',
         CODEFARMER_LANGUAGE: 'zh',
@@ -110,7 +108,6 @@ describe('configuration', () => {
       store: true,
       baseURL: 'https://gateway.example/v1',
       commandTimeoutMs: 45_000,
-      maxOutputTokens: 512,
       verbosity: 'high',
       reasoningSummary: 'detailed',
       language: 'zh-CN',

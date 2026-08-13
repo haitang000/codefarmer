@@ -18,7 +18,13 @@ import {
   inspectWorkingTree,
 } from '../tools/git-tools.js';
 import { sanitiseEnvironment } from '../tools/run-command.js';
-import type { Language, ProviderEvent, ReasoningEffort, TokenUsage } from '../types.js';
+import type {
+  Language,
+  ProviderEvent,
+  ReasoningEffort,
+  SessionRecord,
+  TokenUsage,
+} from '../types.js';
 import { normaliseLanguage } from '../types.js';
 import {
   COMPACT_HINT_MIN_CHARS,
@@ -696,7 +702,10 @@ function toolDisplayName(name: string, language: Language): string {
 // the transcript; failures keep their full error output below the header.
 // Prefix (status glyph) and body (name + duration) are styled separately so
 // the glyph stays crisp even when the body is dimmed.
-function toolLine(tool: ToolView, language: Language): {
+function toolLine(
+  tool: ToolView,
+  language: Language,
+): {
   prefix: string;
   name: string;
   detail: string | undefined;
@@ -1322,6 +1331,80 @@ export function EffortPicker({
   );
 }
 
+function sessionPickerTimestamp(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return timestamp.slice(0, 16);
+  return date.toLocaleString('sv-SE', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+/** A compact, keyboard-first session switcher opened by `/sessions`. */
+export function SessionPicker({
+  sessions,
+  selected,
+  activeSessionId,
+  language = 'en',
+  columns,
+}: {
+  sessions: SessionRecord[];
+  selected: number;
+  activeSessionId: string | undefined;
+  language?: Language;
+  columns: number;
+}): React.ReactElement {
+  const zh = language === 'zh-CN';
+  const width = Math.max(1, Math.min(92, columns - 4));
+  const visibleRows = 7;
+  const start = Math.max(
+    0,
+    Math.min(selected - Math.floor(visibleRows / 2), sessions.length - visibleRows),
+  );
+  const visible = sessions.slice(start, start + visibleRows);
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} width={width}>
+      <Box justifyContent="space-between">
+        <Text color="cyan" bold>
+          {zh ? '会话选择器' : 'SESSION SWITCHER'}
+        </Text>
+        <Text dimColor>{`${String(sessions.length)} ${zh ? '个会话' : 'sessions'}`}</Text>
+      </Box>
+      <Text dimColor>
+        {zh ? '↑/↓ 选择 · Enter 切换 · Esc 关闭' : '↑/↓ select · Enter switch · Esc close'}
+      </Text>
+      <Text color="gray">{'─'.repeat(Math.max(1, width - 4))}</Text>
+      {visible.map((session, offset) => {
+        const index = start + offset;
+        const current = session.id === activeSessionId;
+        const title = normaliseSessionTitle(session.title) ?? (zh ? '未命名会话' : 'UNTITLED');
+        return (
+          <Box key={session.id} flexDirection="column">
+            <Text
+              {...(index === selected ? { color: 'cyan' } : {})}
+              bold={index === selected}
+              wrap="truncate-end"
+            >
+              {`${index === selected ? '›' : ' '} ${current ? '●' : ' '} ${title}`}
+            </Text>
+            <Text dimColor wrap="truncate-end">
+              {`    ${session.status} · ${sessionPickerTimestamp(session.updatedAt)} · ${String(session.messages.length)} ${zh ? '条消息' : 'messages'} · ${session.id.slice(0, 8)}`}
+            </Text>
+          </Box>
+        );
+      })}
+      {sessions.length > visibleRows ? (
+        <Text
+          dimColor
+        >{`${String(start + 1)}-${String(Math.min(sessions.length, start + visibleRows))} / ${String(sessions.length)}`}</Text>
+      ) : null}
+    </Box>
+  );
+}
+
 export function TuiApp({
   initialRuntime,
   runtimeFactory,
@@ -1371,6 +1454,10 @@ export function TuiApp({
   // highlighted effort level. Opened by a bare `/effort`, adjusted with
   // ←/→, confirmed with Enter, dismissed with Esc (or Ctrl+C).
   const [effortPicker, setEffortPicker] = useState<number | null>(null);
+  // Loaded on demand for `/sessions`; the picker holds keyboard focus until
+  // the user resumes a session or closes it.
+  const [sessionPicker, setSessionPicker] = useState<SessionRecord[] | null>(null);
+  const [sessionPickerSelection, setSessionPickerSelection] = useState(0);
   const controllerRef = useRef<AbortController | undefined>(undefined);
   const approvalQueueRef = useRef<PendingApproval[]>([]);
   const currentApprovalRef = useRef<PendingApproval | undefined>(undefined);
@@ -2121,17 +2208,17 @@ export function TuiApp({
           appendSystem(checks.join('\n'));
         } else if (command.kind === 'sessions') {
           const sessions = await runtimeRef.current.sessions.list();
-          appendSystem(
-            sessions.length === 0
-              ? 'No saved sessions.'
-              : sessions
-                  .slice(0, 12)
-                  .map(
-                    (session) =>
-                      `${session.id}  ${session.status}  ${session.title ?? '(untitled)'}  ${session.updatedAt}  ${String(session.messages.length)} messages`,
-                  )
-                  .join('\n'),
-          );
+          if (sessions.length === 0) {
+            appendSystem(
+              languageRef.current === 'zh-CN' ? '还没有已保存的会话。' : 'No saved sessions yet.',
+            );
+          } else {
+            const activeIndex = sessions.findIndex(
+              (session) => session.id === runtimeRef.current.session?.id,
+            );
+            setSessionPickerSelection(activeIndex < 0 ? 0 : activeIndex);
+            setSessionPicker(sessions);
+          }
         } else if (command.kind === 'delete-session') {
           if (command.id.length === 0) {
             appendSystem('Usage: /delete <session-id>', 'error');
@@ -2330,6 +2417,27 @@ export function TuiApp({
     [appendSystem],
   );
 
+  const resumePickedSession = useCallback(async (): Promise<void> => {
+    const sessions = sessionPicker;
+    if (sessions === null) return;
+    if (busyRef.current) return;
+    const selected = sessions[sessionPickerSelection];
+    if (selected === undefined) return;
+    setSessionPicker(null);
+    if (selected.id === runtimeRef.current.session?.id) return;
+    try {
+      const next = await runtimeFactory(selected.id);
+      swapRuntime(next);
+      appendSystem(
+        languageRef.current === 'zh-CN'
+          ? `已切换到会话 ${next.session?.id ?? selected.id}`
+          : `Resumed session ${next.session?.id ?? selected.id}`,
+      );
+    } catch (error) {
+      appendSystem(displayError(error), 'error');
+    }
+  }, [appendSystem, runtimeFactory, sessionPicker, sessionPickerSelection, swapRuntime]);
+
   const contentWidth = Math.max(10, columns - 2);
   // Header, command deck, and footer have fixed heights in the normal view.
   // Reserving the transcript height explicitly lets the latest content anchor
@@ -2377,6 +2485,22 @@ export function TuiApp({
         } else if (key.rightArrow) {
           setEffortPicker((selected) =>
             selected === null ? selected : (selected + 1) % EFFORT_CHOICES.length,
+          );
+        }
+        return;
+      }
+      if (sessionPicker !== null) {
+        if (key.escape || (key.ctrl && input.toLowerCase() === 'c')) {
+          setSessionPicker(null);
+        } else if (key.return) {
+          if (!busyRef.current) void resumePickedSession();
+        } else if (key.upArrow) {
+          setSessionPickerSelection((selected) =>
+            selected <= 0 ? Math.max(0, sessionPicker.length - 1) : selected - 1,
+          );
+        } else if (key.downArrow) {
+          setSessionPickerSelection((selected) =>
+            selected >= sessionPicker.length - 1 ? 0 : selected + 1,
           );
         }
         return;
@@ -2712,6 +2836,15 @@ export function TuiApp({
           current={runtime.config.reasoning}
           selected={effortPicker}
           language={language}
+        />
+      )}
+      {sessionPicker === null ? null : (
+        <SessionPicker
+          sessions={sessionPicker}
+          selected={sessionPickerSelection}
+          activeSessionId={runtime.session?.id}
+          language={language}
+          columns={columns}
         />
       )}
       <Box justifyContent="flex-end" paddingX={1}>

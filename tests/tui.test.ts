@@ -70,6 +70,7 @@ describe('TUI command parser', () => {
     expect(TUI_HELP).toContain('/push');
     expect(TUI_HELP).toContain('/skills');
     expect(TUI_HELP).toContain('/language');
+    expect(TUI_HELP).toContain('saved-session picker');
     expect(getTuiHelp('zh-CN')).toContain('设置界面和 Agent 回复语言');
   });
 

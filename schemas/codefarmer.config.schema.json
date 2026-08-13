@@ -62,13 +62,6 @@
       "default": "info"
     },
     "maxAgentTurns": { "type": "integer", "minimum": 1, "maximum": 100, "default": 12 },
-    "maxOutputTokens": {
-      "type": "integer",
-      "minimum": 128,
-      "maximum": 100000,
-      "default": 2048,
-      "description": "Hard completion-token limit per model request, including reasoning tokens where the provider reports them."
-    },
     "maxFileSizeBytes": {
       "type": "integer",
       "minimum": 1,

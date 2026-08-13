@@ -48,8 +48,6 @@ export interface CodeFarmerConfig {
   store: true;
   logLevel: LogLevel;
   maxAgentTurns: number;
-  /** Hard per-request completion budget, including provider reasoning tokens. */
-  maxOutputTokens: number;
   maxFileSizeBytes: number;
   maxToolOutputBytes: number;
   commandTimeoutMs: number;
