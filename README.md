@@ -180,7 +180,7 @@ with `/plan [on|off]` and `/auto [on|off]`.
 | `/effort`        | Open the reasoning effort picker (↑/↓ + Enter)                                             |
 | `/plan [on/off]` | Enable or disable read-only planning mode                                                  |
 | `/auto [on/off]` | Enable or disable automatic plan-and-execute mode                                          |
-| `/language [en   | zh-CN]`                                                                                    | Switch the interface and agent response language for the current TUI session |
+| `/language [en   | zh-CN]`                                                                                    | Switch the interface and agent response language and save it as your default (inherited by later sessions) |
 | `/config`        | Show effective configuration                                                               |
 | `/sessions`      | List saved sessions                                                                        |
 | `/resume <id>`   | Switch to a saved session                                                                  |

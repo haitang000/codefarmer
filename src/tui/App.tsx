@@ -2010,11 +2010,25 @@ export function TuiApp({
               setLanguage(nextLanguage);
               setStatus(nextLanguage === 'zh-CN' ? '就绪' : 'Ready');
               setRuntime({ ...active });
-              appendSystem(
-                nextLanguage === 'zh-CN'
-                  ? '语言已切换为简体中文（仅当前会话；使用 `codefarmer language zh-CN` 可持久化）。'
-                  : 'Language switched to English for this session (use `codefarmer language en` to persist).',
-              );
+              try {
+                // 写入用户配置，让 /new、/resume 及下次启动的会话继承该语言
+                // （与 /effort 选择器的持久化方式一致）。
+                const userConfigPath = getAppPaths().userConfigFile;
+                const current = (await readJsonFileIfExists<ConfigFile>(userConfigPath)) ?? {};
+                await writeConfigFile(userConfigPath, { ...current, language: nextLanguage });
+                appendSystem(
+                  nextLanguage === 'zh-CN'
+                    ? '语言已切换为简体中文，并已保存为默认语言。'
+                    : 'Language switched to English and saved as your default.',
+                );
+              } catch (error) {
+                appendSystem(
+                  nextLanguage === 'zh-CN'
+                    ? '语言已切换为简体中文（仅当前会话；保存默认失败，可运行 `codefarmer language zh-CN` 持久化）。'
+                    : `Language switched to English for this session, but saving the default failed: ${displayError(error)}`,
+                  'error',
+                );
+              }
             }
           }
         } else if (command.kind === 'config') {

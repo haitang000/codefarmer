@@ -6,6 +6,12 @@ All notable changes to CodeFarmer are documented here. This project follows
 
 ## [Unreleased]
 
+### Changed
+
+- `/language` in the TUI now persists the choice to the user config file, so
+  new sessions (`/new`, `/resume`) and later launches inherit the language
+  instead of reverting to the previous default on the next runtime.
+
 ## [0.1.1] - 2026-08-12
 
 ### Added

@@ -170,7 +170,7 @@ TUI 在同一个备用屏幕中承载对话、工具状态、审批、工作区�
 | `/effort`        | 打开推理强度选择器（↑/↓ 选择，Enter 确认）                          |
 | `/plan [on/off]` | 开启或关闭只读计划模式                                              |
 | `/auto [on/off]` | 开启或关闭自动计划并执行模式                                        |
-| `/language [en   | zh-CN]`                                                             | 切换当前 TUI 会话的界面和 Agent 回复语言 |
+| `/language [en   | zh-CN]`                                                             | 切换界面和 Agent 回复语言（保存为默认语言，之后会话继承） |
 | `/config`        | 显示有效配置                                                        |
 | `/doctor`        | 检查本地运行环境                                                    |
 | `/sessions`      | 列出本地会话                                                        |
