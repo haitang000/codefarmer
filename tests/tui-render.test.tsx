@@ -9,6 +9,7 @@ import {
   EffortPicker,
   EntryView,
   appendToolEntryAtResponseBoundary,
+  inheritModelEffort,
   runtimeEntries,
   TuiApp,
   assistantLines,
@@ -280,6 +281,17 @@ describe('TUI rendering', () => {
     expect(output).toContain('←/→ adjust · Enter confirm · Esc cancel');
     expect(output).not.toContain('思考深度');
     expect(output).not.toContain('调整');
+  });
+
+  it('inherits the model-chosen effort from auto mode into subsequent requests', () => {
+    // 'auto' 模式下模型一旦选定具体档位，后续请求沿用该档位。
+    expect(inheritModelEffort('auto', 'high')).toBe('high');
+    expect(inheritModelEffort('auto', 'medium')).toBe('medium');
+    // 'auto' 不是具体强度，模型不会上报；防御性地保持原值。
+    expect(inheritModelEffort('auto', 'auto')).toBe('auto');
+    // 显式设置的档位不会被模型选择覆盖。
+    expect(inheritModelEffort('high', 'low')).toBe('high');
+    expect(inheritModelEffort('none', 'max')).toBe('none');
   });
 
   it('shows changed-line stats on successful file mutation tool lines', () => {

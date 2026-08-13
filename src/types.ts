@@ -134,7 +134,8 @@ export type ProviderEvent =
   | { type: 'reasoning_delta'; delta: string }
   // The provider echoes the concrete reasoning effort the model actually used.
   // Emitted when the request left the effort to the model ('auto') so the UI
-  // can tell the user whenever the agent picks or switches its own depth.
+  // can tell the user whenever the agent picks or switches its own depth, and
+  // inherit the chosen effort into subsequent requests of the session.
   | { type: 'reasoning_effort'; effort: ReasoningEffort }
   // Emitted by the agent when it automatically compacts a long session before
   // a turn, so the UI can surface a notice to the user.

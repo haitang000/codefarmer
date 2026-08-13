@@ -1229,6 +1229,18 @@ export function ApprovalModal({
 //
 // Claude Code 式横向滑轨：渲染在输入框上方的文档流中，选项标签排成一行，
 // ▲ 游标精确落在选中项正下方，不悬浮遮挡内容，也不会跑出可视区域。
+// 模型在 'auto' 模式下实际选定的思考深度应被继承：返回后续请求应使用的
+// 档位——保持模型的选择，而不是每一轮都回到 'auto' 让模型重新决定。
+// 显式设置（非 'auto'）的档位不会被模型选择覆盖；'auto' 不是具体强度，
+// 模型不会上报，防御性地保持原值。
+export function inheritModelEffort(
+  current: ReasoningEffort,
+  chosen: ReasoningEffort,
+): ReasoningEffort {
+  if (current !== 'auto' || chosen === 'auto') return current;
+  return chosen;
+}
+
 export function EffortPicker({
   current,
   selected,
@@ -1334,6 +1346,8 @@ export function TuiApp({
   const currentApprovalRef = useRef<PendingApproval | undefined>(undefined);
   // Last reasoning effort the model reported; the UI tells the user whenever
   // the agent picks ('auto') or switches its own thinking depth mid-session.
+  // The concrete choice is also inherited into the session config so later
+  // requests keep using it instead of re-deciding with 'auto' every turn.
   const lastReasoningEffortRef = useRef<ReasoningEffort | undefined>(undefined);
   const historyRef = useRef<string[]>([]);
   const historyIndexRef = useRef(-1);
@@ -1594,8 +1608,19 @@ export function TuiApp({
         } else if (event.type === 'reasoning_effort') {
           const previous = lastReasoningEffortRef.current;
           lastReasoningEffortRef.current = event.effort;
+          // 继承模型本轮选定的思考深度：原地写回运行配置，后续请求（含工具
+          // 调用轮次）与 /effort 选择器继续沿用该档位；用户配置保持不变，
+          // 重启后仍按默认档位启动。
+          const active = runtimeRef.current;
+          const next = inheritModelEffort(active.config.reasoning, event.effort);
+          if (next !== active.config.reasoning) {
+            active.config.reasoning = next;
+            setRuntime({ ...active });
+          }
           if (previous === undefined)
-            appendSystem(`The model chose reasoning effort ${event.effort}.`);
+            appendSystem(
+              `The model chose reasoning effort ${event.effort}; keeping it for this session.`,
+            );
           else if (previous !== event.effort)
             appendSystem(
               `The model switched reasoning effort from ${previous} to ${event.effort}.`,

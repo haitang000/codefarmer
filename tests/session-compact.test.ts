@@ -148,13 +148,13 @@ describe('compactSession', () => {
   });
 
   it('throws ConfigError when there is nothing worth compacting', async () => {
-    const record = session(5);
+    const record = session(2);
     const provider = new RecordingProvider([]);
 
     await expect(
       compactSession({ session: record, provider, config: DEFAULT_CONFIG }),
     ).rejects.toBeInstanceOf(ConfigError);
-    expect(record.messages).toHaveLength(5);
+    expect(record.messages).toHaveLength(2);
     expect(record.previousResponseId).toBe('response-before');
     expect(provider.requests).toHaveLength(0);
   });

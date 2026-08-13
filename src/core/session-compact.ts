@@ -11,7 +11,7 @@ import type {
 } from '../types.js';
 
 /** Number of most recent messages kept verbatim after a compaction. */
-export const COMPACT_KEEP_RECENT_MESSAGES = 12;
+export const COMPACT_KEEP_RECENT_MESSAGES = 1;
 /**
  * Upper bound for the history sent to the summarising request. Tool outputs
  * already accumulated in `toolCalls.outputSummary` are also included, but the
