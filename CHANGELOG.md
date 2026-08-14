@@ -19,7 +19,8 @@ All notable changes to CodeFarmer are documented here. This project follows
 - `apply_patch` now accepts a `files` array so several file patches can be
   applied in one call. The whole batch is validated before anything is
   written (a bad entry fails nothing has changed), approval covers the batch
-  once, and a mid-batch failure rolls back the files already written.
+  once and lists only the affected file names with change summaries, and a
+  mid-batch failure rolls back the files already written.
 - `todo_write` tool: the agent maintains a session todo list for multi-step
   tasks; the TUI shows it with `/todos`.
 - `/review` TUI command: reviews the working-tree diff (staged and unstaged)
