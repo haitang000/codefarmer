@@ -6,6 +6,8 @@ All notable changes to CodeFarmer are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-08-13
+
 ### Added
 
 - `web_fetch` tool: the agent can now fetch HTTP(S) URLs and read their text
