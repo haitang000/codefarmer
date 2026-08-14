@@ -23,6 +23,7 @@ import type {
   Language,
   ProviderEvent,
   ReasoningEffort,
+  SessionToolCall,
   SessionRecord,
   TokenUsage,
 } from '../types.js';
@@ -335,6 +336,23 @@ export function formatDuration(ms: number): string {
   return ms < 1000 ? `${String(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
 }
 
+// The session record keeps call arguments as parsed JSON (objects) or plain
+// strings; the transcript expects the same JSON-text form the live stream
+// uses so `toolArgumentPreview` can decode it for the one-line summary.
+function resumedToolArguments(value: SessionToolCall['arguments'] | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value);
+}
+
+function resumedToolDuration(call: SessionToolCall): number | undefined {
+  if (call.completedAt === undefined) return undefined;
+  const started = Date.parse(call.startedAt);
+  const completed = Date.parse(call.completedAt);
+  if (Number.isNaN(started) || Number.isNaN(completed)) return undefined;
+  return Math.max(0, completed - started);
+}
+
 export function runtimeEntries(runtime: AgentRuntime): TranscriptEntry[] {
   const timeline: { entry: TranscriptEntry; timestamp: string; priority: number }[] = [];
   for (const message of runtime.session?.messages ?? []) {
@@ -351,11 +369,20 @@ export function runtimeEntries(runtime: AgentRuntime): TranscriptEntry[] {
     });
   }
   for (const call of runtime.session?.toolCalls ?? []) {
+    const argumentsPreview = resumedToolArguments(call.arguments);
+    const durationMs = resumedToolDuration(call);
+    const failureDetail =
+      call.success || (call.error === undefined && call.outputSummary === undefined)
+        ? undefined
+        : (call.error ?? call.outputSummary);
     const tool: ToolView = {
       callId: call.callId,
       name: call.toolName,
       status: call.success ? 'succeeded' : 'failed',
-      ...(call.outputSummary === undefined ? {} : { output: call.outputSummary }),
+      ...(argumentsPreview === undefined ? {} : { arguments: argumentsPreview }),
+      ...(call.success && call.outputSummary !== undefined ? { output: call.outputSummary } : {}),
+      ...(failureDetail === undefined ? {} : { error: failureDetail }),
+      ...(durationMs === undefined ? {} : { durationMs }),
     };
     timeline.push({
       entry: { id: `tool-${call.callId}`, kind: 'tool', content: call.toolName, tool },
@@ -1981,6 +2008,9 @@ export function TuiApp({
         } else if (event.type === 'tool_call') {
           const currentAssistantId = activeAssistant.id;
           if (currentAssistantId !== undefined) flushDeltaBuffer(currentAssistantId);
+          // Capture whether the response produced text before resetting the
+          // flag: that text must stay visible when the tool entry is inserted.
+          const hadOutput = activeAssistant.hasOutput;
           activeAssistant.id = undefined;
           activeAssistant.hasOutput = false;
           const call = event.call;
@@ -1995,7 +2025,7 @@ export function TuiApp({
             return appendToolEntryAtResponseBoundary(
               previous,
               currentAssistantId,
-              activeAssistant.hasOutput,
+              hadOutput,
               { id: `tool-${call.callId}`, kind: 'tool', content: call.name, tool },
             );
           });

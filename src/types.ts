@@ -262,6 +262,8 @@ export interface SessionToolCall {
   success: boolean;
   approved?: boolean;
   outputSummary?: string;
+  /** Error message for failed calls, kept so resumed sessions still show the failure detail. */
+  error?: string;
   truncated?: boolean;
   startedAt: string;
   completedAt?: string;

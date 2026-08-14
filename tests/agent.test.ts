@@ -251,6 +251,74 @@ describe('AgentRunner', () => {
     expect(toolOutput.output).toEqual(expect.stringContaining('alpha.txt'));
   });
 
+  it('persists assistant text that accompanies tool calls for resumed sessions', async () => {
+    const workspace = await temporaryWorkspace();
+    const sessionStore = await SessionStore.create(workspace, {
+      data: path.join(workspace, 'data'),
+      config: path.join(workspace, 'config'),
+      cache: path.join(workspace, 'cache'),
+      log: path.join(workspace, 'log'),
+      temp: path.join(workspace, 'temp'),
+      userConfigFile: path.join(workspace, 'config.json'),
+      setupStateFile: path.join(workspace, 'setup-state.json'),
+      sessions: path.join(workspace, 'sessions'),
+      transactions: path.join(workspace, 'transactions'),
+    });
+    const provider = new RecordingScriptedProvider([
+      [
+        { type: 'text_delta', delta: 'I will inspect the workspace first.' },
+        {
+          type: 'tool_call',
+          call: {
+            callId: 'call-list',
+            name: 'list_files',
+            arguments: JSON.stringify({ path: '.', maxDepth: 1 }),
+          },
+        },
+        {
+          type: 'response_completed',
+          responseId: 'response-tools-1',
+          outputText: 'I will inspect the workspace first.',
+        },
+      ],
+      [
+        { type: 'text_delta', delta: 'The inspection is complete.' },
+        {
+          type: 'response_completed',
+          responseId: 'response-tools-2',
+          outputText: 'The inspection is complete.',
+        },
+      ],
+      [
+        { type: 'text_delta', delta: 'Inspect the workspace' },
+        {
+          type: 'response_completed',
+          responseId: 'response-title',
+          outputText: 'Inspect the workspace',
+        },
+      ],
+    ]);
+    const agent = await runner(workspace, provider, {}, sessionStore);
+
+    const result = await agent.run('Inspect the workspace');
+    const persisted = await sessionStore.get(result.sessionId);
+
+    // The text that accompanied the tool-call round is stored as its own
+    // assistant message, so a resumed session shows the full agent output
+    // instead of only the run's final message.
+    expect(persisted.messages.map((message) => [message.role, message.content])).toEqual([
+      ['user', 'Inspect the workspace'],
+      ['assistant', 'I will inspect the workspace first.'],
+      ['assistant', 'The inspection is complete.'],
+    ]);
+    expect(persisted.toolCalls).toHaveLength(1);
+    expect(persisted.toolCalls[0]).toMatchObject({
+      toolName: 'list_files',
+      success: true,
+      arguments: { path: '.', maxDepth: 1 },
+    });
+  });
+
   it('replays explicit history when the endpoint rejects stored-response continuation', async () => {
     const workspace = await temporaryWorkspace();
     await writeFile(path.join(workspace, 'alpha.txt'), 'alpha\n', 'utf8');

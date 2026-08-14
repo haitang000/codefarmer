@@ -668,6 +668,20 @@ export class AgentRunner {
             usage: totalUsage,
           };
         }
+        // A response that also invoked tools can carry its own spoken text
+        // (e.g. "I'll check the files first."). Persist it so a resumed
+        // session keeps the full agent output instead of only the final
+        // message of the run.
+        const toolTurnText = completedText || streamedText;
+        if (toolTurnText.trim().length > 0) {
+          session.messages.push({
+            id: randomUUID(),
+            role: 'assistant',
+            content: toolTurnText,
+            createdAt: new Date().toISOString(),
+            ...(responseId === undefined ? {} : { responseId }),
+          });
+        }
 
         const toolHooks = runOptions.toolHooks ?? this.options.toolHooks;
         const results = await this.options.tools.executeMany(pendingCalls, {
@@ -732,6 +746,9 @@ export class AgentRunner {
                 ? 'read-only tool completed'
                 : (result.error?.message ?? 'read-only tool failed')
               : result.output.slice(0, 1000),
+            ...(result.success || result.error === undefined
+              ? {}
+              : { error: result.error.message }),
             ...(result.truncated === undefined ? {} : { truncated: result.truncated }),
             startedAt: now,
             completedAt: new Date().toISOString(),

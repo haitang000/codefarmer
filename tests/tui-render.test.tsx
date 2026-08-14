@@ -251,6 +251,59 @@ describe('TUI rendering', () => {
     expect(entries.map((entry) => entry.kind)).toEqual(['user', 'tool', 'assistant']);
   });
 
+  it('keeps tool call details (arguments, duration, failure error) in a restored session', () => {
+    const runtime = mockRuntime();
+    const session = runtime.session;
+    if (session === undefined) throw new Error('expected a mock session');
+    session.messages = [
+      {
+        id: 'user-1',
+        role: 'user',
+        content: 'run the checks',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    ];
+    session.toolCalls = [
+      {
+        callId: 'tool-ok',
+        toolName: 'run_command',
+        arguments: { executable: 'pnpm', args: ['test'] },
+        success: true,
+        outputSummary: 'All checks passed',
+        startedAt: '2026-01-01T00:00:00.001Z',
+        completedAt: '2026-01-01T00:00:00.046Z',
+      },
+      {
+        callId: 'tool-fail',
+        toolName: 'apply_patch',
+        arguments: { path: 'src/a.ts' },
+        success: false,
+        error: 'patch does not apply',
+        outputSummary: 'patch does not apply',
+        startedAt: '2026-01-01T00:00:01.000Z',
+        completedAt: '2026-01-01T00:00:01.012Z',
+      },
+    ];
+
+    const entries = runtimeEntries(runtime);
+    const tools = entries.filter((entry) => entry.kind === 'tool').map((entry) => entry.tool);
+    expect(tools[0]).toMatchObject({
+      name: 'run_command',
+      status: 'succeeded',
+      arguments: '{"executable":"pnpm","args":["test"]}',
+      output: 'All checks passed',
+      durationMs: 45,
+    });
+    expect(toolArgumentPreview(tools[0]?.arguments)).toBe('pnpm test');
+    expect(tools[1]).toMatchObject({
+      name: 'apply_patch',
+      status: 'failed',
+      arguments: '{"path":"src/a.ts"}',
+      error: 'patch does not apply',
+      durationMs: 12,
+    });
+  });
+
   it('renders approval in flow between transcript content and the input', () => {
     const output = renderToString(
       <Box flexDirection="column">
