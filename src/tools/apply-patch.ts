@@ -17,12 +17,36 @@ import type { WorkspaceGuard } from './workspace.js';
 export const applyPatchDefinition: ToolDefinition = {
   name: 'apply_patch',
   description:
-    'Apply a unified diff to one UTF-8 file. Pass its SHA-256, or null when creating it.',
+    'Apply a unified diff to one UTF-8 file, or apply several diffs in one call. Pass the file SHA-256, or null when creating it.',
   readOnly: false,
   inputSchema: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Workspace-relative file path.' },
+      files: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 10,
+        description:
+          'Alternative to the single-file fields: apply several file patches in one call. Each entry must be { path, patch, expectedSha256 }.',
+        items: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Workspace-relative file path.' },
+            patch: {
+              type: 'string',
+              description:
+                'A unified diff containing only this file. Context lines must match the current file content; @@ line numbers and line counts are corrected automatically, so approximate values are fine.',
+            },
+            expectedSha256: {
+              type: ['string', 'null'],
+              description: 'SHA-256 of the existing file, or null when creating it.',
+            },
+          },
+          required: ['path', 'patch', 'expectedSha256'],
+          additionalProperties: false,
+        },
+      },
+      path: { type: 'string', description: 'Workspace-relative file path (single-file mode).' },
       patch: {
         type: 'string',
         description:
@@ -33,7 +57,6 @@ export const applyPatchDefinition: ToolDefinition = {
         description: 'SHA-256 of the existing file, or null when creating it.',
       },
     },
-    required: ['path', 'patch', 'expectedSha256'],
     additionalProperties: false,
   },
 };
@@ -49,6 +72,28 @@ interface AppliedDiff {
   operation: MutationOperation;
   addedLines: number;
   removedLines: number;
+}
+
+/** Validated, not-yet-written file change (phase one of a patch call). */
+interface PreparedFilePatch {
+  requestedPath: string;
+  relativePath: string;
+  resolvedPath: string;
+  exists: boolean;
+  beforeBuffer: Buffer;
+  beforeContent: string | null;
+  beforeHash: string | null;
+  mode: number | undefined;
+  applied: AppliedDiff;
+  afterBuffer: Buffer;
+  patch: string;
+}
+
+/** Written file change with its rollback (phase two of a patch call). */
+interface CommittedFilePatch {
+  data: JsonObject;
+  output: string;
+  rollback: () => Promise<void>;
 }
 
 interface HunkLine {
@@ -645,15 +690,52 @@ export function expectedHash(arguments_: Record<string, unknown>): string | null
   return value.toLowerCase();
 }
 
-export async function applyPatch(
-  callId: string,
-  arguments_: Record<string, unknown>,
+export const MAX_BATCHED_FILES = 10;
+
+const BATCH_FILE_KEYS = new Set(['path', 'patch', 'expectedSha256']);
+
+function parseBatchFiles(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) {
+    throw new ToolError('INVALID_ARGUMENT', 'files must be an array.');
+  }
+  if (value.length === 0) {
+    throw new ToolError('INVALID_ARGUMENT', 'files must contain at least one entry.');
+  }
+  if (value.length > MAX_BATCHED_FILES) {
+    throw new ToolError(
+      'INVALID_ARGUMENT',
+      `files can contain at most ${String(MAX_BATCHED_FILES)} entries.`,
+    );
+  }
+  return value.map((entry, index) => {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new ToolError('INVALID_ARGUMENT', `files[${String(index)}] must be an object.`);
+    }
+    const record = entry as Record<string, unknown>;
+    const unknown = Object.keys(record).find((key) => !BATCH_FILE_KEYS.has(key));
+    if (unknown !== undefined) {
+      throw new ToolError(
+        'INVALID_ARGUMENT',
+        `Unknown argument in files[${String(index)}]: ${unknown}`,
+      );
+    }
+    return record;
+  });
+}
+
+/**
+ * Phase one of a file change: validate path containment, size, baseline hash,
+ * and diff without touching the filesystem. All validation for a batch runs
+ * here so a bad entry fails the whole call before anything is written.
+ */
+async function prepareFilePatch(
+  fileArgs: Record<string, unknown>,
   context: ResolvedToolContext,
   guard: WorkspaceGuard,
-): Promise<ToolResult> {
-  const requestedPath = requiredString(arguments_.path, 'path');
-  const patch = requiredString(arguments_.patch, 'patch');
-  const expected = expectedHash(arguments_);
+): Promise<PreparedFilePatch> {
+  const requestedPath = requiredString(fileArgs.path, 'path');
+  const patch = requiredString(fileArgs.patch, 'patch');
+  const expected = expectedHash(fileArgs);
   const resolved = await guard.resolveForWrite(requestedPath);
   let beforeBuffer = Buffer.alloc(0);
   let mode: number | undefined;
@@ -662,7 +744,7 @@ export async function applyPatch(
     if (info.size > context.maxFileBytes) {
       throw new ToolError(
         'FILE_TOO_LARGE',
-        `File exceeds the ${String(context.maxFileBytes)} byte limit.`,
+        `File exceeds the ${String(context.maxFileBytes)} byte limit: ${requestedPath}`,
       );
     }
     beforeBuffer = await readFile(resolved.path);
@@ -672,37 +754,52 @@ export async function applyPatch(
   if (expected !== beforeHash) {
     throw new ToolError(
       'PATCH_CONFLICT',
-      `File baseline changed (expected ${expected ?? 'missing'}, got ${beforeHash ?? 'missing'}). The file changed since it was last read; call read_file again to obtain the current content and SHA-256, then regenerate the patch.`,
+      `File baseline changed (expected ${expected ?? 'missing'}, got ${beforeHash ?? 'missing'}) for ${requestedPath}. The file changed since it was last read; call read_file again to obtain the current content and SHA-256, then regenerate the patch.`,
     );
   }
-  const beforeContent = decodeUtf8(beforeBuffer, requestedPath);
-  const applied = applyUnifiedDiff(beforeContent, patch, requestedPath, resolved.exists);
+  const beforeContent = resolved.exists ? decodeUtf8(beforeBuffer, requestedPath) : null;
+  const applied = applyUnifiedDiff(beforeContent ?? '', patch, requestedPath, resolved.exists);
   const afterBuffer = Buffer.from(applied.content, 'utf8');
   if (afterBuffer.byteLength > context.maxFileBytes) {
     throw new ToolError(
       'FILE_TOO_LARGE',
-      `Patch result exceeds the ${String(context.maxFileBytes)} byte limit.`,
+      `Patch result exceeds the ${String(context.maxFileBytes)} byte limit: ${requestedPath}`,
     );
   }
-  if (context.approve !== undefined) {
-    const approved = await context.approve({
-      kind: 'file-mutation',
-      title: `${applied.operation}: ${normaliseRequestedPath(requestedPath)}`,
-      detail: patch,
-      readOnly: false,
-    });
-    if (!approved)
-      throw new ToolError('APPROVAL_DENIED', 'The file change was rejected by the user.');
-  }
+  return {
+    requestedPath,
+    relativePath: normaliseRequestedPath(requestedPath),
+    resolvedPath: resolved.path,
+    exists: resolved.exists,
+    beforeBuffer,
+    beforeContent,
+    beforeHash,
+    mode,
+    applied,
+    afterBuffer,
+    patch,
+  };
+}
 
+/**
+ * Phase two of a file change: apply the prepared patch atomically, record the
+ * mutation transaction, and return a rollback that restores the pre-change
+ * state. Called per file in a batch; the caller rolls back every committed
+ * file when a later one fails.
+ */
+async function commitFilePatch(
+  prepared: PreparedFilePatch,
+  context: ResolvedToolContext,
+  guard: WorkspaceGuard,
+): Promise<CommittedFilePatch> {
+  const { applied, relativePath } = prepared;
   const targetPath =
-    resolved.exists || applied.operation === 'delete'
-      ? resolved.path
-      : await guard.prepareParentForWrite(resolved.path);
+    prepared.exists || applied.operation === 'delete'
+      ? prepared.resolvedPath
+      : await guard.prepareParentForWrite(prepared.resolvedPath);
   if (applied.operation === 'delete') await unlink(targetPath);
-  else await atomicWrite(targetPath, afterBuffer, mode);
+  else await atomicWrite(targetPath, prepared.afterBuffer, prepared.mode);
 
-  const relativePath = normaliseRequestedPath(requestedPath);
   const transaction: MutationTransaction = {
     version: 1,
     id: randomUUID(),
@@ -710,20 +807,23 @@ export async function applyPatch(
     workspace: guard.root,
     path: relativePath,
     operation: applied.operation,
-    beforeHash,
-    afterHash: applied.operation === 'delete' ? null : sha256(afterBuffer),
-    beforeContent: resolved.exists ? beforeContent : null,
-    ...(mode === undefined ? {} : { beforeMode: mode }),
+    beforeHash: prepared.beforeHash,
+    afterHash: applied.operation === 'delete' ? null : sha256(prepared.afterBuffer),
+    beforeContent: prepared.beforeContent,
+    ...(prepared.mode === undefined ? {} : { beforeMode: prepared.mode }),
     afterContent: applied.operation === 'delete' ? null : applied.content,
-    diff: patch,
+    diff: prepared.patch,
     createdAt: new Date().toISOString(),
+  };
+  const rollback = async (): Promise<void> => {
+    if (!prepared.exists) await unlink(targetPath).catch(() => undefined);
+    else await atomicWrite(targetPath, prepared.beforeBuffer, prepared.mode);
   };
   try {
     await context.onMutation?.(transaction);
   } catch (error) {
     try {
-      if (!resolved.exists) await unlink(targetPath);
-      else await atomicWrite(targetPath, beforeBuffer, mode);
+      await rollback();
     } catch (rollbackError) {
       throw new ToolError(
         'TRANSACTION_FAILED',
@@ -748,14 +848,88 @@ export async function applyPatch(
     addedLines: applied.addedLines,
     removedLines: applied.removedLines,
   };
-  return successfulResult(
-    callId,
-    'apply_patch',
-    `${applied.operation}: ${relativePath}${formatLineStats(applied.addedLines, applied.removedLines)}`,
-    {
-      data,
-    },
-  );
+  return {
+    data,
+    output: `${applied.operation}: ${relativePath}${formatLineStats(applied.addedLines, applied.removedLines)}`,
+    rollback,
+  };
+}
+
+export async function applyPatch(
+  callId: string,
+  arguments_: Record<string, unknown>,
+  context: ResolvedToolContext,
+  guard: WorkspaceGuard,
+): Promise<ToolResult> {
+  if (arguments_.files !== undefined) {
+    const singleFields = ['path', 'patch', 'expectedSha256'].filter(
+      (key) => arguments_[key] !== undefined,
+    );
+    if (singleFields.length > 0) {
+      throw new ToolError(
+        'INVALID_ARGUMENT',
+        'Provide either files or the single-file path/patch/expectedSha256 fields, not both.',
+      );
+    }
+    const fileArgsList = parseBatchFiles(arguments_.files);
+    const prepared: PreparedFilePatch[] = [];
+    for (const fileArgs of fileArgsList) {
+      prepared.push(await prepareFilePatch(fileArgs, context, guard));
+    }
+    if (context.approve !== undefined) {
+      // Keep the approval compact: list the affected files with their change
+      // summaries instead of dumping every full diff into the modal.
+      const detail = prepared
+        .map(
+          (entry) =>
+            `${entry.applied.operation}: ${entry.relativePath}${formatLineStats(entry.applied.addedLines, entry.applied.removedLines)}`,
+        )
+        .join('\n');
+      const approved = await context.approve({
+        kind: 'file-mutation',
+        title: `apply_patch: ${String(prepared.length)} files`,
+        detail,
+        readOnly: false,
+      });
+      if (!approved) {
+        throw new ToolError('APPROVAL_DENIED', 'The file changes were rejected by the user.');
+      }
+    }
+    const committed: CommittedFilePatch[] = [];
+    try {
+      for (const entry of prepared) committed.push(await commitFilePatch(entry, context, guard));
+    } catch (error) {
+      // A later file failed after earlier ones were written: restore every
+      // committed file so the workspace returns to its pre-call state.
+      await Promise.allSettled([...committed].reverse().map((entry) => entry.rollback()));
+      throw error;
+    }
+    const outputs = committed.map((entry) => entry.output).join('\n');
+    return successfulResult(
+      callId,
+      'apply_patch',
+      `Applied ${String(committed.length)} files:\n${outputs}`,
+      {
+        data: { count: committed.length, files: committed.map((entry) => entry.data) },
+      },
+    );
+  }
+
+  const prepared = await prepareFilePatch(arguments_, context, guard);
+  if (context.approve !== undefined) {
+    const approved = await context.approve({
+      kind: 'file-mutation',
+      title: `${prepared.applied.operation}: ${prepared.relativePath}`,
+      detail: prepared.patch,
+      readOnly: false,
+    });
+    if (!approved)
+      throw new ToolError('APPROVAL_DENIED', 'The file change was rejected by the user.');
+  }
+  const committed = await commitFilePatch(prepared, context, guard);
+  return successfulResult(callId, 'apply_patch', committed.output, {
+    data: committed.data,
+  });
 }
 
 export async function restoreMutation(

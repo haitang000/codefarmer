@@ -138,6 +138,10 @@ describe('workspace file tools', () => {
     const registry = await createToolRegistry({ workspace });
 
     for (const definition of registry.definitions) {
+      // apply_patch intentionally offers two mutually exclusive shapes
+      // (single-file fields vs the files array), so its top-level fields are
+      // optional by design and validated in code.
+      if (definition.name === 'apply_patch') continue;
       const properties = definition.inputSchema.properties;
       const required = definition.inputSchema.required;
       expect(required).toEqual(

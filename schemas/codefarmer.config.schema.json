@@ -14,9 +14,48 @@
       "description": "Interface and agent response language."
     },
     "provider": {
-      "type": "string",
-      "enum": ["openai", "gemini", "grok", "deepseek", "kimi"],
-      "default": "openai"
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "description": "Built-in provider (openai, gemini, grok, deepseek, kimi, opencode-go) or the id of a customEndpoints entry."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["baseURL", "model"],
+          "description": "Inline custom OpenAI-compatible endpoint; id defaults to the baseURL hostname.",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+              "description": "Optional unique id; must not collide with built-in provider names."
+            },
+            "label": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "baseURL": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https?://[^?#]+$",
+              "description": "OpenAI-compatible API base URL without credentials, query, or fragment."
+            },
+            "model": { "type": "string", "minLength": 1 },
+            "apiKeyEnv": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "description": "Environment variable holding the API key; falls back to CODEFARMER_API_KEY and the local credentials file."
+            },
+            "apiKeyOptional": {
+              "type": "boolean",
+              "description": "Set true for local keyless endpoints (e.g. Ollama, vLLM) to skip the API key check."
+            }
+          }
+        }
+      ],
+      "default": "openai",
+      "description": "Built-in provider name, a customEndpoints id, or an inline custom endpoint definition."
     },
     "model": { "type": "string", "minLength": 1, "default": "gpt-5.6-sol" },
     "baseURL": {
@@ -25,6 +64,43 @@
       "pattern": "^https?://[^?#]+$",
       "default": "https://api.openai.com/v1",
       "description": "OpenAI-compatible API base URL without credentials, query, or fragment."
+    },
+    "customEndpoints": {
+      "type": "array",
+      "maxItems": 50,
+      "description": "Additional user-defined OpenAI-compatible API endpoints, referenced by id via provider.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "baseURL", "model"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "description": "Unique id used by the provider field; must not collide with built-in provider names."
+          },
+          "label": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "baseURL": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://[^?#]+$",
+            "description": "OpenAI-compatible API base URL without credentials, query, or fragment."
+          },
+          "model": { "type": "string", "minLength": 1 },
+          "apiKeyEnv": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Environment variable holding the API key; falls back to CODEFARMER_API_KEY and the local credentials file."
+          },
+          "apiKeyOptional": {
+            "type": "boolean",
+            "description": "Set true for local keyless endpoints (e.g. Ollama, vLLM) to skip the API key check."
+          }
+        }
+      }
     },
     "reasoning": {
       "type": "string",
@@ -104,6 +180,12 @@
       "items": { "type": "string", "minLength": 1 },
       "maxItems": 1000,
       "uniqueItems": true
+    },
+    "budgetUsd": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1000000,
+      "description": "Optional per-session cost ceiling in USD. Once the cumulative estimated cost of a session reaches this amount, new turns are refused until the budget is raised or a new session starts."
     }
   }
 }

@@ -14,6 +14,7 @@ import type {
   SkillCatalog,
 } from '../types.js';
 import { buildAgentInstructions } from './prompt.js';
+import { estimateCostUsd, lookupModelPrice } from './stats.js';
 import type { AgentRunResult } from './runtime-types.js';
 import { deriveSessionTitle, type SessionStore } from './session-store.js';
 import {
@@ -358,6 +359,35 @@ export class AgentRunner {
             this.options.config.model,
             this.options.config.baseURL,
           ));
+
+    // Cost ceiling: refuse to start a turn once the session's estimated cost
+    // has reached the configured budget. Enforcement happens at the turn
+    // boundary, so a single long turn that crosses the budget still finishes,
+    // but the next turn is blocked until the budget is raised or a new
+    // session starts. Models without a known list price are not enforced.
+    const budgetUsd = this.options.config.budgetUsd;
+    if (budgetUsd !== undefined && session.usage !== undefined) {
+      const price = lookupModelPrice(this.options.config.model);
+      if (price !== undefined) {
+        const spent = estimateCostUsd(session.usage, price);
+        if (spent >= budgetUsd) {
+          return {
+            sessionId: session.id,
+            status: 'failed',
+            message: '',
+            toolCalls: [],
+            usage: { ...EMPTY_USAGE },
+            error: {
+              code: 'BUDGET_EXCEEDED',
+              message:
+                `会话估算成本 $${spent.toFixed(4)} 已达到预算上限 $${budgetUsd.toFixed(4)}` +
+                `（按 ${this.options.config.model} 的公开列表价估算）。` +
+                '请 /new 开始新会话，或调高预算（--budget / config budgetUsd）后重试。',
+            },
+          };
+        }
+      }
+    }
 
     // Auto-compact: when a persisted session has grown large, fold the early
     // part into a summary before this turn so the request stays small. The new

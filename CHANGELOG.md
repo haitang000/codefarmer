@@ -6,6 +6,49 @@ All notable changes to CodeFarmer are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- `web_fetch` tool: the agent can now fetch HTTP(S) URLs and read their text
+  content, bounded in size and time. Private, loopback, and link-local
+  addresses are blocked by default, so repository content cannot turn the
+  agent into a local-network scanner.
+- `web_search` tool: the agent can search the web through DuckDuckGo (no API
+  key required) and read result titles, URLs, and snippets, then follow up
+  with `web_fetch` for full content. The endpoint inherits the `web_fetch`
+  privacy and size boundaries.
+- `apply_patch` now accepts a `files` array so several file patches can be
+  applied in one call. The whole batch is validated before anything is
+  written (a bad entry fails nothing has changed), approval covers the batch
+  once, and a mid-batch failure rolls back the files already written.
+- `todo_write` tool: the agent maintains a session todo list for multi-step
+  tasks; the TUI shows it with `/todos`.
+- `/review` TUI command: reviews the working-tree diff (staged and unstaged)
+  through a read-only, ephemeral agent turn without committing.
+- `/security-review [PATH...]` TUI command: a security-focused review of the
+  working-tree diff (injection, secrets, authz, data handling, crypto,
+  resource abuse), ordered by severity; optional paths scope the review.
+- `codefarmer run` now reads the task description from standard input when no
+  prompt argument is given, so `cat file | codefarmer run` and similar
+  scripting work (`codefarmer run --json` included).
+- Cost budgets: `budgetUsd` (config), `CODEFARMER_BUDGET_USD` (environment),
+  and `--budget <usd>` (CLI) set a per-session cost ceiling estimated with the
+  same public list prices as `stats`. Turns are refused with a
+  `BUDGET_EXCEEDED` error once the session reaches the budget; the CLI
+  one-shot path prints a warning when a run crosses it.
+- `codefarmer setup` can add new custom endpoints and saves them into
+  `customEndpoints`; re-running setup merges into the existing project config,
+  preserving previously saved providers and other settings so multiple
+  providers can coexist and be switched back to later.
+
+### Changed
+
+- TUI tool labels now switch tense with the tool lifecycle: progressive while
+  running (e.g. `浏览中` / `Listing`), perfective after success (`已浏览` /
+  `Listed`), and a failure form on errors (`浏览失败` / `List failed`).
+- A bare `/model` now opens a keyboard model picker (↑/↓ + Enter) listing the
+  models available for the active provider; `/model NAME` still switches
+  directly.
+
 ## [0.1.4] - 2026-08-13
 
 ### Added

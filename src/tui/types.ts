@@ -9,6 +9,7 @@ export type TuiCommand =
   | { kind: 'skill'; ref: string }
   | { kind: 'init' }
   | { kind: 'new' }
+  | { kind: 'retry' }
   | { kind: 'status' }
   | { kind: 'stats' }
   | { kind: 'context' }
@@ -21,9 +22,12 @@ export type TuiCommand =
   | { kind: 'config' }
   | { kind: 'doctor' }
   | { kind: 'diff' }
+  | { kind: 'review' }
+  | { kind: 'security-review'; args: string[] }
   | { kind: 'commit'; message: string }
   | { kind: 'push'; args: string[] }
   | { kind: 'undo' }
+  | { kind: 'todos' }
   | { kind: 'sessions' }
   | { kind: 'resume'; id: string }
   | { kind: 'delete-session'; id: string }
@@ -79,6 +83,7 @@ const TUI_HELP_EN = [
   '  /new        start a new session',
   '  /sessions   open the saved-session picker',
   '  /resume ID  resume a saved session',
+  '  /retry      rerun the last prompt (e.g. after switching the model)',
   '  /delete ID  delete a saved session',
   '  /compact    compress early messages into a summary',
   '  /cancel     cancel the active turn',
@@ -86,9 +91,12 @@ const TUI_HELP_EN = [
   'WORKSPACE',
   '  /status     show workspace and runtime status',
   '  /diff       show the current Git diff',
+  '  /review     review the working-tree diff without committing',
+  '  /security-review [PATH...]  review the diff for security vulnerabilities',
   '  /commit     stage and commit workspace changes',
   '  /push       push the current branch to its upstream',
   '  /undo       undo the latest file mutation',
+  "  /todos      show the agent's current todo list",
   '  /init       summarize this workspace into AGENT.md',
   'PERMISSIONS',
   '  /plan [on|off]  read-only research mode',
@@ -100,7 +108,7 @@ const TUI_HELP_EN = [
   '  /context    show context and token usage',
   '  /stats      show usage charts and estimated cost',
   '  /effort     open the reasoning effort picker (←/→ + Enter)',
-  '  /model NAME switch the active model',
+  '  /model [NAME]  switch the active model; a bare /model opens the picker',
   '  /skills     list discovered skills',
   '  /skill REF  select a skill for this session; /skill off clears it',
   '  /doctor     check local runtime prerequisites',
@@ -113,6 +121,7 @@ const TUI_HELP_ZH = [
   '  /new        开始新会话',
   '  /sessions   打开已保存会话选择器',
   '  /resume ID  恢复已保存会话',
+  '  /retry      重新执行上一条提示词（例如切换模型后重试）',
   '  /delete ID  删除已保存会话',
   '  /compact    压缩早期消息为摘要',
   '  /cancel     取消当前任务',
@@ -120,9 +129,12 @@ const TUI_HELP_ZH = [
   '工作区',
   '  /status     显示工作区和运行状态',
   '  /diff       显示当前 Git 差异',
+  '  /review     审查工作区差异，不提交',
+  '  /security-review [PATH...]  审查差异中的安全漏洞',
   '  /commit     暂存并提交工作区变更',
   '  /push       推送当前分支到上游',
   '  /undo       撤销最近一次文件变更',
+  '  /todos      显示 Agent 当前的任务清单',
   '  /init       将工作区摘要写入 AGENT.md',
   '权限',
   '  /plan [on|off]  只读研究模式',
@@ -134,7 +146,7 @@ const TUI_HELP_ZH = [
   '  /context    显示上下文和 Token 用量',
   '  /stats      显示用量图表和估算费用',
   '  /effort     打开推理强度选择器（←/→ + Enter）',
-  '  /model NAME 切换当前模型',
+  '  /model [NAME] 切换当前模型；不带参数打开模型选择器',
   '  /skills     列出已发现技能',
   '  /skill REF  为本会话选择技能；/skill off 清除',
   '  /doctor     检查本地运行环境',
@@ -167,11 +179,15 @@ export const TUI_COMMANDS = [
   'doctor',
   'sessions',
   'resume',
+  'retry',
   'delete',
   'diff',
+  'review',
+  'security-review',
   'commit',
   'push',
   'undo',
+  'todos',
   'cancel',
   'quit',
 ] as const;
@@ -246,17 +262,28 @@ export function parseTuiCommand(input: string): TuiCommand {
       return { kind: 'doctor' };
     case 'diff':
       return { kind: 'diff' };
+    case 'review':
+      return { kind: 'review' };
+    case 'security-review':
+    case 'security':
+    case 'sec-review':
+      return { kind: 'security-review', args: parts };
     case 'commit':
       return { kind: 'commit', message: parts.join(' ') };
     case 'push':
       return { kind: 'push', args: parts };
     case 'undo':
       return { kind: 'undo' };
+    case 'todos':
+    case 'todo':
+      return { kind: 'todos' };
     case 'sessions':
     case 'session':
       return { kind: 'sessions' };
     case 'resume':
       return { kind: 'resume', id: parts[0] ?? '' };
+    case 'retry':
+      return { kind: 'retry' };
     case 'delete':
       return { kind: 'delete-session', id: parts[0] ?? '' };
     case 'cancel':

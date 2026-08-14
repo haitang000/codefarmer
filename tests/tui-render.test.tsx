@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentRuntime } from '../src/cli/runtime.js';
 import { DEFAULT_CONFIG } from '../src/infra/config.js';
+import { TodoStore } from '../src/core/todos.js';
 import {
   ClippedEntry,
   ApprovalModal,
   EffortPicker,
+  ModelPicker,
   EntryView,
   appendToolEntryAtResponseBoundary,
   inheritModelEffort,
@@ -20,9 +22,11 @@ import {
   formatWorkspaceStats,
   usageBar,
   WelcomePanel,
+  toolArgumentPreview,
 } from '../src/tui/App.js';
 import { MarkdownView } from '../src/tui/markdown.js';
 import { TuiInteractionBridge } from '../src/tui/runtime.js';
+import type { ToolViewStatus, TranscriptEntry } from '../src/tui/types.js';
 
 function mockRuntime(): AgentRuntime {
   const now = new Date(0).toISOString();
@@ -46,6 +50,7 @@ function mockRuntime(): AgentRuntime {
     transactions: {} as AgentRuntime['transactions'],
     logger: {} as AgentRuntime['logger'],
     runner: {} as AgentRuntime['runner'],
+    todos: new TodoStore(),
   };
 }
 
@@ -329,6 +334,41 @@ describe('TUI rendering', () => {
     expect(output).not.toContain('调整');
   });
 
+  it('renders the model picker with the current model marked', () => {
+    const output = renderToString(
+      <ModelPicker
+        models={['gpt-5.6-sol', 'gpt-5-mini', 'custom-model']}
+        selected={0}
+        current="gpt-5.6-sol"
+        columns={80}
+      />,
+      { columns: 80 },
+    );
+    expect(output).toContain('MODEL PICKER');
+    expect(output).toContain('↑/↓ select · Enter switch · Esc close');
+    expect(output).toContain('● gpt-5.6-sol (current)');
+    expect(output).toContain('gpt-5-mini');
+    expect(output).toContain('custom-model');
+    expect(output).toContain('3 models');
+  });
+  it('localizes the model picker to Chinese', () => {
+    const output = renderToString(
+      <ModelPicker
+        models={['gpt-5.6-sol', 'gpt-5-mini']}
+        selected={1}
+        current="gpt-5.6-sol"
+        language="zh-CN"
+        columns={80}
+      />,
+      { columns: 80 },
+    );
+    expect(output).toContain('模型选择器');
+    expect(output).toContain('↑/↓ 选择 · Enter 切换 · Esc 关闭');
+    expect(output).toContain('›   gpt-5-mini');
+    expect(output).toContain('gpt-5.6-sol (当前)');
+    expect(output).toContain('2 个模型');
+  });
+
   it('inherits the model-chosen effort from auto mode into subsequent requests', () => {
     // 'auto' 模式下模型一旦选定具体档位，后续请求沿用该档位。
     expect(inheritModelEffort('auto', 'high')).toBe('high');
@@ -487,6 +527,78 @@ describe('TUI rendering', () => {
     const answerIndex = visibleLines.findIndex((line) => line.includes('Final answer.'));
     expect(thinkingIndex).toBeGreaterThanOrEqual(0);
     expect(answerIndex).toBeGreaterThan(thinkingIndex);
+  });
+
+  it('previews run_command arguments as the executable plus args, never cwd or null', () => {
+    const jsonNull = toolArgumentPreview(
+      JSON.stringify({ executable: 'ls', args: ['-la'], cwd: null, timeoutMs: 120000 }),
+    );
+    expect(jsonNull).toBe('ls -la');
+
+    // Some gateways stringify a JSON null into the literal text "null" (or
+    // "undefined"); those must never surface as the running command.
+    const stringifiedNull = toolArgumentPreview(
+      JSON.stringify({ executable: 'ls', args: ['-la'], cwd: 'null', timeoutMs: 120000 }),
+    );
+    expect(stringifiedNull).toBe('ls -la');
+
+    const stringifiedUndefined = toolArgumentPreview(
+      JSON.stringify({ executable: 'npm', args: ['test'], cwd: 'undefined', timeoutMs: 120000 }),
+    );
+    expect(stringifiedUndefined).toBe('npm test');
+
+    // A real cwd must not shadow the command either.
+    const realCwd = toolArgumentPreview(
+      JSON.stringify({ executable: 'git', args: ['status'], cwd: 'src', timeoutMs: 120000 }),
+    );
+    expect(realCwd).toBe('git status');
+
+    // Other tools keep their meaningful path preview.
+    const readFile = toolArgumentPreview(JSON.stringify({ path: 'src/index.ts', cwd: 'null' }));
+    expect(readFile).toBe('src/index.ts');
+  });
+
+  it('switches tool label tenses with the execution status', () => {
+    const toolEntry = (status: ToolViewStatus): TranscriptEntry => ({
+      id: 'tool-1',
+      kind: 'tool',
+      content: 'list_files',
+      tool: { callId: 'call-1', name: 'list_files', status, arguments: '{}' },
+    });
+
+    const running = renderToString(<EntryView entry={toolEntry('running')} width={90} />, {
+      columns: 90,
+    });
+    expect(running).toContain('Listing');
+    expect(running).not.toContain('Listed');
+
+    const requested = renderToString(<EntryView entry={toolEntry('requested')} width={90} />, {
+      columns: 90,
+    });
+    expect(requested).toContain('Listing');
+
+    const done = renderToString(<EntryView entry={toolEntry('succeeded')} width={90} />, {
+      columns: 90,
+    });
+    expect(done).toContain('Listed');
+    expect(done).not.toContain('Listing');
+
+    const failed = renderToString(<EntryView entry={toolEntry('failed')} width={90} />, {
+      columns: 90,
+    });
+    expect(failed).toContain('List failed');
+
+    const zh = renderToString(
+      <EntryView entry={toolEntry('running')} width={90} language="zh-CN" />,
+      { columns: 90 },
+    );
+    expect(zh).toContain('浏览中');
+
+    const zhDone = renderToString(
+      <EntryView entry={toolEntry('succeeded')} width={90} language="zh-CN" />,
+      { columns: 90 },
+    );
+    expect(zhDone).toContain('已浏览');
   });
 });
 

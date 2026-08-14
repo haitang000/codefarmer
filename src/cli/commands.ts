@@ -20,6 +20,7 @@ import type { AgentRunResult } from '../core/runtime-types.js';
 import { compactSession, sessionContextChars } from '../core/session-compact.js';
 import { discoverSkills } from '../core/skills.js';
 import { computeWorkspaceStats, type WorkspaceStats } from '../core/stats.js';
+import { estimateCostUsd, lookupModelPrice } from '../core/stats.js';
 import {
   getCredentialsPath,
   resolveProviderApiKey,
@@ -34,20 +35,33 @@ import {
 } from '../infra/errors.js';
 import {
   DEFAULT_CONFIG,
+  endpointIdFromBaseURL,
   loadConfigDetails,
   providerDefaults,
   writeConfigFile,
   type ConfigFile,
 } from '../infra/config.js';
 import { canonicalWorkspace, getAppPaths } from '../infra/paths.js';
-import { fileExists, readJsonFileIfExists } from '../infra/persistence.js';
+import { fileExists, readJsonFileIfExists, writeJsonAtomic } from '../infra/persistence.js';
 import { OpenAIProvider } from '../providers/openai.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible.js';
 import { isProviderId, providerPreset } from '../providers/catalog.js';
 import { detectGitAvailability } from '../tools/git-tools.js';
 import { normaliseLanguage } from '../types.js';
-import type { AgentProvider, ProviderId, SessionRecord, SessionStatus } from '../types.js';
-import { createAgentRuntime, createBaseRuntime, type GlobalOptions } from './runtime.js';
+import type {
+  AgentProvider,
+  CodeFarmerConfig,
+  CustomEndpoint,
+  CustomEndpointInput,
+  SessionRecord,
+  SessionStatus,
+} from '../types.js';
+import {
+  createAgentRuntime,
+  createBaseRuntime,
+  type AgentRuntime,
+  type GlobalOptions,
+} from './runtime.js';
 import { renderSessionExport, type SessionExportFormat } from './session-export.js';
 import { colorizeDiff, createEventRenderer, printJson, printResultMessage } from './ui.js';
 
@@ -57,6 +71,47 @@ export interface RunOptions {
   session?: string;
   plan?: boolean;
   skills?: string[];
+}
+
+/** Upper bound for a task description piped through standard input. */
+const MAX_PIPED_PROMPT_BYTES = 256 * 1024;
+
+async function readPipedPrompt(): Promise<string> {
+  const pieces: string[] = [];
+  let total = 0;
+  for await (const chunk of process.stdin) {
+    const piece =
+      typeof chunk === 'string' ? chunk : Buffer.from(chunk as Uint8Array).toString('utf8');
+    total += Buffer.byteLength(piece, 'utf8');
+    if (total > MAX_PIPED_PROMPT_BYTES) {
+      throw new ConfigError(
+        `标准输入超过 ${String(MAX_PIPED_PROMPT_BYTES)} 字节上限，无法作为任务描述`,
+      );
+    }
+    pieces.push(piece);
+  }
+  return pieces.join('');
+}
+
+/**
+ * Warn when a completed run pushed the session's estimated cost over the
+ * configured budget. Enforcement happens at the turn boundary inside the
+ * agent; this warning makes the CLI one-shot path announce the same crossing.
+ */
+function warnIfBudgetReached(runtime: AgentRuntime, result: AgentRunResult): void {
+  const budgetUsd = runtime.config.budgetUsd;
+  if (budgetUsd === undefined || result.status !== 'completed') return;
+  const price = lookupModelPrice(runtime.config.model);
+  const usage = runtime.session?.usage ?? result.usage;
+  if (price === undefined) return;
+  const spent = estimateCostUsd(usage, price);
+  if (spent >= budgetUsd) {
+    process.stderr.write(
+      `[codefarmer] 会话估算成本 $${spent.toFixed(4)} 已达到预算 $${budgetUsd.toFixed(4)}` +
+        `（按 ${runtime.config.model} 的公开列表价估算）；后续任务将被阻止，` +
+        '请 /new 开始新会话或调高预算（--budget / config budgetUsd）。\n',
+    );
+  }
 }
 
 export interface PushOptions {
@@ -110,7 +165,11 @@ export async function runAction(
   globalOptions: GlobalOptions,
   runOptions: RunOptions,
 ): Promise<AgentRunResult> {
-  const prompt = promptParts.join(' ').trim();
+  let prompt = promptParts.join(' ').trim();
+  if (prompt.length === 0 && !process.stdin.isTTY) {
+    const piped = await readPipedPrompt();
+    prompt = piped.trim();
+  }
   if (prompt.length === 0) throw new ConfigError('run 命令需要任务描述');
   const history = runOptions.history ?? true;
   const json = runOptions.json ?? false;
@@ -130,6 +189,7 @@ export async function runAction(
         ...(runOptions.skills === undefined ? {} : { skills: runOptions.skills }),
         onEvent: createEventRenderer({ json, stream: runtime.config.stream }),
       });
+      warnIfBudgetReached(runtime, result);
       if (json) printJson(cliResult(result));
       else printResultMessage(result.message, runtime.config.stream);
       if (result.status === 'cancelled') process.exitCode = 130;
@@ -221,7 +281,7 @@ async function showWorkspaceStatus(globalOptions: GlobalOptions): Promise<void> 
   }
   process.stdout.write(`${chalk.bold('工作区')} ${runtime.workspace}\n`);
   process.stdout.write(
-    `${chalk.bold('Provider')} ${providerPreset(runtime.config.provider).label}\n`,
+    `${chalk.bold('Provider')} ${providerPreset(runtime.config.provider, runtime.config.customEndpoints).label}\n`,
   );
   process.stdout.write(
     `${chalk.bold('模型')} ${runtime.config.model} (${runtime.config.reasoning}, ${runtime.config.verbosity})\n`,
@@ -355,8 +415,126 @@ function abortSetup(): void {
   process.exitCode = 130;
 }
 
+/** Sentinel `setup` option for adding a brand-new custom endpoint. */
+const ADD_CUSTOM_ENDPOINT = '__codefarmer_add_custom_endpoint__';
+
+const CUSTOM_ENDPOINT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/u;
+
+/** Provider/model/endpoint fields collected by `setup` for writing. */
+export interface SetupConfigSelection {
+  provider: string;
+  model: string;
+  baseURL: string;
+  reasoning: CodeFarmerConfig['reasoning'];
+  verbosity: CodeFarmerConfig['verbosity'];
+  reasoningSummary: CodeFarmerConfig['reasoningSummary'];
+  approval: CodeFarmerConfig['approval'];
+}
+
+/**
+ * Merge a `setup` selection into the existing project config instead of
+ * replacing it, so previously saved providers (`customEndpoints`) and other
+ * settings (language, stream, …) survive a re-run. A selected custom endpoint
+ * is upserted into `customEndpoints`, letting multiple providers coexist and
+ * be switched back to later.
+ */
+export function mergeSetupConfig(
+  current: ConfigFile | undefined,
+  selection: SetupConfigSelection,
+  endpoint: CustomEndpoint | undefined,
+): ConfigFile {
+  const existing = current ?? {};
+  return {
+    ...existing,
+    $schema: SETUP_SCHEMA_URL,
+    provider: selection.provider,
+    model: selection.model,
+    baseURL: selection.baseURL,
+    reasoning: selection.reasoning,
+    verbosity: selection.verbosity,
+    reasoningSummary: selection.reasoningSummary,
+    approval: selection.approval,
+    ...(endpoint === undefined
+      ? {}
+      : {
+          customEndpoints: [
+            ...(existing.customEndpoints ?? []).filter((entry) => entry.id !== endpoint.id),
+            endpoint,
+          ],
+        }),
+  };
+}
+
+/**
+ * Walk the user through defining a new OpenAI-compatible endpoint during
+ * setup. The endpoint is saved into `customEndpoints` so it coexists with any
+ * previously configured providers. Returns `undefined` when cancelled.
+ */
+async function collectNewEndpoint(
+  existing: readonly CustomEndpoint[],
+): Promise<CustomEndpoint | undefined> {
+  const baseURL = await text({
+    message: '自定义端点 API Base URL',
+    validate: (value) =>
+      isValidBaseUrl(value) ? undefined : '需要合法的 HTTP(S) URL，且不能包含凭据',
+  });
+  if (isCancel(baseURL)) return undefined;
+  const normalizedBaseUrl = baseURL.replace(/\/+$/u, '');
+
+  const usedIds = new Set(existing.map((endpoint) => endpoint.id));
+  const suggestedId = endpointIdFromBaseURL(normalizedBaseUrl);
+  const id = await text({
+    message: '端点 id（用于 provider 切换与引用）',
+    initialValue: usedIds.has(suggestedId) ? '' : suggestedId,
+    validate: (value) => {
+      const trimmed = value.trim();
+      if (trimmed.length === 0) return 'id 不能为空';
+      if (!CUSTOM_ENDPOINT_ID_PATTERN.test(trimmed)) {
+        return 'id 只能包含字母、数字、下划线或连字符，且不能以 - 或 _ 开头';
+      }
+      if (isProviderId(trimmed)) return `id "${trimmed}" 与内置 Provider 重名`;
+      if (usedIds.has(trimmed)) return `id "${trimmed}" 已被其他端点占用`;
+      return undefined;
+    },
+  });
+  if (isCancel(id)) return undefined;
+
+  const label = await text({
+    message: '端点显示名称（可选）',
+    initialValue: '',
+  });
+  if (isCancel(label)) return undefined;
+
+  const model = await text({
+    message: '模型',
+    validate: (value) => (value.trim().length === 0 ? '模型不能为空' : undefined),
+  });
+  if (isCancel(model)) return undefined;
+
+  const apiKeyEnv = await text({
+    message: 'API Key 环境变量名（可选；缺省时检查 CODEFARMER_API_KEY 与本地凭据）',
+    initialValue: '',
+  });
+  if (isCancel(apiKeyEnv)) return undefined;
+
+  const requiresKey = await confirm({
+    message: '该端点需要 API Key 吗？（本地免密钥服务如 Ollama、vLLM 选否）',
+    initialValue: true,
+  });
+  if (isCancel(requiresKey)) return undefined;
+
+  return {
+    id: id.trim(),
+    baseURL: normalizedBaseUrl,
+    model: model.trim(),
+    ...(label.trim().length > 0 ? { label: label.trim() } : {}),
+    ...(apiKeyEnv.trim().length > 0 ? { apiKeyEnv: apiKeyEnv.trim() } : {}),
+    ...(!requiresKey ? { apiKeyOptional: true } : {}),
+  };
+}
+
 function createProvider(
-  provider: ProviderId,
+  provider: string,
   baseURL: string,
   model: string,
   apiKey: string,
@@ -367,13 +545,14 @@ function createProvider(
 }
 
 async function testConnection(
-  provider: ProviderId,
+  provider: string,
   baseURL: string,
   model: string,
-  apiKey?: string,
+  apiKey: string | undefined,
+  customEndpoints: readonly CustomEndpoint[] = [],
 ): Promise<void> {
   const progress = spinner();
-  progress.start(`正在测试 ${providerPreset(provider).label} 连接`);
+  progress.start(`正在测试 ${providerPreset(provider, customEndpoints).label} 连接`);
   try {
     if (apiKey === undefined) throw new Error('缺少 API Key');
     await createProvider(provider, baseURL, model, apiKey).checkConnection?.();
@@ -396,7 +575,7 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
 
   if ((await fileExists(projectConfigPath)) && !force) {
     const overwrite = await confirm({
-      message: `检测到已有项目配置 ${projectConfigPath}，是否覆盖？`,
+      message: `检测到已有项目配置 ${projectConfigPath}，是否更新？（已保存的自定义端点与其他设置会保留）`,
       initialValue: false,
     });
     if (isCancel(overwrite)) return abortSetup();
@@ -406,6 +585,10 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
     }
   }
 
+  // 读取现有项目配置以便合并，而不是整体覆盖：这样 setup 之后
+  // customEndpoints 中已保存的 Provider 与语言等设置仍然保留。
+  const currentProject = (await readJsonFileIfExists<ConfigFile>(projectConfigPath)) ?? {};
+
   const selectedProvider = await select({
     message: 'AI Provider',
     options: [
@@ -414,31 +597,61 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
       { value: 'grok', label: 'xAI Grok' },
       { value: 'deepseek', label: 'DeepSeek' },
       { value: 'kimi', label: 'Kimi' },
+      { value: 'opencode-go', label: 'OpenCode Go' },
+      ...details.config.customEndpoints.map((endpoint) => ({
+        value: endpoint.id,
+        label: endpoint.label ?? endpoint.id,
+      })),
+      {
+        value: ADD_CUSTOM_ENDPOINT,
+        label: '添加自定义端点（OpenAI 兼容，保存到 customEndpoints）',
+      },
     ],
     initialValue: defaults.provider,
   });
   if (isCancel(selectedProvider)) return abortSetup();
-  const provider = selectedProvider;
-  const preset = providerPreset(provider);
+
+  let provider = selectedProvider;
+  let customEndpoints = details.config.customEndpoints;
+  let newEndpoint: CustomEndpoint | undefined;
+  if (provider === ADD_CUSTOM_ENDPOINT) {
+    const collected = await collectNewEndpoint(customEndpoints);
+    if (collected === undefined) return abortSetup();
+    newEndpoint = collected;
+    provider = collected.id;
+    customEndpoints = [...customEndpoints, collected];
+  }
+  const existingEndpoint = customEndpoints.find((endpoint) => endpoint.id === provider);
+  const preset = providerPreset(provider, customEndpoints);
   const providerConfig =
     provider === defaults.provider
       ? defaults
       : { ...defaults, model: preset.defaultModel, baseURL: preset.defaultBaseURL };
 
-  const model = await text({
-    message: `${preset.label} 模型`,
-    initialValue: providerConfig.model,
-    validate: (value) => (value.trim().length === 0 ? '模型不能为空' : undefined),
-  });
-  if (isCancel(model)) return abortSetup();
+  // 新建端点已在向导中录入 baseURL 与 model，无需再次询问。
+  let model: string;
+  let baseURL: string;
+  if (newEndpoint !== undefined) {
+    model = newEndpoint.model;
+    baseURL = newEndpoint.baseURL;
+  } else {
+    const modelAnswer = await text({
+      message: `${preset.label} 模型`,
+      initialValue: providerConfig.model,
+      validate: (value) => (value.trim().length === 0 ? '模型不能为空' : undefined),
+    });
+    if (isCancel(modelAnswer)) return abortSetup();
+    model = modelAnswer;
 
-  const baseURL = await text({
-    message: `${preset.label} API Base URL`,
-    initialValue: providerConfig.baseURL,
-    validate: (value) =>
-      isValidBaseUrl(value) ? undefined : '需要合法的 HTTP(S) URL，且不能包含凭据',
-  });
-  if (isCancel(baseURL)) return abortSetup();
+    const baseURLAnswer = await text({
+      message: `${preset.label} API Base URL`,
+      initialValue: providerConfig.baseURL,
+      validate: (value) =>
+        isValidBaseUrl(value) ? undefined : '需要合法的 HTTP(S) URL，且不能包含凭据',
+    });
+    if (isCancel(baseURLAnswer)) return abortSetup();
+    baseURL = baseURLAnswer;
+  }
 
   const reasoning = await select({
     message: '推理强度',
@@ -490,7 +703,12 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
   if (isCancel(approval)) return abortSetup();
 
   const normalizedBaseUrl = baseURL.replace(/\/+$/u, '');
-  let apiKey = await resolveProviderApiKey(provider);
+  let apiKey = await resolveProviderApiKey(provider, {
+    apiKeyEnv: customEndpoints.find((endpoint) => endpoint.id === provider)?.apiKeyEnv,
+  });
+  const keylessEndpoint = customEndpoints.some(
+    (endpoint) => endpoint.id === provider && endpoint.apiKeyOptional === true,
+  );
   const environmentKey = preset.environmentVariables.find((name) => process.env[name]?.trim());
   if (environmentKey !== undefined) {
     process.stdout.write(`${chalk.green('✓')} 使用环境变量中的 ${environmentKey}。\n`);
@@ -503,7 +721,7 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
     if (isCancel(replaceKey)) return abortSetup();
     if (replaceKey) apiKey = undefined;
   }
-  if (apiKey === undefined) {
+  if (apiKey === undefined && !keylessEndpoint) {
     const input = await password({
       message: `${preset.label} API Key（不会写入项目配置，仅保存到本地凭据文件；留空跳过）`,
       validate: () => undefined,
@@ -520,26 +738,47 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
       );
     }
   }
+  if (apiKey === undefined && keylessEndpoint) {
+    process.stdout.write(`${chalk.blue('ℹ')} 该端点已启用 apiKeyOptional，无需 API Key。\n`);
+  }
   if (apiKey !== undefined) {
     const shouldTest = await confirm({
       message: '是否现在测试连接？',
       initialValue: true,
     });
     if (isCancel(shouldTest)) return abortSetup();
-    if (shouldTest) await testConnection(provider, normalizedBaseUrl, model, apiKey);
+    if (shouldTest) {
+      await testConnection(
+        provider,
+        normalizedBaseUrl,
+        model,
+        apiKey,
+        customEndpoints,
+      );
+    }
   }
 
-  const config: ConfigFile = {
-    $schema: SETUP_SCHEMA_URL,
-    provider,
-    model,
-    baseURL: normalizedBaseUrl,
-    reasoning,
-    verbosity,
-    reasoningSummary,
-    approval,
-  };
+  const savedEndpoint: CustomEndpoint | undefined =
+    newEndpoint !== undefined
+      ? { ...newEndpoint, baseURL: normalizedBaseUrl }
+      : existingEndpoint !== undefined
+        ? { ...existingEndpoint, baseURL: normalizedBaseUrl, model }
+        : undefined;
+  const config = mergeSetupConfig(
+    currentProject,
+    {
+      provider,
+      model,
+      baseURL: normalizedBaseUrl,
+      reasoning,
+      verbosity,
+      reasoningSummary,
+      approval,
+    },
+    savedEndpoint,
+  );
   await writeConfigFile(projectConfigPath, config);
+  await writeJsonAtomic(getAppPaths().setupStateFile, { version: 1 });
   outro(`已写入 ${projectConfigPath}；下一步可运行 codefarmer doctor 或直接启动 codefarmer`);
 }
 
@@ -791,15 +1030,22 @@ export async function sessionsCompactAction(
 ): Promise<void> {
   const runtime = await createBaseRuntime(globalOptions);
   const session = await runtime.sessions.get(id);
-  const apiKey = await resolveProviderApiKey(runtime.config.provider);
-  if (!apiKey) {
+  const apiKey = await resolveProviderApiKey(runtime.config.provider, {
+    apiKeyEnv: runtime.config.customEndpoints.find(
+      (endpoint) => endpoint.id === runtime.config.provider,
+    )?.apiKeyEnv,
+  });
+  const keylessEndpoint = runtime.config.customEndpoints.some(
+    (endpoint) => endpoint.id === runtime.config.provider && endpoint.apiKeyOptional === true,
+  );
+  if (!apiKey && !keylessEndpoint) {
     throw new AuthenticationError(`缺少 ${runtime.config.provider} 的 API Key`);
   }
   const provider = createProvider(
     runtime.config.provider,
     session.baseURL ?? runtime.config.baseURL,
     runtime.config.model,
-    apiKey,
+    apiKey ?? 'codefarmer-local-endpoint',
   );
   const beforeChars = sessionContextChars(session);
   const result = await compactSession({
@@ -835,7 +1081,9 @@ export async function sessionsExportAction(
 
 export async function configListAction(globalOptions: GlobalOptions): Promise<void> {
   const providerConfig =
-    globalOptions.provider === undefined ? {} : providerDefaults(globalOptions.provider);
+    globalOptions.provider === undefined || !isProviderId(globalOptions.provider)
+      ? {}
+      : providerDefaults(globalOptions.provider);
   const details = await loadConfigDetails({
     cwd: globalOptions.cwd ?? process.cwd(),
     cli: {
@@ -907,10 +1155,33 @@ export async function configSetAction(
   const current = (await readJsonFileIfExists<ConfigFile>(target)) ?? {};
   const value = parseConfigValue(raw);
   if (key === 'provider') {
-    if (typeof value !== 'string' || !isProviderId(value)) {
-      throw new ConfigError('provider 必须是 openai、gemini、grok、deepseek 或 kimi。');
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      // 内联自定义端点：provider 直接携带端点定义（id 缺省时由 baseURL 推导）。
+      await writeConfigFile(target, { ...current, provider: value as CustomEndpointInput });
+      process.stdout.write(`已更新 ${target}\n`);
+      return;
     }
-    const candidate = { ...current, provider: value, ...providerDefaults(value) };
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new ConfigError('provider 必须是内置 Provider 名称、customEndpoints 的 id，或自定义端点对象。');
+    }
+    const builtin = isProviderId(value);
+    const inlineId =
+      typeof current.provider === 'object'
+        ? (current.provider.id ?? endpointIdFromBaseURL(current.provider.baseURL))
+        : undefined;
+    const defined =
+      inlineId === value ||
+      (current.customEndpoints ?? []).some((endpoint) => endpoint.id === value);
+    if (!builtin && !defined) {
+      throw new ConfigError(
+        `provider "${value}" 未定义；请使用内置 provider，或在 customEndpoints / provider 中配置该端点。`,
+      );
+    }
+    const candidate = builtin
+      ? { ...current, provider: value, ...providerDefaults(value) }
+      : inlineId === value
+        ? current
+        : { ...current, provider: value };
     await writeConfigFile(target, candidate);
     process.stdout.write(`已更新 ${target}\n`);
     return;
@@ -964,14 +1235,26 @@ export async function doctorAction(globalOptions: GlobalOptions): Promise<void> 
       detail: '未安装或不在 PATH（可选，仅 Git 状态与差异功能不可用）',
     });
   }
-  const preset = providerPreset(runtime.config.provider);
-  const resolvedKey = await resolveProviderApiKey(runtime.config.provider);
+  const preset = providerPreset(runtime.config.provider, runtime.config.customEndpoints);
+  const resolvedKey = await resolveProviderApiKey(runtime.config.provider, {
+    apiKeyEnv: runtime.config.customEndpoints.find(
+      (endpoint) => endpoint.id === runtime.config.provider,
+    )?.apiKeyEnv,
+  });
+  const keylessEndpoint = runtime.config.customEndpoints.some(
+    (endpoint) => endpoint.id === runtime.config.provider && endpoint.apiKeyOptional === true,
+  );
   const keyEnvironment = preset.environmentVariables.find((name) => process.env[name]?.trim());
   const keySource = keyEnvironment === undefined ? `本地凭据 ${getCredentialsPath()}` : '环境变量';
   checks.push({
     name: `${preset.label} API Key`,
-    ok: resolvedKey !== undefined,
-    detail: resolvedKey === undefined ? '未设置' : `已设置（${keySource}）`,
+    ok: resolvedKey !== undefined || keylessEndpoint,
+    detail:
+      resolvedKey === undefined
+        ? keylessEndpoint
+          ? '无需 API Key（apiKeyOptional）'
+          : '未设置'
+        : `已设置（${keySource}）`,
   });
   checks.push({ name: 'Base URL', ok: true, detail: runtime.config.baseURL });
   if (resolvedKey !== undefined) {

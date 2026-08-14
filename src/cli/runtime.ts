@@ -14,6 +14,7 @@ import { PermissionStore } from '../core/permissions.js';
 import type { AgentHooks } from '../core/hooks.js';
 import { discoverSkills } from '../core/skills.js';
 import { SessionStore } from '../core/session-store.js';
+import { TodoStore } from '../core/todos.js';
 import { TransactionStore } from '../core/transaction-store.js';
 import { resolveProviderApiKey } from '../infra/credentials.js';
 import { AuthenticationError, ConfigError } from '../infra/errors.js';
@@ -28,7 +29,6 @@ import type { ToolCall, ToolLifecycleHooks } from '../tools/types.js';
 import type {
   AgentProvider,
   CodeFarmerConfig,
-  ProviderId,
   SessionRecord,
   SkillCatalog,
   ToolResult,
@@ -37,13 +37,14 @@ import { promptForApproval } from './ui.js';
 
 export interface GlobalOptions {
   cwd?: string;
-  provider?: ProviderId;
+  provider?: string;
   model?: string;
   baseURL?: string;
   reasoning?: CodeFarmerConfig['reasoning'];
   verbosity?: CodeFarmerConfig['verbosity'];
   reasoningSummary?: CodeFarmerConfig['reasoningSummary'];
   approval?: CodeFarmerConfig['approval'];
+  budgetUsd?: number;
   language?: CodeFarmerConfig['language'];
   stream?: boolean;
   logLevel?: CodeFarmerConfig['logLevel'];
@@ -64,6 +65,8 @@ export interface AgentRuntime extends BaseRuntime {
   runner: AgentRunner;
   orchestrator?: SessionOrchestrator;
   permissions?: PermissionStore;
+  /** Session-scoped todo list maintained by the agent (todo_write) and shown by /todos. */
+  todos: TodoStore;
 }
 
 export interface AgentRuntimeOptions {
@@ -78,9 +81,16 @@ export interface AgentRuntimeOptions {
   hooks?: AgentHooks;
 }
 
+/** Environment variable hint for a custom endpoint's API key, if any. */
+function customEndpointApiKeyEnv(config: CodeFarmerConfig): string | undefined {
+  return config.customEndpoints.find((endpoint) => endpoint.id === config.provider)?.apiKeyEnv;
+}
+
 function configOverrides(options: GlobalOptions): ConfigOverrides {
   const providerConfig =
-    options.provider === undefined ? {} : providerDefaults(options.provider);
+    options.provider === undefined || !isProviderId(options.provider)
+      ? {}
+      : providerDefaults(options.provider);
   return {
     ...(options.provider === undefined ? {} : { provider: options.provider }),
     ...(options.model === undefined ? providerConfig : { model: options.model }),
@@ -91,6 +101,7 @@ function configOverrides(options: GlobalOptions): ConfigOverrides {
       ? {}
       : { reasoningSummary: options.reasoningSummary }),
     ...(options.approval === undefined ? {} : { approval: options.approval }),
+    ...(options.budgetUsd === undefined ? {} : { budgetUsd: options.budgetUsd }),
     ...(options.language === undefined ? {} : { language: options.language }),
     ...(options.stream === undefined ? {} : { stream: options.stream }),
     ...(options.logLevel === undefined ? {} : { logLevel: options.logLevel }),
@@ -104,7 +115,10 @@ export function resolveSessionConfig(
   resuming: boolean,
 ): CodeFarmerConfig {
   if (session === undefined || !resuming) return baseConfig;
-  if (!isProviderId(session.provider)) {
+  if (
+    !isProviderId(session.provider) &&
+    !baseConfig.customEndpoints.some((endpoint) => endpoint.id === session.provider)
+  ) {
     throw new ConfigError(`会话 ${session.id} 使用不受支持的 Provider: ${session.provider}`);
   }
   if (options.provider !== undefined && options.provider !== session.provider) {
@@ -139,7 +153,9 @@ export async function createBaseRuntime(options: GlobalOptions): Promise<BaseRun
   await access(workspace, constants.R_OK);
   const config = await loadConfig({ cwd: workspace, cli: configOverrides(options) });
   const skills = await discoverSkills(workspace);
-  const apiKey = await resolveProviderApiKey(config.provider);
+  const apiKey = await resolveProviderApiKey(config.provider, {
+    apiKeyEnv: customEndpointApiKeyEnv(config),
+  });
   const [sessions, transactions, logger] = await Promise.all([
     SessionStore.create(workspace),
     TransactionStore.create(workspace),
@@ -165,7 +181,11 @@ export async function createAgentRuntime(
   const session =
     agentOptions.sessionId === undefined
       ? history
-        ? await base.sessions.createSession(base.config.provider, base.config.model, base.config.baseURL)
+        ? await base.sessions.createSession(
+            base.config.provider,
+            base.config.model,
+            base.config.baseURL,
+          )
         : undefined
       : await base.sessions.get(agentOptions.sessionId);
   const config = resolveSessionConfig(
@@ -174,12 +194,21 @@ export async function createAgentRuntime(
     session,
     agentOptions.sessionId !== undefined,
   );
-  const apiKey = await resolveProviderApiKey(config.provider);
-  if (!apiKey) {
+  const apiKey = await resolveProviderApiKey(config.provider, {
+    apiKeyEnv: customEndpointApiKeyEnv(config),
+  });
+  const keylessEndpoint =
+    apiKey === undefined
+      ? config.customEndpoints.find(
+          (endpoint) => endpoint.id === config.provider && endpoint.apiKeyOptional === true,
+        )
+      : undefined;
+  if (apiKey === undefined && keylessEndpoint === undefined) {
     throw new AuthenticationError(
-      `缺少 ${config.provider} 的 API Key（${providerPreset(config.provider).environmentVariables[0] ?? '对应环境变量'}）；请设置对应环境变量，或运行 codefarmer setup 保存密钥到本地凭据`,
+      `缺少 ${config.provider} 的 API Key（${providerPreset(config.provider, config.customEndpoints).environmentVariables[0] ?? '对应环境变量'}）；请设置对应环境变量，或运行 codefarmer setup 保存密钥到本地凭据`,
     );
   }
+  const resolvedApiKey = apiKey ?? 'codefarmer-local-endpoint';
   const runtimeBase = config === base.config ? base : { ...base, config };
   if (session !== undefined && session.model !== config.model) {
     session.model = config.model;
@@ -190,6 +219,7 @@ export async function createAgentRuntime(
     if (history) await runtimeBase.sessions.save(session);
   }
   const permissions = await PermissionStore.create(runtimeBase.workspace);
+  const todos = new TodoStore();
   const approval = new PolicyApprovalController(
     config.approval,
     agentOptions.approvalDecisionPrompt ?? agentOptions.approvalPrompt ?? promptForApproval,
@@ -203,6 +233,7 @@ export async function createAgentRuntime(
     ignoredPaths: config.ignoredPaths,
     ...(runtimeBase.skills === undefined ? {} : { skillCatalog: runtimeBase.skills }),
     ...(session === undefined ? {} : { sessionId: session.id }),
+    todos,
     approve: async (request) => {
       const approvalRequest: ApprovalRequest = {
         kind: request.kind === 'file-mutation' ? 'patch' : 'command',
@@ -221,12 +252,16 @@ export async function createAgentRuntime(
   });
   const provider: AgentProvider =
     config.provider === 'openai'
-      ? new OpenAIProvider({ apiKey, baseURL: config.baseURL, connectionModel: config.model })
+      ? new OpenAIProvider({
+          apiKey: resolvedApiKey,
+          baseURL: config.baseURL,
+          connectionModel: config.model,
+        })
       : new OpenAICompatibleProvider({
           provider: config.provider,
-          apiKey,
+          apiKey: resolvedApiKey,
           baseURL: config.baseURL,
-      });
+        });
   const baseToolHooks = agentOptions.toolHooks;
   const hooks = agentOptions.hooks;
   const toolHooks: ToolLifecycleHooks | undefined =
@@ -242,7 +277,10 @@ export async function createAgentRuntime(
               call: {
                 callId: call.callId,
                 name: call.name,
-                arguments: typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments),
+                arguments:
+                  typeof call.arguments === 'string'
+                    ? call.arguments
+                    : JSON.stringify(call.arguments),
               },
             });
           },
@@ -257,7 +295,10 @@ export async function createAgentRuntime(
                   call: {
                     callId: call.callId,
                     name: call.name,
-                    arguments: typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments),
+                    arguments:
+                      typeof call.arguments === 'string'
+                        ? call.arguments
+                        : JSON.stringify(call.arguments),
                   },
                 },
                 result,
@@ -297,5 +338,12 @@ export async function createAgentRuntime(
     { sessionId: session?.id, history, provider: provider.name, baseURL: config.baseURL },
     'Agent runtime initialized',
   );
-  return { ...runtimeBase, ...(session === undefined ? {} : { session }), runner, orchestrator, permissions };
+  return {
+    ...runtimeBase,
+    ...(session === undefined ? {} : { session }),
+    runner,
+    orchestrator,
+    permissions,
+    todos,
+  };
 }

@@ -516,4 +516,150 @@ describe('apply_patch', () => {
       'alpha\n\nBETA\ngamma\n',
     );
   });
+
+  it('applies several file patches in one call', async () => {
+    const workspace = await temporaryWorkspace();
+    const originalA = 'first file\n';
+    const originalB = 'second file\n';
+    await writeFile(path.join(workspace, 'a.txt'), originalA);
+    await writeFile(path.join(workspace, 'b.txt'), originalB);
+    const transactions: MutationTransaction[] = [];
+    const registry = await createToolRegistry({
+      workspace,
+      approve: () => true,
+      onMutation: (value) => {
+        transactions.push(value);
+      },
+    });
+    const patchA = [
+      '--- a/a.txt',
+      '+++ b/a.txt',
+      '@@ -1 +1 @@',
+      '-first file',
+      '+FIRST FILE',
+      '',
+    ].join('\n');
+    const patchB = [
+      '--- a/b.txt',
+      '+++ b/b.txt',
+      '@@ -1 +1 @@',
+      '-second file',
+      '+SECOND FILE',
+      '',
+    ].join('\n');
+
+    const result = await registry.execute({
+      callId: 'batch-1',
+      name: 'apply_patch',
+      arguments: {
+        files: [
+          { path: 'a.txt', patch: patchA, expectedSha256: hash(originalA) },
+          { path: 'b.txt', patch: patchB, expectedSha256: hash(originalB) },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({ callId: 'batch-1', success: true });
+    expect(result.output).toContain('Applied 2 files');
+    expect(result.output).toContain('modify: a.txt (+1 -1)');
+    expect(result.output).toContain('modify: b.txt (+1 -1)');
+    expect(result.data).toMatchObject({ count: 2 });
+    expect(await readFile(path.join(workspace, 'a.txt'), 'utf8')).toBe('FIRST FILE\n');
+    expect(await readFile(path.join(workspace, 'b.txt'), 'utf8')).toBe('SECOND FILE\n');
+    expect(transactions).toHaveLength(2);
+  });
+
+  it('asks for a single compact approval covering the whole batch', async () => {
+    const workspace = await temporaryWorkspace();
+    await writeFile(path.join(workspace, 'a.txt'), 'one\n');
+    await writeFile(path.join(workspace, 'b.txt'), 'two\n');
+    const approvals: { title: string; detail: string }[] = [];
+    const registry = await createToolRegistry({
+      workspace,
+      approve: (request) => {
+        approvals.push({ title: request.title, detail: request.detail });
+        return true;
+      },
+    });
+    const patchA = ['@@ -1 +1 @@', '-one', '+ONE'].join('\n');
+    const patchB = ['@@ -1 +1 @@', '-two', '+TWO'].join('\n');
+
+    const result = await registry.execute({
+      callId: 'batch-approval',
+      name: 'apply_patch',
+      arguments: {
+        files: [
+          { path: 'a.txt', patch: patchA, expectedSha256: hash('one\n') },
+          { path: 'b.txt', patch: patchB, expectedSha256: hash('two\n') },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]?.title).toBe('apply_patch: 2 files');
+    // The approval lists file names with change summaries, not the full diffs.
+    expect(approvals[0]?.detail).toBe('modify: a.txt (+1 -1)\nmodify: b.txt (+1 -1)');
+    expect(approvals[0]?.detail).not.toContain('-one');
+  });
+
+  it('does not apply anything when a batch entry fails validation', async () => {
+    const workspace = await temporaryWorkspace();
+    const originalA = 'alpha\n';
+    await writeFile(path.join(workspace, 'a.txt'), originalA);
+    const registry = await createToolRegistry({ workspace, approve: () => true });
+    const patchA = ['@@ -1 +1 @@', '-alpha', '+ALPHA'].join('\n');
+
+    // Second entry carries a stale baseline hash, so the whole call fails.
+    const result = await registry.execute({
+      callId: 'batch-fail',
+      name: 'apply_patch',
+      arguments: {
+        files: [
+          { path: 'a.txt', patch: patchA, expectedSha256: hash(originalA) },
+          {
+            path: 'missing.txt',
+            patch: ['@@ -0,0 +1 @@', '+new'].join('\n'),
+            expectedSha256: 'deadbeef'.repeat(8),
+          },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({ success: false, error: { code: 'PATCH_CONFLICT' } });
+    // The valid first entry was never written.
+    expect(await readFile(path.join(workspace, 'a.txt'), 'utf8')).toBe(originalA);
+    await expect(access(path.join(workspace, 'missing.txt'))).rejects.toBeDefined();
+  });
+
+  it('rejects mixing batch and single-file fields', async () => {
+    const workspace = await temporaryWorkspace();
+    const registry = await createToolRegistry({ workspace, approve: () => true });
+
+    const both = await registry.execute({
+      callId: 'batch-mixed',
+      name: 'apply_patch',
+      arguments: {
+        files: [{ path: 'a.txt', patch: 'x', expectedSha256: null }],
+        path: 'b.txt',
+        patch: 'y',
+        expectedSha256: null,
+      },
+    });
+    expect(both).toMatchObject({ success: false, error: { code: 'INVALID_ARGUMENT' } });
+
+    const empty = await registry.execute({
+      callId: 'batch-empty',
+      name: 'apply_patch',
+      arguments: { files: [] },
+    });
+    expect(empty).toMatchObject({ success: false, error: { code: 'INVALID_ARGUMENT' } });
+
+    const neither = await registry.execute({
+      callId: 'batch-neither',
+      name: 'apply_patch',
+      arguments: {},
+    });
+    expect(neither).toMatchObject({ success: false, error: { code: 'INVALID_ARGUMENT' } });
+  });
 });

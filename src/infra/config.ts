@@ -1,17 +1,18 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import { normaliseLanguage, PROVIDER_IDS } from '../types.js';
+import { normaliseLanguage } from '../types.js';
 import type {
   ApprovalPolicy,
   CodeFarmerConfig,
+  CustomEndpoint,
+  CustomEndpointInput,
   LogLevel,
   ReasoningEffort,
   ReasoningSummary,
   TextVerbosity,
-  ProviderId,
 } from '../types.js';
-import { isProviderId, providerPreset } from '../providers/catalog.js';
+import { findCustomEndpoint, isProviderId, providerPreset } from '../providers/catalog.js';
 import { ConfigError } from './errors.js';
 import { getAppPaths } from './paths.js';
 import { fileExists, writeJsonAtomic } from './persistence.js';
@@ -36,6 +37,7 @@ export const DEFAULT_CONFIG: Readonly<CodeFarmerConfig> = {
   provider: 'openai',
   model: 'gpt-5.6-sol',
   baseURL: 'https://api.openai.com/v1',
+  customEndpoints: [],
   reasoning: 'high',
   verbosity: 'low',
   reasoningSummary: 'none',
@@ -67,11 +69,36 @@ const baseURLSchema = z
   }, 'baseURL must be an HTTP(S) URL without credentials, query, or fragment')
   .transform((value) => value.replace(/\/+$/u, ''));
 
+const customEndpointIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9_-]*$/u,
+    'id 只能包含字母、数字、下划线或连字符，且不能以 - 或 _ 开头',
+  );
+
+const customEndpointSchema = z.object({
+  id: customEndpointIdSchema,
+  label: z.string().trim().min(1).max(64).optional(),
+  baseURL: baseURLSchema,
+  model: z.string().trim().min(1),
+  apiKeyEnv: z.string().trim().min(1).max(128).optional(),
+  apiKeyOptional: z.boolean().optional(),
+});
+
+/** Inline `provider` object form; `id` defaults to the baseURL hostname. */
+const customEndpointInputSchema = customEndpointSchema.extend({
+  id: customEndpointIdSchema.optional(),
+});
+
 const configShape = {
   language: z.enum(['en', 'zh-CN']),
-  provider: z.enum(PROVIDER_IDS),
+  provider: z.string().trim().min(1),
   model: z.string().trim().min(1),
   baseURL: baseURLSchema,
+  customEndpoints: z.array(customEndpointSchema).max(50),
   reasoning: z.enum(['auto', 'none', 'low', 'medium', 'high', 'xhigh', 'max']),
   verbosity: z.enum(['low', 'medium', 'high']),
   reasoningSummary: z.enum(['none', 'auto', 'concise', 'detailed']),
@@ -97,20 +124,65 @@ const configShape = {
     .max(60 * 60 * 1_000),
   autoCompact: z.boolean(),
   autoCompactMinMessages: z.number().int().min(2).max(100_000),
-  autoCompactMinChars: z.number().int().min(1_000).max(50 * 1024 * 1024),
+  autoCompactMinChars: z
+    .number()
+    .int()
+    .min(1_000)
+    .max(50 * 1024 * 1024),
   ignoredPaths: z.array(z.string().min(1)).max(1_000),
+  budgetUsd: z.number().positive().max(1_000_000).optional(),
 };
 
-export const codeFarmerConfigSchema = z.object(configShape).strict();
+/** Validate a merged configuration, including cross-field provider references. */
+export const codeFarmerConfigSchema = z
+  .object(configShape)
+  .strict()
+  .superRefine((config, ctx) => {
+    const endpoints = config.customEndpoints;
+    const ids = new Set<string>();
+    for (const endpoint of endpoints) {
+      if (isProviderId(endpoint.id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['customEndpoints'],
+          message: `id "${endpoint.id}" 与内置 Provider 重名`,
+        });
+      }
+      if (ids.has(endpoint.id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['customEndpoints'],
+          message: `customEndpoints 中 id "${endpoint.id}" 重复`,
+        });
+      }
+      ids.add(endpoint.id);
+    }
+    if (!isProviderId(config.provider) && !ids.has(config.provider)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['provider'],
+        message: `provider "${config.provider}" 未定义；请使用内置 provider，或在 customEndpoints / provider 中定义该端点`,
+      });
+    }
+  });
 
-export const configFileSchema = codeFarmerConfigSchema
+/**
+ * Per-field validation for individual config files. Cross-field and
+ * cross-file references (provider ↔ customEndpoints) are only checked on the
+ * merged configuration, because a single file is just a partial view.
+ */
+export const configFileSchema = z
+  .object({ ...configShape, provider: z.union([z.string().trim().min(1), customEndpointInputSchema]) })
   .partial()
   .extend({ $schema: z.string().optional() })
   .strict();
 
 export const configSchema = codeFarmerConfigSchema;
 
-export type ConfigFile = Partial<CodeFarmerConfig> & { $schema?: string };
+export type ConfigFile = Partial<Omit<CodeFarmerConfig, 'provider'>> & {
+  provider?: string | CustomEndpointInput;
+  $schema?: string;
+};
 export type ConfigOverrides = Partial<CodeFarmerConfig>;
 
 export interface LoadConfigOptions {
@@ -150,6 +222,15 @@ function parseInteger(name: string, value: string | undefined): number | undefin
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) {
     throw new ConfigError(`${name} is outside the supported integer range.`);
+  }
+  return parsed;
+}
+
+function parseNumber(name: string, value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new ConfigError(`${name} must be a positive number.`);
   }
   return parsed;
 }
@@ -198,7 +279,7 @@ export function configFromEnvironment(env: NodeJS.ProcessEnv = process.env): Con
     provider !== undefined && isProviderId(provider) ? providerDefaults(provider) : {};
   return definedOnly({
     language: parseLanguage(env.CODEFARMER_LANGUAGE),
-    provider: provider as ProviderId | undefined,
+    provider,
     model: env.CODEFARMER_MODEL ?? providerConfig.model,
     baseURL: env.CODEFARMER_BASE_URL ?? env.OPENAI_BASE_URL ?? providerConfig.baseURL,
     reasoning: env.CODEFARMER_REASONING as ReasoningEffort | undefined,
@@ -231,13 +312,32 @@ export function configFromEnvironment(env: NodeJS.ProcessEnv = process.env): Con
       env.CODEFARMER_AUTO_COMPACT_MIN_CHARS,
     ),
     ignoredPaths: parseIgnoredPaths(env.CODEFARMER_IGNORED_PATHS),
+    budgetUsd: parseNumber('CODEFARMER_BUDGET_USD', env.CODEFARMER_BUDGET_USD),
   }) as ConfigOverrides;
 }
 
-/** Return the built-in endpoint/model pair for a provider selected by setup. */
-export function providerDefaults(provider: ProviderId): Pick<CodeFarmerConfig, 'model' | 'baseURL'> {
-  const preset = providerPreset(provider);
+/**
+ * Return the endpoint/model pair for a provider selected by setup or CLI.
+ * Built-in providers use their catalog defaults; custom endpoints use the
+ * `baseURL`/`model` from their `customEndpoints` entry.
+ */
+export function providerDefaults(
+  provider: string,
+  customEndpoints?: readonly CustomEndpoint[],
+): Pick<CodeFarmerConfig, 'model' | 'baseURL'> {
+  const preset = providerPreset(provider, customEndpoints);
   return { model: preset.defaultModel, baseURL: preset.defaultBaseURL };
+}
+
+/** Merge custom endpoints from user, project, and CLI layers; later layers win per id. */
+function mergeCustomEndpoints(
+  groups: readonly (readonly CustomEndpoint[] | undefined)[],
+): CustomEndpoint[] {
+  const byId = new Map<string, CustomEndpoint>();
+  for (const group of groups) {
+    for (const endpoint of group ?? []) byId.set(endpoint.id, endpoint);
+  }
+  return [...byId.values()];
 }
 
 async function readConfigFile(filePath: string): Promise<ConfigFile | undefined> {
@@ -260,16 +360,64 @@ async function readConfigFile(filePath: string): Promise<ConfigFile | undefined>
   }
 }
 
+/** Derive a stable endpoint id from a baseURL hostname (e.g. `localhost`). */
+export function endpointIdFromBaseURL(baseURL: string): string {
+  try {
+    const id = new URL(baseURL)
+      .hostname.replace(/[^A-Za-z0-9_-]/g, '-')
+      .replace(/^-+|-+$/g, '');
+    return id.length > 0 ? id.slice(0, 64) : 'custom';
+  } catch {
+    return 'custom';
+  }
+}
+
+/**
+ * Turn an inline `provider` object into a string id plus a registered
+ * `customEndpoints` entry, so the rest of the runtime only sees string ids.
+ */
+function resolveInlineProvider(
+  config: ConfigFile,
+): Omit<ConfigFile, 'provider'> & { provider?: string } {
+  const provider = config.provider;
+  if (provider === undefined || typeof provider === 'string') {
+    return config as Omit<ConfigFile, 'provider'> & { provider?: string };
+  }
+  const id = provider.id ?? endpointIdFromBaseURL(provider.baseURL);
+  const endpointFields = definedOnly(provider) as Omit<CustomEndpoint, 'id'>;
+  const resolved: CustomEndpoint = { ...endpointFields, id };
+  return {
+    ...config,
+    provider: id,
+    customEndpoints: [
+      ...(config.customEndpoints ?? []).filter((entry) => entry.id !== id),
+      resolved,
+    ],
+  };
+}
+
 function withoutSchema(config: ConfigFile | undefined): ConfigOverrides {
   if (!config) return {};
-  const values = { ...config };
+  const values: Omit<ConfigFile, 'provider'> & { provider?: string; $schema?: string } = {
+    ...resolveInlineProvider(config),
+  };
   delete values.$schema;
   return definedOnly(values);
 }
 
 function validateMergedConfig(value: unknown): CodeFarmerConfig {
   try {
-    return codeFarmerConfigSchema.parse(value);
+    const parsed = codeFarmerConfigSchema.parse(value);
+    const { budgetUsd, ...rest } = parsed;
+    return {
+      ...rest,
+      // exactOptionalPropertyTypes: zod can produce `budgetUsd: undefined`,
+      // which must be dropped rather than kept as an explicit undefined.
+      ...(budgetUsd === undefined ? {} : { budgetUsd }),
+      customEndpoints: parsed.customEndpoints.map(
+        (endpoint) => definedOnly(endpoint) as CustomEndpoint,
+      ),
+    };
   } catch (error) {
     if (error instanceof z.ZodError) {
       const details = error.issues
@@ -298,15 +446,22 @@ export async function loadConfigDetails(options: LoadConfigOptions = {}): Promis
   const projectOverrides = withoutSchema(projectConfig);
   const environmentOverrides = configFromEnvironment(options.env);
   const cliOverrides = definedOnly(options.cli ?? {});
+  const customEndpoints = mergeCustomEndpoints([
+    userOverrides.customEndpoints,
+    projectOverrides.customEndpoints,
+    cliOverrides.customEndpoints,
+  ]);
   const selectedProvider =
     cliOverrides.provider ??
     environmentOverrides.provider ??
     projectOverrides.provider ??
     userOverrides.provider ??
     DEFAULT_CONFIG.provider;
-  const selectedDefaults = isProviderId(selectedProvider)
-    ? providerDefaults(selectedProvider)
-    : {};
+  const selectedDefaults =
+    isProviderId(selectedProvider) ||
+    findCustomEndpoint(selectedProvider, customEndpoints) !== undefined
+      ? providerDefaults(selectedProvider, customEndpoints)
+      : {};
 
   const config = validateMergedConfig({
     ...DEFAULT_CONFIG,
@@ -316,6 +471,7 @@ export async function loadConfigDetails(options: LoadConfigOptions = {}): Promis
     ...projectOverrides,
     ...environmentOverrides,
     ...cliOverrides,
+    customEndpoints,
   });
 
   return {

@@ -80,7 +80,7 @@ describe('local credential store', () => {
 
     expect(await readStoredProviderApiKey('deepseek', appPaths)).toBe('deepseek-stored');
     expect(await readStoredProviderApiKey('gemini', appPaths)).toBe('gemini-stored');
-    expect(await resolveProviderApiKey('deepseek', appPaths)).toBe('deepseek-env');
-    expect(await resolveProviderApiKey('gemini', appPaths)).toBe('gemini-stored');
+    expect(await resolveProviderApiKey('deepseek', { appPaths })).toBe('deepseek-env');
+    expect(await resolveProviderApiKey('gemini', { appPaths })).toBe('gemini-stored');
   });
 });

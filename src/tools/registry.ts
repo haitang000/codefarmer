@@ -22,6 +22,9 @@ import {
 import { failedResult, requireObject } from './output.js';
 import { runCommand, runCommandDefinition } from './run-command.js';
 import { writeFileDefinition, writeWorkspaceFile } from './write-file.js';
+import { todoWriteDefinition, writeTodos } from './todo-write.js';
+import { webFetch, webFetchDefinition } from './web-fetch.js';
+import { webSearch, webSearchDefinition } from './web-search.js';
 import {
   readSkill,
   readSkillDefinition,
@@ -277,6 +280,13 @@ export async function createToolRegistry(options: ToolContextOptions): Promise<T
     ...(options.onMutation === undefined ? {} : { onMutation: options.onMutation }),
     ...(options.approve === undefined ? {} : { approve: options.approve }),
     ...(options.skillCatalog === undefined ? {} : { skillCatalog: options.skillCatalog }),
+    ...(options.allowPrivateAddresses === undefined
+      ? {}
+      : { allowPrivateAddresses: options.allowPrivateAddresses }),
+    ...(options.webSearchEndpoint === undefined
+      ? {}
+      : { webSearchEndpoint: options.webSearchEndpoint }),
+    ...(options.todos === undefined ? {} : { todos: options.todos }),
   };
 
   const register = (
@@ -314,6 +324,15 @@ export async function createToolRegistry(options: ToolContextOptions): Promise<T
       ),
       register(gitShowDefinition, (arguments_, callId, options = {}) =>
         gitShow(callId, arguments_, executionContext(context, options), guard),
+      ),
+      register(webFetchDefinition, (arguments_, callId, options = {}) =>
+        webFetch(callId, arguments_, executionContext(context, options)),
+      ),
+      register(webSearchDefinition, (arguments_, callId, options = {}) =>
+        webSearch(callId, arguments_, executionContext(context, options)),
+      ),
+      register(todoWriteDefinition, (arguments_, callId, options = {}) =>
+        writeTodos(callId, arguments_, executionContext(context, options)),
       ),
       register(readSkillDefinition, (arguments_, callId, options = {}) =>
         readSkill(callId, arguments_, executionContext(context, options)),

@@ -37,5 +37,15 @@ describe('getAppPaths', () => {
         'codefarmer',
       ),
     );
+    expect(first.setupStateFile).toBe(
+      path.join(
+        path.parse(process.cwd()).root,
+        'first-home',
+        'Library',
+        'Preferences',
+        'codefarmer',
+        'setup-state.json',
+      ),
+    );
   });
 });

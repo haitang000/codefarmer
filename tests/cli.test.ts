@@ -50,18 +50,22 @@ async function runCli(
   args: string[],
   cwd: string,
   environmentRoot: string = cwd,
+  input?: string,
 ): Promise<CliResult> {
   return new Promise((resolve, reject) => {
+    const stdio: ['ignore', 'pipe', 'pipe'] | ['pipe', 'pipe', 'pipe'] =
+      input === undefined ? ['ignore', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'];
     const child = spawn(process.execPath, [TSX_CLI, CLI_ENTRY, ...args], {
       cwd,
       env: isolatedEnvironment(environmentRoot),
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio,
       windowsHide: true,
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
-    child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
+    child.stdout?.on('data', (chunk: Buffer) => stdout.push(chunk));
+    child.stderr?.on('data', (chunk: Buffer) => stderr.push(chunk));
+    if (input !== undefined) child.stdin?.end(input);
     child.once('error', reject);
     child.once('close', (code) => {
       resolve({
@@ -341,12 +345,40 @@ describe('CodeFarmer CLI', () => {
     expect(result.stderr).toBe('');
   });
 
-  it('uses exit code 2 for invalid command-line usage', async () => {
+  it('uses exit code 2 for a run without a task description', async () => {
     const root = await temporaryDirectory();
     const result = await runCli(['run'], root);
 
     expect(result.code).toBe(2);
-    expect(result.stderr).toContain("missing required argument 'prompt'");
+    expect(result.stderr).toContain('run 命令需要任务描述');
+  });
+
+  it('reads the task description from standard input when no prompt is given', async () => {
+    const workspace = await temporaryDirectory();
+    const environmentRoot = await temporaryDirectory();
+
+    const result = await runCli(
+      ['--cwd', workspace, 'run', '--json'],
+      workspace,
+      environmentRoot,
+      'Inspect the working directory only',
+    );
+
+    // The piped text became the prompt and processing started (authentication
+    // is reached before any network call in this isolated environment).
+    expect(result.code).toBe(4);
+    const payload = JSON.parse(result.stdout) as {
+      error?: { code?: unknown; message?: unknown };
+    };
+    expect(payload.error?.code).toBe('AUTHENTICATION_ERROR');
+  });
+
+  it('rejects an invalid --budget value with exit code 2', async () => {
+    const workspace = await temporaryDirectory();
+    const result = await runCli(['--cwd', workspace, '--budget', 'cheap', 'run', 'task'], workspace);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('--budget');
   });
 
   it('generates shell completion scripts for bash, zsh, and fish', async () => {

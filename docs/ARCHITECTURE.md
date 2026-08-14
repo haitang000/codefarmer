@@ -115,10 +115,13 @@ confirmation always run before these grants.
 
 ## File mutation and undo
 
-`apply_patch` operates on one UTF-8 file per call. The request carries a
-workspace-relative path, unified diff, and expected SHA-256 baseline. The tool
-validates containment, ignore and size policy, and the baseline hash before it
-applies the patch in memory. It then commits through a temporary file and
+`apply_patch` operates on one UTF-8 file per call, or on a batch of files
+through the `files` array. Every entry carries a workspace-relative path,
+unified diff, and expected SHA-256 baseline. The tool validates containment,
+ignore and size policy, and the baseline hash before it applies the patch in
+memory. A batch validates every entry before anything is written (all-or-
+nothing), asks for approval once, and rolls back already-written files if a
+later one fails mid-commit. Each file commits through a temporary file and
 atomic rename.
 
 Each successful mutation records before/after hashes and enough snapshot data

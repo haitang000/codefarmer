@@ -18,6 +18,7 @@ import {
   inspectWorkingTree,
 } from '../tools/git-tools.js';
 import { sanitiseEnvironment } from '../tools/run-command.js';
+import { renderTodos } from '../tools/todo-write.js';
 import type {
   Language,
   ProviderEvent,
@@ -34,6 +35,7 @@ import {
 } from '../core/session-compact.js';
 import { formatSkillCatalog } from '../core/skills.js';
 import { computeWorkspaceStats, type WorkspaceStats } from '../core/stats.js';
+import { modelsForProvider } from '../providers/catalog.js';
 import { DiffView, MarkdownLine, MarkdownView, diffLineColor } from './markdown.js';
 import {
   extractCommitMessage,
@@ -51,6 +53,7 @@ import {
   type ApprovalView,
   type AgentMode,
   type ToolView,
+  type ToolViewStatus,
   type TranscriptEntry,
   type TuiCommand,
   type TuiToolEvent,
@@ -73,6 +76,7 @@ const READ_ONLY_COMMANDS: ReadonlySet<TuiCommand['kind']> = new Set([
   'skills',
   'context',
   'effort',
+  'model',
   'plan',
   'auto',
   'language',
@@ -82,6 +86,7 @@ const READ_ONLY_COMMANDS: ReadonlySet<TuiCommand['kind']> = new Set([
   'doctor',
   'sessions',
   'diff',
+  'todos',
 ]);
 
 function canRunWhileBusy(command: TuiCommand): boolean {
@@ -115,6 +120,50 @@ Requirements:
 - When the change is non-trivial, follow the subject with a blank line and a few short bullet points
   describing what changed and why.
 - Do not modify, stage, or commit anything; this turn is read-only research.`;
+
+const REVIEW_PROMPT = `Review the uncommitted changes in this workspace and report your findings.
+
+Inspect the working tree with the read-only Git tools (git_status, git_diff, and git_log when useful).
+The working tree may contain staged and unstaged changes; review both.
+
+Report:
+- Correctness risks: bugs, edge cases, and broken assumptions in the changed code.
+- Quality issues: unclear naming, duplicated logic, missing error handling, or dead code.
+- Compatibility and maintenance concerns: API changes, dependency issues, or style drift.
+- Concrete suggestions for what to fix before committing, ordered by importance.
+
+Use concise, concrete findings with file paths and line references when possible. Do not modify,
+stage, or commit anything; this turn is read-only research.`;
+
+const SECURITY_REVIEW_PROMPT = `Review the uncommitted changes in this workspace for security vulnerabilities and report your findings.
+
+Inspect the working tree with the read-only Git tools (git_status, git_diff, and git_log when useful).
+The working tree may contain staged and unstaged changes; review both. Focus on the security
+implications of the changes, not general code quality.
+
+Look for:
+- Injection and tampering: shell injection or unsafe command construction, SQL/NoSQL injection,
+  path traversal in file operations, unsafe deserialization, template injection.
+- Secrets: hardcoded API keys, tokens, passwords, or private keys; accidentally staged .env,
+  credential, or certificate material.
+- Authentication and authorization: missing or bypassable checks, privilege escalation,
+  insecure session or token handling.
+- Data handling: sensitive data written to logs or sent to external services, missing input
+  validation, trusting untrusted content (tool output, fetched web content, user input).
+- Cryptography and transport: weak or broken crypto, disabled TLS verification, misuse of hashing.
+- Resource abuse: unbounded input sizes, missing rate or size limits on attacker-controlled data.
+
+Report concrete findings with file paths and line references when possible, ordered by severity
+(Critical, High, Medium, Low, Info). For each finding, state the risk and a concrete fix. If the
+changes contain no security-relevant problems, say so clearly. Do not modify, stage, or commit
+anything; this turn is read-only research.`;
+
+function securityReviewPrompt(paths: string[]): string {
+  if (paths.length === 0) return SECURITY_REVIEW_PROMPT;
+  return `${SECURITY_REVIEW_PROMPT}
+
+Focus your review on these paths (use the read-only Git tools with the matching paths): ${paths.join(' ')}.`;
+}
 
 export interface TuiAppProps {
   initialRuntime: AgentRuntime;
@@ -233,13 +282,42 @@ const ARGUMENT_PREVIEW_KEYS = [
   'sessionId',
 ] as const;
 
+// Some gateways stringify a JSON `null` argument into the literal text
+// "null" (or "undefined") before the call reaches the UI; such values carry
+// no displayable meaning and must never be shown as the preview (e.g. a
+// run_command call must not read as "Running null").
+function isNullishPreviewValue(value: unknown): boolean {
+  return (
+    value === null ||
+    value === undefined ||
+    value === '' ||
+    value === 'null' ||
+    value === 'undefined'
+  );
+}
+
 export function toolArgumentPreview(args: string | undefined): string | undefined {
   if (args === undefined || args.length === 0) return undefined;
   try {
     const parsed = JSON.parse(args) as Record<string, unknown>;
+    // run_command's meaningful detail is the executable and its arguments;
+    // cwd (a directory, often null) must never shadow the command itself.
+    const executable = parsed.executable;
+    if (typeof executable === 'string' && executable.length > 0) {
+      const rawArgs: unknown[] = Array.isArray(parsed.args) ? (parsed.args as unknown[]) : [];
+      const parts = [executable, ...rawArgs].filter(
+        (part): part is string => typeof part === 'string' && part.length > 0,
+      );
+      const command = parts.join(' ');
+      if (command.length > 0) {
+        return command.length > TOOL_ARGUMENT_PREVIEW_LIMIT
+          ? `${command.slice(0, TOOL_ARGUMENT_PREVIEW_LIMIT - 1)}…`
+          : command;
+      }
+    }
     for (const key of ARGUMENT_PREVIEW_KEYS) {
       const value = parsed[key];
-      if (typeof value === 'string' && value.length > 0) {
+      if (typeof value === 'string' && !isNullishPreviewValue(value)) {
         return value.length > TOOL_ARGUMENT_PREVIEW_LIMIT
           ? `${value.slice(0, TOOL_ARGUMENT_PREVIEW_LIMIT - 1)}…`
           : value;
@@ -665,27 +743,93 @@ export function mutationStats(output: string | undefined): string | undefined {
 }
 
 // Some tool names are shown with a friendlier, localized label instead of the
-// raw identifier. Labels use the perfective ("完成时") form so the transcript
-// reads as completed actions (e.g. 已浏览 / Listed) rather than in progress.
-const TOOL_DISPLAY_LABELS: Record<string, { zh: string; en: string }> = {
-  list_files: { zh: '已浏览', en: 'Listed' },
-  read_file: { zh: '已探索', en: 'Explored' },
-  search_text: { zh: '已搜索', en: 'Searched' },
-  apply_patch: { zh: '已编辑', en: 'Edited' },
-  write_file: { zh: '已写入', en: 'Written' },
-  run_command: { zh: '已执行', en: 'Ran' },
-  git_status: { zh: '已查Git状态', en: 'Git status checked' },
-  git_diff: { zh: '已查Git差异', en: 'Git diff checked' },
-  git_log: { zh: '已查Git历史', en: 'Git log checked' },
-  git_show: { zh: '已查Git提交', en: 'Git show checked' },
-  read_skill: { zh: '已读取技能', en: 'Read skill' },
-  read_skill_resource: { zh: '已读技能资源', en: 'Read skill resource' },
+// raw identifier. Each label carries three tenses so the transcript mirrors
+// the tool's lifecycle: progressive while requested/running (e.g. 浏览中 /
+// Listing), perfective after success (已浏览 / Listed), and a failure form
+// when the call ends in an error (浏览失败 / List failed).
+interface ToolDisplayLabel {
+  zh: { active: string; done: string; failed: string };
+  en: { active: string; done: string; failed: string };
+}
+
+const TOOL_DISPLAY_LABELS: Record<string, ToolDisplayLabel> = {
+  list_files: {
+    zh: { active: '浏览中', done: '已浏览', failed: '浏览失败' },
+    en: { active: 'Listing', done: 'Listed', failed: 'List failed' },
+  },
+  read_file: {
+    zh: { active: '探索中', done: '已探索', failed: '探索失败' },
+    en: { active: 'Exploring', done: 'Explored', failed: 'Read failed' },
+  },
+  search_text: {
+    zh: { active: '搜索中', done: '已搜索', failed: '搜索失败' },
+    en: { active: 'Searching', done: 'Searched', failed: 'Search failed' },
+  },
+  apply_patch: {
+    zh: { active: '编辑中', done: '已编辑', failed: '编辑失败' },
+    en: { active: 'Editing', done: 'Edited', failed: 'Edit failed' },
+  },
+  write_file: {
+    zh: { active: '写入中', done: '已写入', failed: '写入失败' },
+    en: { active: 'Writing', done: 'Written', failed: 'Write failed' },
+  },
+  run_command: {
+    zh: { active: '执行中', done: '已执行', failed: '执行失败' },
+    en: { active: 'Running', done: 'Ran', failed: 'Command failed' },
+  },
+  git_status: {
+    zh: { active: '查Git状态中', done: '已查Git状态', failed: '查Git状态失败' },
+    en: {
+      active: 'Checking Git status',
+      done: 'Git status checked',
+      failed: 'Git status check failed',
+    },
+  },
+  git_diff: {
+    zh: { active: '查Git差异中', done: '已查Git差异', failed: '查Git差异失败' },
+    en: { active: 'Checking Git diff', done: 'Git diff checked', failed: 'Git diff check failed' },
+  },
+  git_log: {
+    zh: { active: '查Git历史中', done: '已查Git历史', failed: '查Git历史失败' },
+    en: { active: 'Checking Git log', done: 'Git log checked', failed: 'Git log check failed' },
+  },
+  git_show: {
+    zh: { active: '查Git提交中', done: '已查Git提交', failed: '查Git提交失败' },
+    en: { active: 'Checking Git show', done: 'Git show checked', failed: 'Git show check failed' },
+  },
+  read_skill: {
+    zh: { active: '读取技能中', done: '已读取技能', failed: '读取技能失败' },
+    en: { active: 'Reading skill', done: 'Read skill', failed: 'Skill read failed' },
+  },
+  read_skill_resource: {
+    zh: { active: '读取技能资源中', done: '已读技能资源', failed: '读取技能资源失败' },
+    en: {
+      active: 'Reading skill resource',
+      done: 'Read skill resource',
+      failed: 'Skill resource read failed',
+    },
+  },
+  web_fetch: {
+    zh: { active: '抓取网页中', done: '已抓取网页', failed: '抓取网页失败' },
+    en: { active: 'Fetching page', done: 'Fetched page', failed: 'Page fetch failed' },
+  },
+  web_search: {
+    zh: { active: '搜索网页中', done: '已搜索网页', failed: '搜索网页失败' },
+    en: { active: 'Searching web', done: 'Searched web', failed: 'Web search failed' },
+  },
+  todo_write: {
+    zh: { active: '更新任务清单中', done: '已更新任务清单', failed: '更新任务清单失败' },
+    en: { active: 'Updating todos', done: 'Updated todos', failed: 'Todo update failed' },
+  },
 };
 
-function toolDisplayName(name: string, language: Language): string {
+function toolDisplayName(name: string, language: Language, status: ToolViewStatus): string {
   const label = TOOL_DISPLAY_LABELS[name];
   if (label === undefined) return name;
-  return language === 'zh-CN' ? label.zh : label.en;
+  const forms = language === 'zh-CN' ? label.zh : label.en;
+  if (status === 'succeeded') return forms.done;
+  if (status === 'failed') return forms.failed;
+  return forms.active;
 }
 
 // Tool calls render as compact single lines so long tool chains do not flood
@@ -704,7 +848,7 @@ function toolLine(
 } {
   const duration = tool.durationMs === undefined ? '' : ` ${formatDuration(tool.durationMs)}`;
   const detail = toolArgumentPreview(tool.arguments);
-  const name = toolDisplayName(tool.name, language);
+  const name = toolDisplayName(tool.name, language, tool.status);
   if (tool.status === 'failed') {
     return { prefix: '✗', name: `${name}${duration}`, detail, stats: undefined, color: 'red' };
   }
@@ -1290,7 +1434,13 @@ export function EffortPicker({
   const chosen = EFFORT_CHOICES[selected] ?? 'none';
   markerPad += Math.floor(chosen.length / 2);
   return (
-    <Box flexDirection="column" paddingX={3} paddingY={1} borderStyle="single" borderColor={EFFORT_ACCENT_COLOR}>
+    <Box
+      flexDirection="column"
+      paddingX={3}
+      paddingY={1}
+      borderStyle="single"
+      borderColor={EFFORT_ACCENT_COLOR}
+    >
       <Text bold>{zh ? '思考强度' : 'Effort'}</Text>
       <Box marginTop={1} paddingLeft={6} width={68} justifyContent="space-between">
         <Text dimColor>{zh ? '更快' : 'Faster'}</Text>
@@ -1313,7 +1463,9 @@ export function EffortPicker({
           </Text>
         ))}
       </Box>
-      <Text dimColor>{zh ? '←/→ 调整 · Enter 确认 · Esc 取消' : '←/→ adjust · Enter confirm · Esc cancel'}</Text>
+      <Text dimColor>
+        {zh ? '←/→ 调整 · Enter 确认 · Esc 取消' : '←/→ adjust · Enter confirm · Esc cancel'}
+      </Text>
       <Text dimColor>{zh ? `当前：${current}` : `Current: ${current}`}</Text>
     </Box>
   );
@@ -1393,6 +1545,69 @@ export function SessionPicker({
   );
 }
 
+/** A keyboard-first model switcher opened by a bare `/model`. */
+export function ModelPicker({
+  models,
+  selected,
+  current,
+  language = 'en',
+  columns,
+}: {
+  models: readonly string[];
+  selected: number;
+  current: string;
+  language?: Language;
+  columns: number;
+}): React.ReactElement {
+  const zh = language === 'zh-CN';
+  const width = Math.max(1, Math.min(92, columns - 4));
+  const visibleRows = 8;
+  const start = Math.max(
+    0,
+    Math.min(selected - Math.floor(visibleRows / 2), models.length - visibleRows),
+  );
+  const visible = models.slice(start, start + visibleRows);
+  return (
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor="magenta"
+      paddingX={1}
+      width={width}
+    >
+      <Box justifyContent="space-between">
+        <Text color="magenta" bold>
+          {zh ? '模型选择器' : 'MODEL PICKER'}
+        </Text>
+        <Text dimColor>{`${String(models.length)} ${zh ? '个模型' : 'models'}`}</Text>
+      </Box>
+      <Text dimColor>
+        {zh ? '↑/↓ 选择 · Enter 切换 · Esc 关闭' : '↑/↓ select · Enter switch · Esc close'}
+      </Text>
+      <Text color="gray">{'─'.repeat(Math.max(1, width - 4))}</Text>
+      {visible.map((model, offset) => {
+        const index = start + offset;
+        const isCurrent = model === current;
+        return (
+          <Text
+            key={model}
+            {...(index === selected ? { color: 'magenta' } : {})}
+            bold={index === selected}
+            wrap="truncate-end"
+          >
+            {`${index === selected ? '›' : ' '} ${isCurrent ? '●' : ' '} ${model}${isCurrent ? ` (${zh ? '当前' : 'current'})` : ''}`}
+          </Text>
+        );
+      })}
+      {models.length > visibleRows ? (
+        <Text
+          dimColor
+        >{`${String(start + 1)}-${String(Math.min(models.length, start + visibleRows))} / ${String(models.length)}`}</Text>
+      ) : null}
+    </Box>
+  );
+}
+
 export function TuiApp({
   initialRuntime,
   runtimeFactory,
@@ -1444,6 +1659,10 @@ export function TuiApp({
   // highlighted effort level. Opened by a bare `/effort`, adjusted with
   // ←/→, confirmed with Enter, dismissed with Esc (or Ctrl+C).
   const [effortPicker, setEffortPicker] = useState<number | null>(null);
+  // Model picker state: null when closed, otherwise the index of the
+  // highlighted model. Opened by a bare `/model`, adjusted with ↑/↓,
+  // confirmed with Enter, dismissed with Esc (or Ctrl+C).
+  const [modelPicker, setModelPicker] = useState<number | null>(null);
   // Loaded on demand for `/sessions`; the picker holds keyboard focus until
   // the user resumes a session or closes it.
   const [sessionPicker, setSessionPicker] = useState<SessionRecord[] | null>(null);
@@ -1458,6 +1677,9 @@ export function TuiApp({
   const lastReasoningEffortRef = useRef<ReasoningEffort | undefined>(undefined);
   const historyRef = useRef<string[]>([]);
   const historyIndexRef = useRef(-1);
+  // The last prompt the user actually submitted (slash commands excluded);
+  // /retry replays it verbatim, e.g. after switching the model or mode.
+  const lastPromptRef = useRef<string | undefined>(undefined);
   // Transcript scroll position in rendered lines from the top; -1 = pinned to the latest message.
   const [topLine, setTopLine] = useState(-1);
   // Stream deltas arrive many times per second; batching them into one state
@@ -1841,6 +2063,9 @@ export function TuiApp({
           return next;
         });
         setStatus(result.status === 'cancelled' ? 'Cancelled' : 'Ready');
+        if (result.status === 'failed' && result.error !== undefined) {
+          appendSystem(`${result.error.code}: ${result.error.message}`, 'error');
+        }
         if (!nested && activeRuntime.session !== undefined) {
           const session = activeRuntime.session;
           const contextChars = sessionContextChars(session);
@@ -1969,6 +2194,18 @@ export function TuiApp({
             const next = await runtimeFactory(command.id);
             swapRuntime(next);
             appendSystem(`Resumed session ${next.session?.id ?? command.id}`);
+          }
+        } else if (command.kind === 'retry') {
+          const previous = lastPromptRef.current;
+          if (previous === undefined) {
+            appendSystem(
+              languageRef.current === 'zh-CN'
+                ? '没有可重试的提示词；先提交一条提示词。'
+                : 'Nothing to retry; submit a prompt first.',
+              'error',
+            );
+          } else {
+            await runPrompt(previous);
           }
         } else if (command.kind === 'status') {
           const active = runtimeRef.current;
@@ -2100,22 +2337,22 @@ export function TuiApp({
           // Open the interactive picker; the selected level is applied on
           // Enter (see the effortPicker branch in useInput).
           const index = EFFORT_CHOICES.indexOf(runtimeRef.current.config.reasoning);
+          setModelPicker(null);
           setEffortPicker(index < 0 ? 0 : index);
         } else if (command.kind === 'model') {
           const nextModel = command.value.trim();
-          const active = runtimeRef.current;
           if (nextModel.length === 0) {
-            appendSystem(`Current model: ${active.config.model}\nUsage: /model <model-name>`);
-          } else if (nextModel === active.config.model) {
-            appendSystem(`Model is already set to ${nextModel}.`);
+            // Bare /model opens the picker; /model NAME switches directly.
+            const models = modelsForProvider(
+              runtimeRef.current.config.provider,
+              runtimeRef.current.config.customEndpoints,
+              runtimeRef.current.config.model,
+            );
+            const index = models.indexOf(runtimeRef.current.config.model);
+            setEffortPicker(null);
+            setModelPicker(index < 0 ? 0 : index);
           } else {
-            active.config.model = nextModel;
-            if (active.session !== undefined) {
-              active.session.model = nextModel;
-              await active.sessions.save(active.session);
-            }
-            setRuntime({ ...active });
-            appendSystem(`Model set to ${nextModel} for this session.`);
+            await setActiveModel(nextModel);
           }
         } else if (command.kind === 'plan') {
           if (command.value.length === 0) {
@@ -2224,6 +2461,8 @@ export function TuiApp({
             const activeIndex = sessions.findIndex(
               (session) => session.id === runtimeRef.current.session?.id,
             );
+            setEffortPicker(null);
+            setModelPicker(null);
             setSessionPickerSelection(activeIndex < 0 ? 0 : activeIndex);
             setSessionPicker(sessions);
           }
@@ -2265,6 +2504,86 @@ export function TuiApp({
             } else {
               appendSystem(result.stdout || '(no diff)', 'system', 'diff');
             }
+          }
+        } else if (command.kind === 'review') {
+          if (!(await detectGitAvailability()).available) {
+            appendSystem(
+              'Git is not installed or not on PATH; /review is unavailable (Git is optional).',
+              'error',
+            );
+            return;
+          }
+          const inspection = await inspectWorkingTree(runtimeRef.current.workspace);
+          if (inspection.status === 'not-a-repository') {
+            appendSystem(
+              'The workspace is not a Git repository; /review is unavailable here.',
+              'error',
+            );
+            return;
+          }
+          if (inspection.status === 'clean') {
+            appendSystem('Nothing to review; the working tree is clean.');
+            return;
+          }
+          const review = await runPrompt(REVIEW_PROMPT, '/review — 审查工作区差异', {
+            ephemeral: true,
+            plan: true,
+            nested: true,
+          });
+          if (review === undefined) {
+            appendSystem('Review failed: the agent could not produce findings.', 'error');
+          } else if (review.status === 'cancelled') {
+            appendSystem('Review cancelled.', 'error');
+          }
+        } else if (command.kind === 'security-review') {
+          if (!(await detectGitAvailability()).available) {
+            appendSystem(
+              'Git is not installed or not on PATH; /security-review is unavailable (Git is optional).',
+              'error',
+            );
+            return;
+          }
+          const inspection = await inspectWorkingTree(runtimeRef.current.workspace);
+          if (inspection.status === 'not-a-repository') {
+            appendSystem(
+              'The workspace is not a Git repository; /security-review is unavailable here.',
+              'error',
+            );
+            return;
+          }
+          if (inspection.status === 'clean') {
+            appendSystem('Nothing to review; the working tree is clean.');
+            return;
+          }
+          const displayPrompt =
+            command.args.length === 0
+              ? '/security-review — 安全审查工作区差异'
+              : `/security-review ${command.args.join(' ')} — 安全审查指定路径`;
+          const review = await runPrompt(
+            securityReviewPrompt(command.args),
+            displayPrompt,
+            {
+              ephemeral: true,
+              plan: true,
+              nested: true,
+            },
+          );
+          if (review === undefined) {
+            appendSystem(
+              'Security review failed: the agent could not produce findings.',
+              'error',
+            );
+          } else if (review.status === 'cancelled') {
+            appendSystem('Security review cancelled.', 'error');
+          }
+        } else if (command.kind === 'todos') {
+          const todos = runtimeRef.current.todos.list();
+          if (todos.length === 0) {
+            appendSystem(
+              'No todos yet. Ask the agent to track a multi-step task, or the agent adds them automatically.',
+            );
+          } else {
+            appendSystem(renderTodos(todos), 'system');
           }
         } else if (command.kind === 'commit') {
           const workspace = runtimeRef.current.workspace;
@@ -2398,6 +2717,7 @@ export function TuiApp({
     );
     historyIndexRef.current = -1;
     applyDraft('', 0);
+    if (command.kind === 'prompt') lastPromptRef.current = command.value;
     void runCommand(command);
   }, [applyDraft, runCommand]);
 
@@ -2427,6 +2747,28 @@ export function TuiApp({
           'error',
         );
       }
+    },
+    [appendSystem],
+  );
+
+  // Applies the model chosen in the /model picker (or by `/model NAME`) to
+  // the active session. The runner reads the same config object, so the next
+  // request picks the model up without any rebuild; the session record is
+  // saved so /resume and /sessions keep showing the model used.
+  const setActiveModel = useCallback(
+    async (nextModel: string): Promise<void> => {
+      const active = runtimeRef.current;
+      if (nextModel === active.config.model) {
+        appendSystem(`Model is already set to ${nextModel}.`);
+        return;
+      }
+      active.config.model = nextModel;
+      if (active.session !== undefined) {
+        active.session.model = nextModel;
+        await active.sessions.save(active.session);
+      }
+      setRuntime({ ...active });
+      appendSystem(`Model set to ${nextModel} for this session.`);
     },
     [appendSystem],
   );
@@ -2499,6 +2841,27 @@ export function TuiApp({
         } else if (key.rightArrow) {
           setEffortPicker((selected) =>
             selected === null ? selected : (selected + 1) % EFFORT_CHOICES.length,
+          );
+        }
+        return;
+      }
+      if (modelPicker !== null) {
+        const models = modelsForProvider(
+          runtimeRef.current.config.provider,
+          runtimeRef.current.config.customEndpoints,
+          runtimeRef.current.config.model,
+        );
+        if (key.escape || (key.ctrl && input.toLowerCase() === 'c')) {
+          setModelPicker(null);
+        } else if (key.return) {
+          const choice = models[modelPicker];
+          if (choice !== undefined) void setActiveModel(choice);
+          setModelPicker(null);
+        } else if (key.upArrow) {
+          setModelPicker((selected) => (selected === null ? selected : Math.max(0, selected - 1)));
+        } else if (key.downArrow) {
+          setModelPicker((selected) =>
+            selected === null ? selected : selected >= models.length - 1 ? 0 : selected + 1,
           );
         }
         return;
@@ -2850,6 +3213,19 @@ export function TuiApp({
           current={runtime.config.reasoning}
           selected={effortPicker}
           language={language}
+        />
+      )}
+      {modelPicker === null ? null : (
+        <ModelPicker
+          models={modelsForProvider(
+            runtime.config.provider,
+            runtime.config.customEndpoints,
+            runtime.config.model,
+          )}
+          selected={modelPicker}
+          current={runtime.config.model}
+          language={language}
+          columns={columns}
         />
       )}
       {sessionPicker === null ? null : (

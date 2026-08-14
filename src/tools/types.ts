@@ -5,6 +5,7 @@ import type {
   ToolResult,
 } from '../types.js';
 import type { SkillCatalog } from '../types.js';
+import type { TodoStore } from '../core/todos.js';
 
 export type ToolName =
   | 'list_files'
@@ -17,6 +18,9 @@ export type ToolName =
   | 'git_diff'
   | 'git_log'
   | 'git_show'
+  | 'web_fetch'
+  | 'web_search'
+  | 'todo_write'
   | 'read_skill'
   | 'read_skill_resource';
 
@@ -32,6 +36,14 @@ export interface ToolContextOptions {
   approve?: (request: ApprovalRequest) => boolean | Promise<boolean>;
   hooks?: ToolLifecycleHooks;
   skillCatalog?: SkillCatalog;
+  /**
+   * Test and local-tool escape hatch: when true, web_fetch may target
+   * private, loopback, and link-local addresses. The CLI never sets this.
+   */
+  allowPrivateAddresses?: boolean;
+  /** Test-only override for the web_search endpoint. The CLI never sets this. */
+  webSearchEndpoint?: string;
+  todos?: TodoStore;
 }
 
 export interface ResolvedToolContext {
@@ -44,6 +56,9 @@ export interface ResolvedToolContext {
   onMutation?: (mutation: MutationTransaction) => void | Promise<void>;
   approve?: (request: ApprovalRequest) => boolean | Promise<boolean>;
   skillCatalog?: SkillCatalog;
+  allowPrivateAddresses?: boolean;
+  webSearchEndpoint?: string;
+  todos?: TodoStore;
 }
 
 export interface ApprovalRequest {

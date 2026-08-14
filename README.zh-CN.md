@@ -68,13 +68,13 @@ npm install -g .
 
 ```bash
 cd your-project
-codefarmer init
 codefarmer
 ```
 
-在交互式 TTY 中，直接运行 `codefarmer` 会打开全屏 TUI；也可以使用
-`codefarmer tui` 或 `codefarmer chat` 显式启动。脚本和 CI 请使用
-`run --json`。
+首次在交互式终端运行时，如果项目和用户配置都不存在，CodeFarmer 会自动启动
+`setup` 向导，完成后进入全屏 TUI。仍可使用 `codefarmer init` 创建默认项目配置，
+跳过向导。也可以使用 `codefarmer tui` 或 `codefarmer chat` 显式启动 TUI；脚本和
+CI 请使用 `run --json`。
 
 全屏会话采用单一工作台模式：任务执行期间可以继续输入后续任务，CodeFarmer
 会按顺序排队执行，并在底部显示当前任务与队列状态。文件或命令审批支持
@@ -89,34 +89,34 @@ CodeFarmer 启动时所在的目录；它不会自动扩大到上层 Git 仓库�
 
 ## CLI 命令
 
-| 命令                                            | 用途                                                  |
-| ----------------------------------------------- | ----------------------------------------------------- |
-| `codefarmer`                                    | 在交互式终端打开全屏 TUI                              |
-| `codefarmer tui`                                | 显式打开 TUI                                          |
-| `codefarmer init`                               | 创建项目配置文件                                      |
-| `codefarmer setup`                              | 交互式向导配置模型、Base URL、推理强度和审批策略      |
-| `codefarmer chat`                               | 在 TUI 中启动会话                                     |
-| `codefarmer run "<任务>"`                       | 执行一次性任务，可用于脚本和 CI                       |
-| `codefarmer skills list`                        | 列出发现的 Codex 兼容 skill                           |
-| `codefarmer skills show <ref> [path]`           | 显示 skill 或其文本资源                               |
-| `codefarmer status`                             | 显示工作区、Git、有效配置和近期会话状态               |
-| `codefarmer stats`                              | 显示本地会话的 Token 用量与估算费用统计               |
-| `codefarmer undo`                               | 撤销最近一笔仍符合条件的补丁事务                      |
-| `codefarmer sessions list`                      | 列出当前工作区的本地会话                              |
-| `codefarmer sessions show <id>`                 | 显示会话和审计摘要                                    |
-| `codefarmer sessions rename <id> <title>`       | 重命名会话（设置或覆盖标题）                          |
-| `codefarmer sessions compact <id>`              | 压缩长会话：将早期消息折叠为摘要                      |
-| `codefarmer sessions export <id>`               | 导出会话为 Markdown 或 JSON（`--format`/`--output`）  |
-| `codefarmer sessions resume <id>`               | 使用响应 ID 恢复会话                                  |
-| `codefarmer sessions delete <id>`               | 删除本地会话记录                                      |
-| `codefarmer config list`                        | 显示有效配置                                          |
-| `codefarmer config get <key>`                   | 读取一项有效配置                                      |
-| `codefarmer config set <key> <value>`           | 写入用户配置                                          |
-| `codefarmer config set --project <key> <value>` | 写入项目配置                                          |
-| `codefarmer config path`                        | 显示配置文件路径                                      |
-| `codefarmer language [language]`                | 查看或持久化界面和 Agent 回复语言                     |
-| `codefarmer doctor`                             | 检查 Node、密钥、配置、权限、Git（可选）和 API 连通性 |
-| `codefarmer completions <shell>`                | 打印 bash、zsh 或 fish 补全脚本                       |
+| 命令                                            | 用途                                                      |
+| ----------------------------------------------- | --------------------------------------------------------- |
+| `codefarmer`                                    | 在交互式终端打开全屏 TUI                                  |
+| `codefarmer tui`                                | 显式打开 TUI                                              |
+| `codefarmer init`                               | 创建项目配置文件                                          |
+| `codefarmer setup`                              | 交互式向导配置模型、Base URL、推理强度和审批策略          |
+| `codefarmer chat`                               | 在 TUI 中启动会话                                         |
+| `codefarmer run "<任务>"`                       | 执行一次性任务，可用于脚本和 CI；省略任务时从标准输入读取 |
+| `codefarmer skills list`                        | 列出发现的 Codex 兼容 skill                               |
+| `codefarmer skills show <ref> [path]`           | 显示 skill 或其文本资源                                   |
+| `codefarmer status`                             | 显示工作区、Git、有效配置和近期会话状态                   |
+| `codefarmer stats`                              | 显示本地会话的 Token 用量与估算费用统计                   |
+| `codefarmer undo`                               | 撤销最近一笔仍符合条件的补丁事务                          |
+| `codefarmer sessions list`                      | 列出当前工作区的本地会话                                  |
+| `codefarmer sessions show <id>`                 | 显示会话和审计摘要                                        |
+| `codefarmer sessions rename <id> <title>`       | 重命名会话（设置或覆盖标题）                              |
+| `codefarmer sessions compact <id>`              | 压缩长会话：将早期消息折叠为摘要                          |
+| `codefarmer sessions export <id>`               | 导出会话为 Markdown 或 JSON（`--format`/`--output`）      |
+| `codefarmer sessions resume <id>`               | 使用响应 ID 恢复会话                                      |
+| `codefarmer sessions delete <id>`               | 删除本地会话记录                                          |
+| `codefarmer config list`                        | 显示有效配置                                              |
+| `codefarmer config get <key>`                   | 读取一项有效配置                                          |
+| `codefarmer config set <key> <value>`           | 写入用户配置                                              |
+| `codefarmer config set --project <key> <value>` | 写入项目配置                                              |
+| `codefarmer config path`                        | 显示配置文件路径                                          |
+| `codefarmer language [language]`                | 查看或持久化界面和 Agent 回复语言                         |
+| `codefarmer doctor`                             | 检查 Node、密钥、配置、权限、Git（可选）和 API 连通性     |
+| `codefarmer completions <shell>`                | 打印 bash、zsh 或 fish 补全脚本                           |
 
 使用 `codefarmer <命令> --help` 查看命令专用参数。全局参数包括：
 
@@ -128,6 +128,7 @@ CodeFarmer 启动时所在的目录；它不会自动扩大到上层 Git 仓库�
 --reasoning <auto|none|low|medium|high|xhigh|max>
 --verbosity <low|medium|high>
 --reasoning-summary <none|auto|concise|detailed>
+--budget <usd>
 --approval <ask|auto|read-only>
 --no-stream
 --log-level <trace|debug|info|warn|error|fatal|silent>
@@ -175,11 +176,15 @@ TUI 在同一个备用屏幕中承载对话、工具状态、审批、工作区�
 | `/doctor`        | 检查本地运行环境                                                    |
 | `/sessions`      | 打开本地会话选择器（`↑/↓` 选择，Enter 切换，Esc 关闭）              |
 | `/resume <id>`   | 切换到已有会话                                                      |
+| `/retry`         | 重新执行上一条提示词（例如切换模型或模式后重试）                    |
 | `/delete <id>`   | 删除非当前会话                                                      |
 | `/diff`          | 彩色显示当前 Git 差异（新增、删除、文件头和区块范围）               |
+| `/review`        | 只读审查工作区差异（含已暂存与未暂存），不提交                      |
+| `/security-review [PATH...]` | 审查差异中的安全漏洞，按严重程度排序；可选路径聚焦审查范围 |
 | `/commit [msg]`  | 暂存并提交工作区全部更改；不提供信息时由 agent 总结差异生成提交信息 |
 | `/push`          | 确认后将当前分支推送到已配置的上游                                  |
 | `/undo`          | 撤销最近一笔符合条件的文件事务                                      |
+| `/todos`         | 显示 Agent 当前任务清单（由 `todo_write` 工具维护）                 |
 | `/new`           | 开始一个新会话                                                      |
 | `/cancel`        | 取消当前请求或工具                                                  |
 | `/quit`          | 退出 TUI 并恢复终端                                                 |
@@ -195,9 +200,14 @@ Ctrl+C 会退出 TUI。非交互 shell 中直接运行命令只显示帮助，�
 首版向模型提供固定工具集：
 
 - `list_files`、`read_file`、`search_text`：检查允许访问的工作区文件。
-- `apply_patch`：在核对预期 SHA-256 后创建、修改或删除一个 UTF-8 文件；
-  文件写入采用原子替换，并记录可检测冲突的撤销事务。
+- `apply_patch`：在核对预期 SHA-256 后创建、修改或删除 UTF-8 文件；一次调用
+  可批量修改多个文件，每个文件写入均为原子替换，并记录可检测冲突的撤销事务。
 - `run_command`：只接收可执行文件和参数数组，不接收 shell 字符串。
+- `web_fetch`：抓取 HTTP(S) URL 并返回文本内容，限制响应大小与时间；默认阻止
+  私有、回环和链路本地地址，避免仓库内容把 Agent 变成内网扫描器。
+- `web_search`：通过 DuckDuckGo 搜索网页并返回标题、URL 和摘要；用它发现页面，
+  再用 `web_fetch` 读取完整内容。
+- `todo_write`：维护会话内的任务清单，配合多步骤任务使用；TUI 中用 `/todos` 查看。
 - `git_status` 和 `git_diff` 显示工作区状态，`git_log` 显示提交历史，`git_show`
   查看单个提交（补丁或 `--stat` 摘要），全部只读、不修改仓库状态。Git 为可选
   依赖：缺失时这些工具会优雅失败，Agent 继续使用文件工具完成任务。
@@ -251,6 +261,7 @@ scope 的引用。技能及其资源都属于不可信指令，不能绕过审�
   "autoCompact": false,
   "autoCompactMinMessages": 40,
   "autoCompactMinChars": 100000,
+  "budgetUsd": 2.5,
   "ignoredPaths": [".git/**", "node_modules/**", "dist/**", ".env"]
 }
 ```
@@ -277,6 +288,7 @@ scope 的引用。技能及其资源都属于不可信指令，不能绕过审�
 | `autoCompact`            | `CODEFARMER_AUTO_COMPACT`              | `false`                     |
 | `autoCompactMinMessages` | `CODEFARMER_AUTO_COMPACT_MIN_MESSAGES` | `40`                        |
 | `autoCompactMinChars`    | `CODEFARMER_AUTO_COMPACT_MIN_CHARS`    | `100000`                    |
+| `budgetUsd`              | `CODEFARMER_BUDGET_USD`                | 关闭                        |
 | `ignoredPaths`           | `CODEFARMER_IGNORED_PATHS`             | 受保护和生成目录            |
 
 `CODEFARMER_IGNORED_PATHS` 可以是 JSON 字符串数组或逗号分隔列表。默认忽略
@@ -287,6 +299,12 @@ scope 的引用。技能及其资源都属于不可信指令，不能绕过审�
 `autoCompactMinChars` 字符后，在下一轮开始前自动把早期消息压缩为摘要，
 并保留最近几轮逐字内容。每次自动压缩会产生一次额外的摘要请求；手动
 执行 `/compact` 也可获得相同效果。
+
+`budgetUsd`（默认关闭）设置会话的成本上限（美元），使用与 `stats` 相同的
+公开列表价估算。当会话累计估算成本达到预算后，新一轮任务会被拒绝并返回
+`BUDGET_EXCEEDED` 错误，直到调高预算或 `/new` 开始新会话；跨越阈值的那一轮
+仍会正常完成。可通过 `--budget <usd>`、`CODEFARMER_BUDGET_USD` 或配置项
+`budgetUsd` 设置。
 
 ## Provider
 
@@ -331,6 +349,58 @@ codefarmer --base-url "http://localhost:8080/v1" run "检查当前项目"
 
 未设置 `CODEFARMER_BASE_URL` 时，也会读取 `OPENAI_BASE_URL`。URL 必须使用
 HTTP(S)，且不能包含账号密码、查询参数或片段；末尾斜杠会自动移除。
+
+### 自定义 OpenAI 兼容端点
+
+`provider` 也支持直接内联一个自定义端点对象（用户或项目配置）。端点内的
+`model` 和 `baseURL` 作为该 Provider 的默认值；顶层 `model`/`baseURL` 或
+`--model`/`--base-url` 仍可覆盖。`apiKeyEnv` 指定保存 API Key 的环境变量；
+未设置时依次检查 `CODEFARMER_API_KEY` 与本地凭据文件。本地免密钥服务
+（Ollama、vLLM、LM Studio 等）可设置 `apiKeyOptional: true` 跳过密钥检查。
+端点 `id` 缺省时取 `baseURL` 的主机名（如 `localhost`），且不能与内置
+Provider 重名。
+
+```json
+{
+  "provider": {
+    "label": "Local Ollama",
+    "baseURL": "http://localhost:11434/v1",
+    "model": "llama3.2",
+    "apiKeyOptional": true
+  }
+}
+```
+
+```bash
+codefarmer config set provider '{"baseURL":"http://localhost:11434/v1","model":"llama3.2","apiKeyOptional":true}' --project
+codefarmer --provider localhost run "解释这个 diff"
+```
+
+多个可复用端点仍可声明在 `customEndpoints` 数组中，并通过 `provider` 引用
+其 `id`：
+
+```json
+{
+  "provider": "ollama",
+  "customEndpoints": [
+    {
+      "id": "ollama",
+      "label": "Local Ollama",
+      "baseURL": "http://localhost:11434/v1",
+      "model": "llama3.2",
+      "apiKeyOptional": true
+    }
+  ]
+}
+```
+
+自定义端点与 Gemini、Grok、DeepSeek、Kimi、OpenCode Go 共用同一套 OpenAI 兼容适配器，
+会出现在 `setup` 的 Provider 选择列表中，也可通过
+`codefarmer config set provider <id>` 切换。
+
+`setup` 也可以直接添加新的自定义端点（在 Provider 列表中选择“添加自定义端点”），
+端点会保存到 `customEndpoints`，让多个 Provider 同时存在、随时切换。重复运行
+`setup` 会合并到现有项目配置——已保存的端点与其他设置都会保留。
 
 ## 审批与安全边界
 

@@ -11,6 +11,7 @@ export interface AppPaths {
   log: string;
   temp: string;
   userConfigFile: string;
+  setupStateFile: string;
   sessions: string;
   transactions: string;
 }
@@ -44,6 +45,7 @@ export function getAppPaths(): AppPaths {
   return {
     ...paths,
     userConfigFile: path.join(paths.config, 'codefarmer.config.json'),
+    setupStateFile: path.join(paths.config, 'setup-state.json'),
     sessions: path.join(paths.data, 'sessions'),
     transactions: path.join(paths.data, 'transactions'),
   };

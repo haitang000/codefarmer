@@ -1,10 +1,12 @@
 import { Command, CommanderError, Option } from 'commander';
 
 import { AppError, ConfigError, EXIT_CODES, formatAppError, toAppError } from './infra/errors.js';
+import { loadConfigDetails } from './infra/config.js';
+import { canonicalWorkspace, getAppPaths } from './infra/paths.js';
+import { fileExists } from './infra/persistence.js';
 import type {
   ApprovalPolicy,
   LogLevel,
-  ProviderId,
   ReasoningEffort,
   ReasoningSummary,
   TextVerbosity,
@@ -37,10 +39,18 @@ import type { PushOptions } from './cli/commands.js';
 import type { GlobalOptions } from './cli/runtime.js';
 import type { SessionExportFormat } from './cli/session-export.js';
 
+function parseBudgetUsd(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new ConfigError('--budget 必须是正数（USD）');
+  }
+  return parsed;
+}
+
 function globals(command: Command): GlobalOptions {
   const options = command.optsWithGlobals<{
     cwd?: string;
-    provider?: ProviderId;
+    provider?: string;
     model?: string;
     baseUrl?: string;
     language?: 'en' | 'zh-CN';
@@ -49,6 +59,7 @@ function globals(command: Command): GlobalOptions {
     reasoningSummary?: ReasoningSummary;
     approval?: ApprovalPolicy;
     stream?: boolean;
+    budget?: string;
     logLevel?: LogLevel;
     verbose?: boolean;
   }>();
@@ -68,6 +79,7 @@ function globals(command: Command): GlobalOptions {
       : { reasoningSummary: options.reasoningSummary }),
     ...(options.approval === undefined ? {} : { approval: options.approval }),
     ...(streamSource === 'cli' || streamSource === 'env' ? { stream: options.stream } : {}),
+    ...(options.budget === undefined ? {} : { budgetUsd: parseBudgetUsd(options.budget) }),
     ...(options.logLevel === undefined ? {} : { logLevel: options.logLevel }),
     ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
   };
@@ -86,6 +98,14 @@ async function launchTui(
     program.outputHelp();
     return;
   }
+  const workspace = await canonicalWorkspace(globalOptions.cwd ?? process.cwd());
+  const configDetails = await loadConfigDetails({ cwd: workspace });
+  const setupCompleted = await fileExists(getAppPaths().setupStateFile);
+  if (!setupCompleted && !configDetails.loadedProjectConfig && !configDetails.loadedUserConfig) {
+    process.stdout.write('检测到这是 CodeFarmer 的首次运行，先完成 setup 配置。\n');
+    await setupAction(globalOptions);
+    if (!(await fileExists(getAppPaths().setupStateFile))) return;
+  }
   // Keep the TUI (and its renderer dependencies) out of help, JSON, and piped invocations.
   const { runTui } = await import('./tui/index.js');
   await runTui(globalOptions, sessionId, plan);
@@ -100,7 +120,12 @@ program
   .helpOption('-h, --help', '显示帮助')
   .helpCommand('help [command]', '显示命令帮助')
   .option('--cwd <path>', '工作区目录')
-  .addOption(new Option('--provider <provider>', 'AI Provider').choices(['openai', 'gemini', 'grok', 'deepseek', 'kimi']))
+  .addOption(
+    new Option(
+      '--provider <provider>',
+      'AI Provider（内置 openai/gemini/grok/deepseek/kimi/opencode-go，或 customEndpoints 中定义的 id）',
+    ),
+  )
   .option('--model <model>', '模型')
   .option('--base-url <url>', 'API Base URL')
   .addOption(new Option('--language <language>', '界面和 Agent 回复语言').choices(['en', 'zh-CN']))
@@ -124,6 +149,7 @@ program
       'detailed',
     ]),
   )
+  .option('--budget <usd>', '会话成本预算（美元）：累计估算成本达到后阻止新任务')
   .addOption(new Option('--approval <policy>', '审批策略').choices(['ask', 'auto', 'read-only']))
   .option('--no-stream', '关闭流式文本输出')
   .addOption(
@@ -179,7 +205,7 @@ program
 program
   .command('run')
   .description('执行一次性编码任务')
-  .argument('<prompt...>', '任务描述')
+  .argument('[prompt...]', '任务描述（省略时从标准输入读取）')
   .option('--json', '仅输出机器可读 JSON')
   .option('--no-history', '不保存本地会话历史')
   .option('--session <id>', '继续已有会话')
@@ -357,7 +383,6 @@ program
 program.showSuggestionAfterError();
 
 function overrideCommandExits(command: Command): void {
-
   command.exitOverride();
   command.commands.forEach(overrideCommandExits);
 }

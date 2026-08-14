@@ -48,16 +48,31 @@ describe('TUI command parser', () => {
     });
     expect(parseTuiCommand('/config')).toEqual({ kind: 'config' });
     expect(parseTuiCommand('/doctor')).toEqual({ kind: 'doctor' });
+    expect(parseTuiCommand('/diff')).toEqual({ kind: 'diff' });
+    expect(parseTuiCommand('/review')).toEqual({ kind: 'review' });
+    expect(parseTuiCommand('/security-review')).toEqual({ kind: 'security-review', args: [] });
+    expect(parseTuiCommand('/security-review src/auth')).toEqual({
+      kind: 'security-review',
+      args: ['src/auth'],
+    });
+    expect(parseTuiCommand('/security')).toEqual({ kind: 'security-review', args: [] });
+    expect(parseTuiCommand('/sec-review')).toEqual({ kind: 'security-review', args: [] });
+    expect(parseTuiCommand('/todos')).toEqual({ kind: 'todos' });
+    expect(parseTuiCommand('/todo')).toEqual({ kind: 'todos' });
     expect(parseTuiCommand('/resume session-1')).toEqual({
       kind: 'resume',
       id: 'session-1',
     });
+    expect(parseTuiCommand('/retry')).toEqual({ kind: 'retry' });
     expect(parseTuiCommand('/delete session-2')).toEqual({
       kind: 'delete-session',
       id: 'session-2',
     });
     expect(parseTuiCommand('/exit')).toEqual({ kind: 'quit' });
     expect(TUI_HELP).toContain('/undo');
+    expect(TUI_HELP).toContain('/review');
+    expect(TUI_HELP).toContain('/security-review');
+    expect(TUI_HELP).toContain('/todos');
     expect(TUI_HELP).toContain('/context');
     expect(TUI_HELP).toContain('/stats');
     expect(TUI_HELP).toContain('/compact');
@@ -68,6 +83,7 @@ describe('TUI command parser', () => {
     expect(TUI_HELP).toContain('Shift+Tab');
     expect(TUI_HELP).toContain('/init');
     expect(TUI_HELP).toContain('/push');
+    expect(TUI_HELP).toContain('/retry');
     expect(TUI_HELP).toContain('/skills');
     expect(TUI_HELP).toContain('/language');
     expect(TUI_HELP).toContain('saved-session picker');

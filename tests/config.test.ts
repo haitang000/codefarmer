@@ -133,6 +133,67 @@ describe('configuration', () => {
     });
   });
 
+  it('accepts an inline custom endpoint in the provider field', async () => {
+    const cwd = await temporaryDirectory();
+    const projectConfigPath = path.join(cwd, 'codefarmer.config.json');
+    await writeFile(
+      projectConfigPath,
+      JSON.stringify({
+        provider: {
+          label: 'Local Ollama',
+          baseURL: 'http://localhost:11434/v1/',
+          model: 'llama3.2',
+          apiKeyOptional: true,
+        },
+      }),
+    );
+
+    const config = await loadConfig({
+      cwd,
+      env: {},
+      projectConfigPath,
+      userConfigPath: path.join(cwd, 'missing-user.json'),
+    });
+
+    expect(config).toMatchObject({
+      provider: 'localhost',
+      model: 'llama3.2',
+      baseURL: 'http://localhost:11434/v1',
+      customEndpoints: [
+        expect.objectContaining({
+          id: 'localhost',
+          label: 'Local Ollama',
+          model: 'llama3.2',
+          apiKeyOptional: true,
+        }),
+      ],
+    });
+  });
+
+  it('rejects an inline provider object that collides with a built-in id', async () => {
+    const cwd = await temporaryDirectory();
+    const projectConfigPath = path.join(cwd, 'codefarmer.config.json');
+    await writeFile(
+      projectConfigPath,
+      JSON.stringify({
+        provider: {
+          id: 'openai',
+          baseURL: 'http://localhost:11434/v1',
+          model: 'llama3.2',
+        },
+      }),
+    );
+
+    await expect(
+      loadConfig({
+        cwd,
+        env: {},
+        projectConfigPath,
+        userConfigPath: path.join(cwd, 'missing-user.json'),
+      }),
+    ).rejects.toBeInstanceOf(ConfigError);
+  });
+
   it('rejects unknown fields, including persisted API keys', async () => {
     const cwd = await temporaryDirectory();
     const projectConfigPath = path.join(cwd, 'codefarmer.config.json');
@@ -154,6 +215,39 @@ describe('configuration', () => {
       ConfigError,
     );
     expect(() => configFromEnvironment({ CODEFARMER_STORE: 'false' })).toThrow(ConfigError);
+    expect(() => configFromEnvironment({ CODEFARMER_BUDGET_USD: 'free' })).toThrow(ConfigError);
+    expect(() => configFromEnvironment({ CODEFARMER_BUDGET_USD: '-1' })).toThrow(ConfigError);
+  });
+
+  it('reads the cost budget from the environment and configuration files', async () => {
+    const cwd = await temporaryDirectory();
+    const projectConfigPath = path.join(cwd, 'codefarmer.config.json');
+    await writeFile(projectConfigPath, JSON.stringify({ budgetUsd: 2.5 }));
+
+    const config = await loadConfig({
+      cwd,
+      env: { CODEFARMER_BUDGET_USD: '0.05' },
+      projectConfigPath,
+      userConfigPath: path.join(cwd, 'missing-user.json'),
+    });
+    expect(config.budgetUsd).toBe(0.05);
+
+    const fromFileOnly = await loadConfig({
+      cwd,
+      env: {},
+      projectConfigPath,
+      userConfigPath: path.join(cwd, 'missing-user.json'),
+    });
+    expect(fromFileOnly.budgetUsd).toBe(2.5);
+
+    const cliWins = await loadConfig({
+      cwd,
+      env: { CODEFARMER_BUDGET_USD: '0.05' },
+      cli: { budgetUsd: 9.9 },
+      projectConfigPath,
+      userConfigPath: path.join(cwd, 'missing-user.json'),
+    });
+    expect(cliWins.budgetUsd).toBe(9.9);
   });
 
   it('rejects unsafe Base URLs', async () => {

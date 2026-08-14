@@ -1,7 +1,38 @@
 export type ApprovalPolicy = 'ask' | 'auto' | 'read-only';
 
-export const PROVIDER_IDS = ['openai', 'gemini', 'grok', 'deepseek', 'kimi'] as const;
+export const PROVIDER_IDS = ['openai', 'gemini', 'grok', 'deepseek', 'kimi', 'opencode-go'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
+
+/**
+ * 用户自定义的 OpenAI 兼容 API 端点（自定义 Provider）。在配置的
+ * `customEndpoints` 中声明后，可通过 `provider` 字段引用其 `id`。
+ */
+export interface CustomEndpoint {
+  /** 唯一标识，用于 `provider` 字段；不能与内置 Provider 重名。 */
+  id: string;
+  /** 可选显示名称；默认与 `id` 相同。 */
+  label?: string;
+  /** OpenAI 兼容 API Base URL（不含凭据、查询参数或片段）。 */
+  baseURL: string;
+  /** 该端点默认使用的模型。 */
+  model: string;
+  /**
+   * 可选的 API Key 环境变量名；未设置时依次回退到
+   * `CODEFARMER_API_KEY` 与本地凭据文件。
+   */
+  apiKeyEnv?: string;
+  /**
+   * 本地端点（如 Ollama、vLLM）可设为 true 以跳过 API Key 检查；
+   * 请求仍会携带占位 Bearer 令牌。
+   */
+  apiKeyOptional?: boolean;
+}
+
+/**
+ * 内联在配置 `provider` 字段中的自定义端点定义。与 `customEndpoints`
+ * 中的条目一致，但 `id` 可选：缺省时由 `baseURL` 的主机名推导。
+ */
+export type CustomEndpointInput = Omit<CustomEndpoint, 'id'> & { id?: string };
 
 // 'auto' 表示不下发 effort，由模型自行决定思考深度。
 export type ReasoningEffort = 'auto' | 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -37,9 +68,12 @@ export interface JsonObject {
 
 export interface CodeFarmerConfig {
   language: Language;
-  provider: ProviderId;
+  /** 内置 Provider（openai、gemini、grok、deepseek、kimi、opencode-go）或 customEndpoints 中定义的端点 id。 */
+  provider: string;
   model: string;
   baseURL: string;
+  /** 用户自定义的 OpenAI 兼容 API 端点列表。 */
+  customEndpoints: CustomEndpoint[];
   reasoning: ReasoningEffort;
   verbosity: TextVerbosity;
   reasoningSummary: ReasoningSummary;
@@ -62,6 +96,13 @@ export interface CodeFarmerConfig {
   /** Auto-compact once the stored message content exceeds this many chars. */
   autoCompactMinChars: number;
   ignoredPaths: string[];
+  /**
+   * Optional per-session cost ceiling in USD. Once the cumulative estimated
+   * cost of a session reaches this amount (public list prices, like `stats`),
+   * new turns are refused with a BUDGET_EXCEEDED error until the budget is
+   * raised or a new session starts.
+   */
+  budgetUsd?: number;
 }
 
 export interface ToolDefinition {

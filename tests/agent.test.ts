@@ -114,6 +114,7 @@ describe('AgentRunner', () => {
       log: path.join(workspace, 'log'),
       temp: path.join(workspace, 'temp'),
       userConfigFile: path.join(workspace, 'config.json'),
+      setupStateFile: path.join(workspace, 'setup-state.json'),
       sessions: path.join(workspace, 'sessions'),
       transactions: path.join(workspace, 'transactions'),
     });
@@ -188,7 +189,7 @@ describe('AgentRunner', () => {
       input: 'Introduce yourself',
       store: true,
     });
-    expect(provider.requests[0]?.tools).toHaveLength(12);
+    expect(provider.requests[0]?.tools).toHaveLength(15);
   });
 
   it('executes a tool call and continues with its call id and response id', async () => {
@@ -562,7 +563,7 @@ describe('AgentRunner', () => {
 
     await agent.run('Do something', { history: false });
 
-    expect(provider.requests[0]?.tools).toHaveLength(12);
+    expect(provider.requests[0]?.tools).toHaveLength(15);
     expect(provider.requests[0]?.instructions).not.toContain('Plan mode is ON');
   });
 
@@ -1072,5 +1073,88 @@ describe('AgentRunner', () => {
     expect(result.status).toBe('completed');
     expect(record.messages[0]).not.toMatchObject({ role: 'system', compressed: true });
     expect(provider.requests).toHaveLength(1);
+  });
+
+  it('refuses a turn once the session cost reaches the configured budget', async () => {
+    const workspace = await temporaryWorkspace();
+    const provider = new RecordingScriptedProvider([
+      [
+        { type: 'text_delta', delta: 'Should never run.' },
+        {
+          type: 'response_completed',
+          responseId: 'response-never',
+          outputText: 'Should never run.',
+        },
+      ],
+    ]);
+    // gpt-5.6-sol input is $5/1M tokens; 2M tokens already cost $10.
+    const agent = await runner(workspace, provider, {
+      budgetUsd: 0.5,
+      model: 'gpt-5.6-sol',
+    });
+    const record = sessionRecord(1);
+    record.usage = { inputTokens: 2_000_000, outputTokens: 0, totalTokens: 2_000_000 };
+
+    const result = await agent.run('Do more work', { session: record, history: false });
+
+    expect(result.status).toBe('failed');
+    expect(result.error).toMatchObject({ code: 'BUDGET_EXCEEDED' });
+    expect(result.error?.message).toContain('$10.00');
+    // No provider request was made and no message was appended.
+    expect(provider.requests).toHaveLength(0);
+    expect(record.messages).toHaveLength(1);
+  });
+
+  it('runs normally when the session cost is below the budget', async () => {
+    const workspace = await temporaryWorkspace();
+    const provider = new RecordingScriptedProvider([
+      [
+        { type: 'text_delta', delta: 'Under budget.' },
+        {
+          type: 'response_completed',
+          responseId: 'response-budget-ok',
+          outputText: 'Under budget.',
+        },
+      ],
+    ]);
+    const agent = await runner(workspace, provider, {
+      budgetUsd: 0.5,
+      model: 'gpt-5.6-sol',
+    });
+    const record = sessionRecord(1);
+    record.usage = { inputTokens: 100, outputTokens: 100, totalTokens: 200 };
+
+    const result = await agent.run('Do a cheap turn', { session: record, history: false });
+
+    expect(result.status).toBe('completed');
+    expect(result.message).toBe('Under budget.');
+    expect(provider.requests).toHaveLength(1);
+  });
+
+  it('does not enforce the budget for models without a known list price', async () => {
+    const workspace = await temporaryWorkspace();
+    const provider = new RecordingScriptedProvider([
+      [
+        { type: 'text_delta', delta: 'Unknown price, no gate.' },
+        {
+          type: 'response_completed',
+          responseId: 'response-unknown',
+          outputText: 'Unknown price, no gate.',
+        },
+      ],
+    ]);
+    const agent = await runner(workspace, provider, {
+      budgetUsd: 0.000001,
+      model: 'my-unknown-model',
+    });
+    const record = sessionRecord(1);
+    record.usage = { inputTokens: 50_000_000, outputTokens: 0, totalTokens: 50_000_000 };
+
+    const result = await agent.run('Expensive unknown model', {
+      session: record,
+      history: false,
+    });
+
+    expect(result.status).toBe('completed');
   });
 });

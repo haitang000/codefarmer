@@ -22,6 +22,14 @@ export type ToolErrorCode =
   | 'SKILL_NOT_FOUND'
   | 'SKILLS_UNAVAILABLE'
   | 'PATH_OUTSIDE_SKILL'
+  | 'CANCELLED'
+  | 'WEB_FETCH_BLOCKED'
+  | 'WEB_FETCH_TIMEOUT'
+  | 'WEB_FETCH_NETWORK'
+  | 'WEB_FETCH_CONTENT'
+  | 'WEB_SEARCH_TIMEOUT'
+  | 'WEB_SEARCH_NETWORK'
+  | 'TODO_UNAVAILABLE'
   | 'TOOL_FAILED';
 
 export class ToolError extends Error {

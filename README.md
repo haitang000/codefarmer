@@ -70,13 +70,15 @@ npm install -g .
 
 ```bash
 cd your-project
-codefarmer init
 codefarmer
 ```
 
-When attached to a TTY, `codefarmer` opens the full-screen terminal UI. The
-same UI is available explicitly with `codefarmer tui` or `codefarmer chat`.
-Use `run --json` for one-shot automation and CI.
+On the first interactive run, when neither a project nor user configuration
+exists, CodeFarmer automatically starts the `setup` wizard and then opens the
+full-screen terminal UI. `codefarmer init` remains available for creating a
+default project configuration without the wizard. The same UI is available
+explicitly with `codefarmer tui` or `codefarmer chat`. Use `run --json` for
+one-shot automation and CI.
 
 The full-screen session uses a single-workbench model: you can type follow-up
 tasks while a turn is running and CodeFarmer executes them serially from a
@@ -94,34 +96,34 @@ parent Git repository.
 
 ## Commands
 
-| Command                                         | Purpose                                                                  |
-| ----------------------------------------------- | ------------------------------------------------------------------------ |
-| `codefarmer`                                    | Open the full-screen TUI in an interactive terminal                      |
-| `codefarmer tui`                                | Open the TUI explicitly                                                  |
-| `codefarmer init`                               | Create a project configuration file                                      |
-| `codefarmer setup`                              | Interactive wizard for model, Base URL, reasoning, and approval          |
-| `codefarmer chat`                               | Open a TUI session (optionally with `--session`)                         |
-| `codefarmer run "<task>"`                       | Run one task, suitable for scripts and CI                                |
-| `codefarmer skills list`                        | List discovered Codex-compatible skills                                  |
-| `codefarmer skills show <ref> [path]`           | Print a skill or one of its text resources                               |
-| `codefarmer status`                             | Show workspace, Git, configuration, and recent-session status            |
-| `codefarmer stats`                              | Show aggregate token usage and estimated cost across local sessions      |
-| `codefarmer undo`                               | Revert the latest eligible patch transaction                             |
-| `codefarmer sessions list`                      | List saved sessions for the workspace                                    |
-| `codefarmer sessions show <id>`                 | Show a saved session and audit summary                                   |
-| `codefarmer sessions rename <id> <title>`       | Rename a saved session (set or override its title)                       |
-| `codefarmer sessions compact <id>`              | Compress a long session: fold early messages into a summary              |
-| `codefarmer sessions export <id>`               | Export a session as Markdown or JSON (`--format`/`--output`)             |
-| `codefarmer sessions resume <id>`               | Resume a session using its response ID                                   |
-| `codefarmer sessions delete <id>`               | Delete local session records                                             |
-| `codefarmer config list`                        | Print effective configuration                                            |
-| `codefarmer config get <key>`                   | Read one effective setting                                               |
-| `codefarmer config set <key> <value>`           | Write a user setting                                                     |
-| `codefarmer config set --project <key> <value>` | Write a project setting                                                  |
-| `codefarmer config path`                        | Print the configuration path                                             |
-| `codefarmer language [language]`                | Show or persist the interface and agent response language                |
-| `codefarmer doctor`                             | Check Node, key, config, permissions, optional Git, and API connectivity |
-| `codefarmer completions <shell>`                | Print a bash, zsh, or fish completion script                             |
+| Command                                         | Purpose                                                                        |
+| ----------------------------------------------- | ------------------------------------------------------------------------------ |
+| `codefarmer`                                    | Open the full-screen TUI in an interactive terminal                            |
+| `codefarmer tui`                                | Open the TUI explicitly                                                        |
+| `codefarmer init`                               | Create a project configuration file                                            |
+| `codefarmer setup`                              | Interactive wizard for model, Base URL, reasoning, and approval                |
+| `codefarmer chat`                               | Open a TUI session (optionally with `--session`)                               |
+| `codefarmer run "<task>"`                       | Run one task, suitable for scripts and CI; omit the task to read it from stdin |
+| `codefarmer skills list`                        | List discovered Codex-compatible skills                                        |
+| `codefarmer skills show <ref> [path]`           | Print a skill or one of its text resources                                     |
+| `codefarmer status`                             | Show workspace, Git, configuration, and recent-session status                  |
+| `codefarmer stats`                              | Show aggregate token usage and estimated cost across local sessions            |
+| `codefarmer undo`                               | Revert the latest eligible patch transaction                                   |
+| `codefarmer sessions list`                      | List saved sessions for the workspace                                          |
+| `codefarmer sessions show <id>`                 | Show a saved session and audit summary                                         |
+| `codefarmer sessions rename <id> <title>`       | Rename a saved session (set or override its title)                             |
+| `codefarmer sessions compact <id>`              | Compress a long session: fold early messages into a summary                    |
+| `codefarmer sessions export <id>`               | Export a session as Markdown or JSON (`--format`/`--output`)                   |
+| `codefarmer sessions resume <id>`               | Resume a session using its response ID                                         |
+| `codefarmer sessions delete <id>`               | Delete local session records                                                   |
+| `codefarmer config list`                        | Print effective configuration                                                  |
+| `codefarmer config get <key>`                   | Read one effective setting                                                     |
+| `codefarmer config set <key> <value>`           | Write a user setting                                                           |
+| `codefarmer config set --project <key> <value>` | Write a project setting                                                        |
+| `codefarmer config path`                        | Print the configuration path                                                   |
+| `codefarmer language [language]`                | Show or persist the interface and agent response language                      |
+| `codefarmer doctor`                             | Check Node, key, config, permissions, optional Git, and API connectivity       |
+| `codefarmer completions <shell>`                | Print a bash, zsh, or fish completion script                                   |
 
 Use `codefarmer <command> --help` for command-specific arguments. Global
 options include:
@@ -134,6 +136,7 @@ options include:
 --reasoning <auto|none|low|medium|high|xhigh|max>
 --verbosity <low|medium|high>
 --reasoning-summary <none|auto|concise|detailed>
+--budget <usd>
 --approval <ask|auto|read-only>
 --no-stream
 --log-level <trace|debug|info|warn|error|fatal|silent>
@@ -184,11 +187,15 @@ with `/plan [on|off]` and `/auto [on|off]`.
 | `/config`        | Show effective configuration                                                               |
 | `/sessions`      | Open the saved-session picker (`↑/↓`, Enter to switch, Esc to close)                       |
 | `/resume <id>`   | Switch to a saved session                                                                  |
+| `/retry`         | Rerun the last submitted prompt, e.g. after switching the model or mode                    |
 | `/delete <id>`   | Delete a non-active local session                                                          |
 | `/diff`          | Show current Git diff with colored additions, removals, headers, and hunks                 |
+| `/review`        | Review the working-tree diff (staged and unstaged) without committing                      |
+| `/security-review [PATH...]` | Review the diff for security vulnerabilities, ordered by severity; optional paths focus the review |
 | `/commit [msg]`  | Stage and commit all workspace changes; without a message the agent summarizes the diff    |
 | `/push`          | Push the current branch to its configured upstream after confirmation                      |
 | `/undo`          | Undo the most recent eligible file mutation                                                |
+| `/todos`         | Show the agent's current todo list (maintained with the `todo_write` tool)                 |
 | `/new`           | Start a fresh session                                                                      |
 | `/cancel`        | Cancel the active request or tool                                                          |
 | `/quit`          | Leave the TUI and restore the terminal                                                     |
@@ -206,10 +213,17 @@ invocation prints help instead of starting a renderer.
 CodeFarmer exposes a fixed v1 tool set to the model:
 
 - `list_files`, `read_file`, and `search_text` inspect allowed workspace files.
-- `apply_patch` creates, modifies, or deletes one UTF-8 file after checking its
-  expected SHA-256 hash. Writes are atomic and recorded for conflict-aware
-  undo.
+- `apply_patch` creates, modifies, or deletes UTF-8 files after checking their
+  expected SHA-256 hashes; a single call can apply several file patches, and
+  each write is atomic and recorded for conflict-aware undo.
 - `run_command` accepts an executable and argument array, never a shell string.
+- `web_fetch` fetches an HTTP(S) URL and returns its text content, bounded in
+  size and time. Private, loopback, and link-local addresses are blocked so
+  repository content cannot turn the agent into a local-network scanner.
+- `web_search` searches the web through DuckDuckGo and returns titles, URLs,
+  and snippets; use it to discover pages, then `web_fetch` for full content.
+- `todo_write` maintains a session todo list for multi-step tasks; `/todos`
+  shows it in the TUI.
 - `git_status` and `git_diff` show the working-tree state, `git_log` shows
   commit history, and `git_show` displays individual commits (patch or `--stat`
   summary), all without changing repository state. Git is optional: when it is
@@ -269,6 +283,7 @@ Example project configuration:
   "autoCompact": false,
   "autoCompactMinMessages": 40,
   "autoCompactMinChars": 100000,
+  "budgetUsd": 2.5,
   "ignoredPaths": [".git/**", "node_modules/**", "dist/**", ".env"]
 }
 ```
@@ -295,6 +310,7 @@ Supported environment overrides are:
 | `autoCompact`            | `CODEFARMER_AUTO_COMPACT`              | `false`                       |
 | `autoCompactMinMessages` | `CODEFARMER_AUTO_COMPACT_MIN_MESSAGES` | `40`                          |
 | `autoCompactMinChars`    | `CODEFARMER_AUTO_COMPACT_MIN_CHARS`    | `100000`                      |
+| `budgetUsd`              | `CODEFARMER_BUDGET_USD`                | off                           |
 | `ignoredPaths`           | `CODEFARMER_IGNORED_PATHS`             | protected and generated paths |
 
 `CODEFARMER_IGNORED_PATHS` accepts a JSON string array or a comma-separated
@@ -307,11 +323,18 @@ messages or `autoCompactMinChars` characters of stored content, keeping the
 last few turns verbatim. Each auto-compaction costs one extra summarising
 request; run `/compact` manually for the same behaviour.
 
+`budgetUsd` (off by default) sets a per-session cost ceiling in USD, estimated
+with the same public list prices as `stats`. Once a session's cumulative
+estimated cost reaches the budget, new turns are refused with a
+`BUDGET_EXCEEDED` error until the budget is raised or a new session starts;
+the single turn that crosses the boundary still finishes. Set it with
+`--budget <usd>`, `CODEFARMER_BUDGET_USD`, or the `budgetUsd` config key.
+
 ## Providers
 
-Choose `openai`, `gemini`, `grok`, `deepseek`, or `kimi` with `--provider`,
+Choose `openai`, `gemini`, `grok`, `deepseek`, `kimi`, or `opencode-go` with `--provider`,
 `CODEFARMER_PROVIDER`, the setup wizard, or configuration. OpenAI uses the
-Responses API. Gemini, Grok, DeepSeek, and Kimi use their official OpenAI
+Responses API. Gemini, Grok, DeepSeek, Kimi, and OpenCode Go use their official OpenAI
 Chat Completions-compatible endpoints with explicit local conversation replay
 for tool calls and session continuation. Provider defaults are selected by
 `setup`; use `model` and `baseURL` only to override them.
@@ -357,6 +380,62 @@ codefarmer --base-url "http://localhost:8080/v1" run "Inspect this project"
 `OPENAI_BASE_URL` is accepted as a fallback when `CODEFARMER_BASE_URL` is not
 set. URLs are normalized without a trailing slash and must use HTTP(S) without
 embedded credentials, query parameters, or fragments.
+
+### Custom OpenAI-compatible endpoints
+
+`provider` also accepts an inline custom endpoint object (user or project
+configuration). `model` and `baseURL` inside the endpoint act as defaults
+for that provider; the top-level `model`/`baseURL` or `--model`/`--base-url`
+still override them. `apiKeyEnv` names the environment variable holding the
+API key; without it, `CODEFARMER_API_KEY` is checked first, then the local
+credentials file. Local keyless servers (Ollama, vLLM, LM Studio) can set
+`apiKeyOptional: true` to skip the key. The endpoint `id` defaults to the
+`baseURL` hostname (e.g. `localhost`) and may not collide with built-in
+provider names.
+
+```json
+{
+  "provider": {
+    "label": "Local Ollama",
+    "baseURL": "http://localhost:11434/v1",
+    "model": "llama3.2",
+    "apiKeyOptional": true
+  }
+}
+```
+
+```bash
+codefarmer config set provider '{"baseURL":"http://localhost:11434/v1","model":"llama3.2","apiKeyOptional":true}' --project
+codefarmer --provider localhost run "explain this diff"
+```
+
+Multiple reusable endpoints can still be declared in the `customEndpoints`
+array and referenced by `id` through `provider`:
+
+```json
+{
+  "provider": "ollama",
+  "customEndpoints": [
+    {
+      "id": "ollama",
+      "label": "Local Ollama",
+      "baseURL": "http://localhost:11434/v1",
+      "model": "llama3.2",
+      "apiKeyOptional": true
+    }
+  ]
+}
+```
+
+Custom endpoints use the same OpenAI-compatible adapter as Gemini, Grok,
+DeepSeek, Kimi, and OpenCode Go, appear as selectable providers in `setup`, and can be
+switched with `codefarmer config set provider <id>`.
+
+`codefarmer setup` can also add a brand-new custom endpoint directly (choose
+"add custom endpoint" from the provider list); the endpoint is saved into
+`customEndpoints`, so multiple providers coexist and can be switched back to
+later. Re-running `setup` merges into the existing project config — previously
+saved endpoints and other settings are preserved.
 
 ## Approvals and safety
 

@@ -6,7 +6,6 @@ import type {
   ProviderInput,
   ProviderRequest,
   ProviderToolCall,
-  ProviderId,
   ToolDefinition,
 } from '../types.js';
 
@@ -238,7 +237,8 @@ function invalidStreamError(error: unknown): ProviderEvent {
 }
 
 export interface OpenAICompatibleProviderOptions {
-  provider: Exclude<ProviderId, 'openai'>;
+  /** Built-in provider id or a customEndpoints id. */
+  provider: string;
   apiKey: string;
   baseURL: string;
 }

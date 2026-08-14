@@ -2,6 +2,7 @@ export {
   applyPatch,
   applyPatchDefinition,
   applyUnifiedDiff,
+  MAX_BATCHED_FILES,
   restoreMutation,
   sha256FileContent,
 } from './apply-patch.js';
@@ -29,6 +30,24 @@ export {
 export type { GitAvailability } from './git-tools.js';
 export { ToolRegistry, createToolRegistry } from './registry.js';
 export { writeFileDefinition, writeWorkspaceFile } from './write-file.js';
+export {
+  MAX_TODOS,
+  MAX_TODO_CONTENT_CHARS,
+  TODO_STATUSES,
+  renderTodos,
+  todoWriteDefinition,
+  writeTodos,
+} from './todo-write.js';
+export { webFetch, webFetchDefinition } from './web-fetch.js';
+export {
+  parseSearchResults,
+  resolveResultUrl,
+  webSearch,
+  webSearchDefinition,
+} from './web-search.js';
+export type { SearchResult } from './web-search.js';
+export { TodoStore } from '../core/todos.js';
+export type { TodoItem, TodoStatus } from '../core/todos.js';
 export {
   readSkill,
   readSkillDefinition,
