@@ -9,6 +9,7 @@ import type {
   ReasoningEffort,
   TokenUsage,
 } from '../types.js';
+import { fetchCompatibleModels } from './model-sync.js';
 
 function mapInput(input: string | ProviderInput[]): string | ResponseInput {
   if (typeof input === 'string') return input;
@@ -119,16 +120,28 @@ export class OpenAIProvider implements AgentProvider {
   public readonly name = 'openai';
   private readonly client: OpenAI;
   private readonly connectionModel: string;
+  private readonly apiKey: string;
+  private readonly baseURL: string;
 
   public constructor(options: OpenAIProviderOptions = {}) {
     this.connectionModel = options.connectionModel ?? 'gpt-5.6-sol';
+    this.apiKey = options.apiKey ?? process.env.OPENAI_API_KEY ?? '';
+    this.baseURL = options.baseURL ?? 'https://api.openai.com/v1';
     this.client = new OpenAI({
-      apiKey: options.apiKey ?? process.env.OPENAI_API_KEY,
-      ...(options.baseURL === undefined ? {} : { baseURL: options.baseURL }),
+      apiKey: this.apiKey,
+      baseURL: this.baseURL,
       maxRetries: options.maxRetries ?? 2,
       // Long reasoning runs can exceed the SDK default 10-minute timeout;
       // give the model ample time instead of aborting mid-task.
       timeout: 30 * 60 * 1000,
+    });
+  }
+
+  public async listModels(signal?: AbortSignal): Promise<readonly string[]> {
+    return fetchCompatibleModels({
+      baseURL: this.baseURL,
+      apiKey: this.apiKey,
+      ...(signal === undefined ? {} : { signal }),
     });
   }
 
@@ -239,10 +252,7 @@ export class OpenAIProvider implements AgentProvider {
                 (event.type === 'response.incomplete'
                   ? 'OPENAI_RESPONSE_INCOMPLETE'
                   : 'OPENAI_RESPONSE_FAILED'),
-              message:
-                error?.message ??
-                event.response.incomplete_details?.reason ??
-                '响应未完成',
+              message: error?.message ?? event.response.incomplete_details?.reason ?? '响应未完成',
               retryable: incompleteReason === 'content_filter' ? false : true,
             },
           };

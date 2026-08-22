@@ -135,7 +135,9 @@ async function repositoryWithUpstream(): Promise<{ workspace: string; remote: st
 }
 
 async function workspaceBranch(workspace: string): Promise<string> {
-  return (await execa('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workspace })).stdout.trim();
+  return (
+    await execa('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workspace })
+  ).stdout.trim();
 }
 
 afterEach(async () => {
@@ -167,6 +169,7 @@ describe('CodeFarmer CLI', () => {
     expect(result.stdout).toContain('run');
     expect(result.stdout).toContain('stats');
     expect(result.stdout).toContain('doctor');
+    expect(result.stdout).toContain('models');
   });
 
   it('reports the published CLI version', async () => {
@@ -177,7 +180,7 @@ describe('CodeFarmer CLI', () => {
 
     expect(result.code).toBe(0);
     expect(result.stderr).toBe('');
-    expect(result.stdout.trim()).toBe('0.1.6');
+    expect(result.stdout.trim()).toBe('0.1.7');
   });
 
   it('lists and shows skills without credentials or network access', async () => {
@@ -191,7 +194,11 @@ describe('CodeFarmer CLI', () => {
     );
 
     const list = await runCli(['--cwd', workspace, 'skills', 'list'], workspace, environmentRoot);
-    const show = await runCli(['--cwd', workspace, 'skills', 'show', 'docs'], workspace, environmentRoot);
+    const show = await runCli(
+      ['--cwd', workspace, 'skills', 'show', 'docs'],
+      workspace,
+      environmentRoot,
+    );
 
     expect(list.code).toBe(0);
     expect(list.stdout).toContain('docs');
@@ -210,7 +217,7 @@ describe('CodeFarmer CLI', () => {
       await readFile(path.join(workspace, 'codefarmer.config.json'), 'utf8'),
     ) as Record<string, unknown>;
     expect(written).toEqual({
-      $schema: 'https://unpkg.com/codefarmer@0.1.6/schemas/codefarmer.config.schema.json',
+      $schema: 'https://unpkg.com/codefarmer@0.1.7/schemas/codefarmer.config.schema.json',
       provider: 'openai',
       model: 'gpt-5.6-sol',
       baseURL: 'https://api.openai.com/v1',
@@ -375,7 +382,10 @@ describe('CodeFarmer CLI', () => {
 
   it('rejects an invalid --budget value with exit code 2', async () => {
     const workspace = await temporaryDirectory();
-    const result = await runCli(['--cwd', workspace, '--budget', 'cheap', 'run', 'task'], workspace);
+    const result = await runCli(
+      ['--cwd', workspace, '--budget', 'cheap', 'run', 'task'],
+      workspace,
+    );
 
     expect(result.code).toBe(2);
     expect(result.stderr).toContain('--budget');
@@ -548,7 +558,11 @@ describe('CodeFarmer CLI', () => {
       });
     });
 
-    const result = await runCli(['--cwd', workspace, 'stats', '--json'], workspace, environmentRoot);
+    const result = await runCli(
+      ['--cwd', workspace, 'stats', '--json'],
+      workspace,
+      environmentRoot,
+    );
 
     expect(result.code).toBe(0);
     const payload = JSON.parse(result.stdout) as {
@@ -611,11 +625,9 @@ describe('CodeFarmer CLI', () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toContain('second');
     expect(result.stdout).toContain(`已推送 ${branch} 到 origin`);
-    const remoteHead = await execa(
-      'git',
-      ['--git-dir', remote, 'rev-parse', branch],
-      { cwd: workspace },
-    );
+    const remoteHead = await execa('git', ['--git-dir', remote, 'rev-parse', branch], {
+      cwd: workspace,
+    });
     const localHead = await execa('git', ['rev-parse', branch], { cwd: workspace });
     expect(remoteHead.stdout.trim()).toBe(localHead.stdout.trim());
   });
@@ -634,11 +646,9 @@ describe('CodeFarmer CLI', () => {
     );
 
     expect(result.code).toBe(0);
-    const remoteHead = await execa(
-      'git',
-      ['--git-dir', remote, 'rev-parse', 'feature'],
-      { cwd: workspace },
-    );
+    const remoteHead = await execa('git', ['--git-dir', remote, 'rev-parse', 'feature'], {
+      cwd: workspace,
+    });
     const localHead = await execa('git', ['rev-parse', 'feature'], { cwd: workspace });
     expect(remoteHead.stdout.trim()).toBe(localHead.stdout.trim());
   });

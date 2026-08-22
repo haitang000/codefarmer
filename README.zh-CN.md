@@ -116,6 +116,7 @@ CodeFarmer 启动时所在的目录；它不会自动扩大到上层 Git 仓库�
 | `codefarmer config path`                        | 显示配置文件路径                                          |
 | `codefarmer language [language]`                | 查看或持久化界面和 Agent 回复语言                         |
 | `codefarmer doctor`                             | 检查 Node、密钥、配置、权限、Git（可选）和 API 连通性     |
+| `codefarmer models`                             | 列出当前 Provider 的模型（从上游 `/models` 自动同步）     |
 | `codefarmer completions <shell>`                | 打印 bash、zsh 或 fish 补全脚本                           |
 
 使用 `codefarmer <命令> --help` 查看命令专用参数。全局参数包括：
@@ -153,8 +154,9 @@ codefarmer --approval read-only run --json "查找可能的空指针错误"
 ### 终端 UI
 
 TUI 在同一个备用屏幕中承载对话、工具状态、审批、工作区状态和会话操作。
-模型输出会流式显示；使用默认 `ask` 策略时，修改文件或执行变更命令会弹出审批框，
-只有明确按 `y` 才会允许操作。
+模型输出会流式显示；页脚显示 Token 用量和按公开列表价估算的会话费用，若配置了
+`budgetUsd` 还会显示预算。使用默认 `ask` 策略时，修改文件或执行变更命令会弹出
+审批框，只有明确按 `y` 才会允许操作。
 
 按 `Shift+Tab` 可在 `CODE`、`PLAN` 和 `AUTO` 三种模式间循环切换。`PLAN`
 只进行只读探索并输出实施计划；`AUTO` 会根据 prompt 自动列出计划，随后直接实施和验证，
@@ -168,6 +170,7 @@ TUI 在同一个备用屏幕中承载对话、工具状态、审批、工作区�
 | `/status`                    | 显示会话、工作区、Git 和运行状态                                    |
 | `/context`                   | 查看当前上下文消息与 Token 用量                                     |
 | `/compact`                   | 把当前会话的早期消息压缩为摘要（长会话时自动提示）                  |
+| `/export [json\|PATH]`       | 将当前会话导出为工作区内的 Markdown（默认）或 JSON 文件             |
 | `/effort`                    | 打开推理强度选择器（↑/↓ 选择，Enter 确认）                          |
 | `/plan [on/off]`             | 开启或关闭只读计划模式                                              |
 | `/auto [on/off]`             | 开启或关闭自动计划并执行模式                                        |
@@ -194,7 +197,8 @@ TUI 在同一个备用屏幕中承载对话、工具状态、审批、工作区�
 
 当前请求运行时，按 Esc 或 Ctrl+C 会取消请求或工具并记录会话状态；空闲时按
 Ctrl+C 会退出 TUI。`Shift+Enter` 或 `Alt+Enter` 在输入中插入换行，回车仍提交。
-非交互 shell 中直接运行命令只显示帮助，不会启动渲染器。
+用 `@src/cli.ts` 这样的 `@路径` 可以把文件附加到提示词，Tab 可补全路径。一轮
+结束后终端会响铃。非交互 shell 中直接运行命令只显示帮助，不会启动渲染器。
 
 ## Agent 工具
 
@@ -213,6 +217,7 @@ Ctrl+C 会退出 TUI。`Shift+Enter` 或 `Alt+Enter` 在输入中插入换行，
 - `web_search`：通过 DuckDuckGo 搜索网页并返回标题、URL 和摘要；GET 无结果时
   会再用 POST 重试。用它发现页面，再用 `web_fetch` 读取完整内容。
 - `todo_write`：维护会话内的任务清单，配合多步骤任务使用；TUI 中用 `/todos` 查看。
+- `ask_user`：向用户提出选择题并等待交互选择。非交互的 `run --json` 无法作答。
 - `git_status` 和 `git_diff` 显示工作区状态，`git_log` 显示提交历史，`git_show`
   查看单个提交（补丁或 `--stat` 摘要），全部只读、不修改仓库状态。Git 为可选
   依赖：缺失时这些工具会优雅失败，Agent 继续使用文件工具完成任务。

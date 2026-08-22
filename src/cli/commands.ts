@@ -46,7 +46,9 @@ import { fileExists, readJsonFileIfExists, writeJsonAtomic } from '../infra/pers
 import { OpenAIProvider } from '../providers/openai.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible.js';
 import { isProviderId, providerPreset } from '../providers/catalog.js';
+import { syncProviderModels } from '../providers/model-sync.js';
 import { detectGitAvailability } from '../tools/git-tools.js';
+import { expandPathMentions } from '../tools/mentions.js';
 import { normaliseLanguage } from '../types.js';
 import type {
   AgentProvider,
@@ -177,7 +179,14 @@ export async function runAction(
     const runtime = await createAgentRuntime(globalOptions, {
       ...(runOptions.session === undefined ? {} : { sessionId: runOptions.session }),
       history,
+      ...(json ? { interactive: false } : {}),
     });
+    const expanded = await expandPathMentions(prompt, {
+      workspace: runtime.workspace,
+      ignoredPaths: runtime.config.ignoredPaths,
+      maxFileBytes: runtime.config.maxFileSizeBytes,
+    });
+    prompt = expanded.prompt;
     const controller = new AbortController();
     const cleanup = installInterruptHandler(controller);
     try {
@@ -373,7 +382,7 @@ export async function chatAction(globalOptions: GlobalOptions, sessionId?: strin
   }
 }
 
-const SETUP_SCHEMA_URL = 'https://unpkg.com/codefarmer@0.1.6/schemas/codefarmer.config.schema.json';
+const SETUP_SCHEMA_URL = 'https://unpkg.com/codefarmer@0.1.7/schemas/codefarmer.config.schema.json';
 
 export async function initAction(globalOptions: GlobalOptions, force = false): Promise<void> {
   const workspace = await canonicalWorkspace(globalOptions.cwd ?? process.cwd());
@@ -533,6 +542,57 @@ async function collectNewEndpoint(
   };
 }
 
+async function promptForSyncedModel(options: {
+  provider: string;
+  baseURL: string;
+  current: string;
+  customEndpoints: readonly CustomEndpoint[];
+  label: string;
+}): Promise<string | undefined> {
+  const apiKeyEnv = options.customEndpoints.find(
+    (endpoint) => endpoint.id === options.provider,
+  )?.apiKeyEnv;
+  const apiKey =
+    (await resolveProviderApiKey(options.provider, apiKeyEnv === undefined ? {} : { apiKeyEnv })) ??
+    'codefarmer-local-endpoint';
+  const progress = spinner();
+  progress.start('正在从上游同步模型列表');
+  const synced = await syncProviderModels({
+    provider: options.provider,
+    baseURL: options.baseURL,
+    apiKey,
+    currentModel: options.current,
+    customEndpoints: options.customEndpoints,
+  });
+  if (synced.source === 'live') {
+    progress.stop(`已同步 ${String(synced.models.length)} 个上游模型`);
+  } else if (synced.source === 'cache') {
+    progress.stop(`使用缓存的 ${String(synced.models.length)} 个模型`);
+  } else {
+    progress.stop('无法同步上游模型，请手动输入');
+  }
+  if (synced.source !== 'catalog' && synced.models.length > 0) {
+    const choices = synced.models.slice(0, 50).map((model) => ({ value: model, label: model }));
+    const initial = choices.some((choice) => choice.value === options.current)
+      ? options.current
+      : choices[0]?.value;
+    const chosen = await select({
+      message: `${options.label} 模型`,
+      options: choices,
+      ...(initial === undefined ? {} : { initialValue: initial }),
+    });
+    if (isCancel(chosen)) return undefined;
+    return chosen;
+  }
+  const typed = await text({
+    message: `${options.label} 模型`,
+    initialValue: options.current,
+    validate: (value) => (value.trim().length === 0 ? '模型不能为空' : undefined),
+  });
+  if (isCancel(typed)) return undefined;
+  return typed.trim();
+}
+
 function createProvider(
   provider: string,
   baseURL: string,
@@ -635,14 +695,6 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
     model = newEndpoint.model;
     baseURL = newEndpoint.baseURL;
   } else {
-    const modelAnswer = await text({
-      message: `${preset.label} 模型`,
-      initialValue: providerConfig.model,
-      validate: (value) => (value.trim().length === 0 ? '模型不能为空' : undefined),
-    });
-    if (isCancel(modelAnswer)) return abortSetup();
-    model = modelAnswer;
-
     const baseURLAnswer = await text({
       message: `${preset.label} API Base URL`,
       initialValue: providerConfig.baseURL,
@@ -651,6 +703,16 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
     });
     if (isCancel(baseURLAnswer)) return abortSetup();
     baseURL = baseURLAnswer;
+
+    const modelAnswer = await promptForSyncedModel({
+      provider,
+      baseURL: baseURL.replace(/\/+$/u, ''),
+      current: providerConfig.model,
+      customEndpoints,
+      label: preset.label,
+    });
+    if (modelAnswer === undefined) return abortSetup();
+    model = modelAnswer;
   }
 
   const reasoning = await select({
@@ -748,13 +810,7 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
     });
     if (isCancel(shouldTest)) return abortSetup();
     if (shouldTest) {
-      await testConnection(
-        provider,
-        normalizedBaseUrl,
-        model,
-        apiKey,
-        customEndpoints,
-      );
+      await testConnection(provider, normalizedBaseUrl, model, apiKey, customEndpoints);
     }
   }
 
@@ -1162,7 +1218,9 @@ export async function configSetAction(
       return;
     }
     if (typeof value !== 'string' || value.trim().length === 0) {
-      throw new ConfigError('provider 必须是内置 Provider 名称、customEndpoints 的 id，或自定义端点对象。');
+      throw new ConfigError(
+        'provider 必须是内置 Provider 名称、customEndpoints 的 id，或自定义端点对象。',
+      );
     }
     const builtin = isProviderId(value);
     const inlineId =
@@ -1206,6 +1264,38 @@ export async function configSetAction(
 export async function configPathAction(globalOptions: GlobalOptions): Promise<void> {
   const details = await loadConfigDetails({ cwd: globalOptions.cwd ?? process.cwd() });
   process.stdout.write(`user\t${details.userConfigPath}\nproject\t${details.projectConfigPath}\n`);
+}
+
+export async function modelsListAction(
+  globalOptions: GlobalOptions,
+  refresh = false,
+): Promise<void> {
+  const runtime = await createBaseRuntime(globalOptions);
+  const apiKeyEnv = runtime.config.customEndpoints.find(
+    (endpoint) => endpoint.id === runtime.config.provider,
+  )?.apiKeyEnv;
+  const apiKey =
+    (await resolveProviderApiKey(
+      runtime.config.provider,
+      apiKeyEnv === undefined ? {} : { apiKeyEnv },
+    )) ?? 'codefarmer-local-endpoint';
+  const synced = await syncProviderModels({
+    provider: runtime.config.provider,
+    baseURL: runtime.config.baseURL,
+    apiKey,
+    currentModel: runtime.config.model,
+    customEndpoints: runtime.config.customEndpoints,
+    ...(refresh ? { force: true } : {}),
+  });
+  const source =
+    synced.source === 'live' ? '上游' : synced.source === 'cache' ? '缓存' : '内置目录';
+  process.stdout.write(
+    `${runtime.config.provider} @ ${runtime.config.baseURL}（${source}，${String(synced.models.length)} 个）\n`,
+  );
+  for (const model of synced.models) {
+    const marker = model === runtime.config.model ? '*' : ' ';
+    process.stdout.write(`${marker} ${model}\n`);
+  }
 }
 
 export async function doctorAction(globalOptions: GlobalOptions): Promise<void> {

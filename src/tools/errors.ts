@@ -30,6 +30,7 @@ export type ToolErrorCode =
   | 'WEB_SEARCH_TIMEOUT'
   | 'WEB_SEARCH_NETWORK'
   | 'TODO_UNAVAILABLE'
+  | 'ASK_UNAVAILABLE'
   | 'TOOL_FAILED';
 
 export class ToolError extends Error {

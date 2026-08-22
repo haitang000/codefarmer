@@ -8,6 +8,7 @@ import type {
   ProviderToolCall,
   ToolDefinition,
 } from '../types.js';
+import { fetchCompatibleModels } from './model-sync.js';
 
 interface ChatToolCall {
   id?: string;
@@ -252,6 +253,14 @@ export class OpenAICompatibleProvider implements AgentProvider {
   public constructor(private readonly options: OpenAICompatibleProviderOptions) {
     this.name = options.provider;
     this.endpoint = `${options.baseURL.replace(/\/+$/u, '')}/chat/completions`;
+  }
+
+  public async listModels(signal?: AbortSignal): Promise<readonly string[]> {
+    return fetchCompatibleModels({
+      baseURL: this.options.baseURL,
+      apiKey: this.options.apiKey,
+      ...(signal === undefined ? {} : { signal }),
+    });
   }
 
   public async *stream(request: ProviderRequest): AsyncIterable<ProviderEvent> {

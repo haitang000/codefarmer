@@ -28,6 +28,7 @@ export type TuiCommand =
   | { kind: 'push'; args: string[] }
   | { kind: 'undo' }
   | { kind: 'todos' }
+  | { kind: 'export'; format: 'markdown' | 'json'; path: string }
   | { kind: 'sessions' }
   | { kind: 'resume'; id: string }
   | { kind: 'delete-session'; id: string }
@@ -86,6 +87,7 @@ const TUI_HELP_EN = [
   '  /retry      rerun the last prompt (e.g. after switching the model)',
   '  /delete ID  delete a saved session',
   '  /compact    compress early messages into a summary',
+  '  /export [json|PATH]  export this session to a workspace file',
   '  /cancel     cancel the active turn',
   '  /quit       exit CodeFarmer',
   'WORKSPACE',
@@ -108,12 +110,13 @@ const TUI_HELP_EN = [
   '  /context    show context and token usage',
   '  /stats      show usage charts and estimated cost',
   '  /effort     open the reasoning effort picker (←/→ + Enter)',
-  '  /model [NAME]  switch the active model; a bare /model opens the picker',
+  '  /model [NAME]  switch the active model; a bare /model opens the picker (lists sync from the provider)',
   '  /skills     list discovered skills',
   '  /skill REF  select a skill for this session; /skill off clears it',
   '  /doctor     check local runtime prerequisites',
   '  Ctrl+O      toggle the reasoning display',
   '  Shift+Enter / Alt+Enter  insert a newline in the prompt',
+  '  @path       attach a workspace file to the prompt (Tab completes)',
 ].join('\n');
 
 const TUI_HELP_ZH = [
@@ -125,6 +128,7 @@ const TUI_HELP_ZH = [
   '  /retry      重新执行上一条提示词（例如切换模型后重试）',
   '  /delete ID  删除已保存会话',
   '  /compact    压缩早期消息为摘要',
+  '  /export [json|PATH]  将会话导出到工作区文件',
   '  /cancel     取消当前任务',
   '  /quit       退出 CodeFarmer',
   '工作区',
@@ -147,12 +151,13 @@ const TUI_HELP_ZH = [
   '  /context    显示上下文和 Token 用量',
   '  /stats      显示用量图表和估算费用',
   '  /effort     打开推理强度选择器（←/→ + Enter）',
-  '  /model [NAME] 切换当前模型；不带参数打开模型选择器',
+  '  /model [NAME] 切换当前模型；不带参数打开模型选择器（自动同步上游）',
   '  /skills     列出已发现技能',
   '  /skill REF  为本会话选择技能；/skill off 清除',
   '  /doctor     检查本地运行环境',
   '  Ctrl+O      切换推理摘要显示',
   '  Shift+Enter / Alt+Enter  在输入中插入换行',
+  '  @path       将工作区文件附加到提示词（Tab 补全）',
 ].join('\n');
 
 export function getTuiHelp(language: Language = 'en'): string {
@@ -190,6 +195,7 @@ export const TUI_COMMANDS = [
   'push',
   'undo',
   'todos',
+  'export',
   'cancel',
   'quit',
 ] as const;
@@ -279,6 +285,19 @@ export function parseTuiCommand(input: string): TuiCommand {
     case 'todos':
     case 'todo':
       return { kind: 'todos' };
+    case 'export': {
+      const first = parts[0];
+      if (first === 'json' || first === 'md' || first === 'markdown') {
+        const format = first === 'json' ? 'json' : 'markdown';
+        return { kind: 'export', format, path: parts.slice(1).join(' ') };
+      }
+      const exportPath = parts.join(' ');
+      return {
+        kind: 'export',
+        format: exportPath.endsWith('.json') ? 'json' : 'markdown',
+        path: exportPath,
+      };
+    }
     case 'sessions':
     case 'session':
       return { kind: 'sessions' };

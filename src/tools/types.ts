@@ -7,6 +7,17 @@ import type {
 import type { SkillCatalog } from '../types.js';
 import type { TodoStore } from '../core/todos.js';
 
+export interface AskUserRequest {
+  question: string;
+  options: string[];
+}
+
+export interface AskUserAnswer {
+  cancelled: boolean;
+  selected?: string;
+  index?: number;
+}
+
 export type ToolName =
   | 'list_files'
   | 'read_file'
@@ -21,6 +32,7 @@ export type ToolName =
   | 'web_fetch'
   | 'web_search'
   | 'todo_write'
+  | 'ask_user'
   | 'list_skills'
   | 'read_skill'
   | 'read_skill_resource';
@@ -45,6 +57,7 @@ export interface ToolContextOptions {
   /** Test-only override for the web_search endpoint. The CLI never sets this. */
   webSearchEndpoint?: string;
   todos?: TodoStore;
+  askUser?: (request: AskUserRequest) => Promise<AskUserAnswer>;
 }
 
 export interface ResolvedToolContext {
@@ -60,6 +73,7 @@ export interface ResolvedToolContext {
   allowPrivateAddresses?: boolean;
   webSearchEndpoint?: string;
   todos?: TodoStore;
+  askUser?: (request: AskUserRequest) => Promise<AskUserAnswer>;
 }
 
 export interface ApprovalRequest {

@@ -1,6 +1,6 @@
 {
   "name": "codefarmer",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "A safe, interactive coding agent CLI powered by the OpenAI Responses API.",
   "type": "module",
   "bin": {

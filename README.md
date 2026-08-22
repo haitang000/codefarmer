@@ -123,6 +123,7 @@ parent Git repository.
 | `codefarmer config path`                        | Print the configuration path                                                   |
 | `codefarmer language [language]`                | Show or persist the interface and agent response language                      |
 | `codefarmer doctor`                             | Check Node, key, config, permissions, optional Git, and API connectivity       |
+| `codefarmer models`                             | List models for the active provider, synced from the upstream `/models` API    |
 | `codefarmer completions <shell>`                | Print a bash, zsh, or fish completion script                                   |
 
 Use `codefarmer <command> --help` for command-specific arguments. Global
@@ -162,7 +163,9 @@ fails with exit code `3`; it is never implicitly accepted.
 
 The TUI keeps the conversation, tool lifecycle, approvals, workspace state, and
 session actions in one alternate-screen interface. It streams model output and
-shows each tool as it moves from running to succeeded or failed. Mutating tools
+shows each tool as it moves from running to succeeded or failed. The footer
+shows token usage and an estimated session cost from public list prices; a
+configured `budgetUsd` appears beside it. Mutating tools
 pause in an approval modal under the default `ask` policy; only an explicit `y`
 accepts the operation.
 
@@ -180,6 +183,7 @@ with `/plan [on|off]` and `/auto [on|off]`.
 | `/status`                    | Show session, workspace, Git, and runtime                                                          |
 | `/context`                   | Show context messages and token usage                                                              |
 | `/compact`                   | Compress early messages of the current session into a summary (suggested on long sessions)         |
+| `/export [json\|PATH]`       | Export the current session to a Markdown (default) or JSON file in the workspace                   |
 | `/effort`                    | Open the reasoning effort picker (↑/↓ + Enter)                                                     |
 | `/plan [on/off]`             | Enable or disable read-only planning mode                                                          |
 | `/auto [on/off]`             | Enable or disable automatic plan-and-execute mode                                                  |
@@ -206,7 +210,9 @@ ready for the next turn.
 
 `Esc` or `Ctrl+C` cancels an active turn. When no turn is active, `Ctrl+C`
 exits and restores the terminal. `Shift+Enter` or `Alt+Enter` inserts a
-newline in the prompt; Enter still submits. In a non-interactive shell,
+newline in the prompt; Enter still submits. Prefix a workspace path with `@`
+(for example `@src/cli.ts`) to attach that file to the prompt; Tab completes
+the path. A finished turn rings the terminal bell. In a non-interactive shell,
 no-argument invocation prints help instead of starting a renderer.
 
 ## Agent tools
@@ -231,6 +237,8 @@ CodeFarmer exposes a fixed v1 tool set to the model:
   discover pages, then `web_fetch` for full content.
 - `todo_write` maintains a session todo list for multi-step tasks; `/todos`
   shows it in the TUI.
+- `ask_user` asks a multiple-choice question and waits for an interactive
+  selection. Non-interactive `run --json` cannot answer it.
 - `git_status` and `git_diff` show the working-tree state, `git_log` shows
   commit history, and `git_show` displays individual commits (patch or `--stat`
   summary), all without changing repository state. Git is optional: when it is

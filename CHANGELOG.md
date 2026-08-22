@@ -6,6 +6,28 @@ All notable changes to CodeFarmer are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-08-22
+
+### Added
+
+- `@path` mentions: prefix a workspace file or directory with `@` in a prompt
+  (for example `@src/cli.ts`) to attach its contents to that turn. Tab
+  completes the path in the TUI.
+- TUI `/export [json|PATH]` writes the current session to a Markdown or JSON
+  file inside the workspace (same format as `sessions export`).
+- The TUI rings the terminal bell when a turn finishes.
+- `ask_user` tool: the agent can present a multiple-choice question and wait
+  for an interactive selection. Non-interactive `run --json` returns
+  `ASK_UNAVAILABLE`.
+- The TUI footer shows an estimated session cost from public list prices, and
+  the remaining budget when `budgetUsd` is set. The figure turns yellow at 80%
+  of the budget and red once the ceiling is reached.
+- Providers sync their model list from the upstream OpenAI-compatible
+  `/models` endpoint. `/model`, `codefarmer setup`, and `codefarmer models`
+  use the live list (cached for six hours) and fall back to the curated
+  catalog when the endpoint is unreachable. Non-chat ids such as embeddings
+  and TTS are filtered out.
+
 ## [0.1.6] - 2026-08-22
 
 ### Added

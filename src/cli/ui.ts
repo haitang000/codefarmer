@@ -1,7 +1,8 @@
-import { confirm, isCancel } from '@clack/prompts';
+import { confirm, isCancel, select } from '@clack/prompts';
 import chalk from 'chalk';
 
 import type { ApprovalRequest } from '../core/approval.js';
+import type { AskUserAnswer, AskUserRequest } from '../tools/types.js';
 import type { ProviderEvent } from '../types.js';
 
 /** Adds conventional terminal colors to a unified Git diff. */
@@ -24,6 +25,22 @@ export function colorizeDiff(diff: string): string {
       return line;
     })
     .join('\n');
+}
+
+export async function promptForAskUser(request: AskUserRequest): Promise<AskUserAnswer> {
+  process.stderr.write(`\n${chalk.bold(request.question)}\n`);
+  const answer = await select({
+    message: request.question,
+    options: request.options.map((option, index) => ({
+      value: String(index),
+      label: option,
+    })),
+  });
+  if (isCancel(answer)) return { cancelled: true };
+  const index = Number(answer);
+  const selected = request.options[index];
+  if (selected === undefined) return { cancelled: true };
+  return { cancelled: false, selected, index };
 }
 
 export async function promptForApproval(request: ApprovalRequest): Promise<boolean> {

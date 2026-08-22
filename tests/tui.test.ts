@@ -58,6 +58,21 @@ describe('TUI command parser', () => {
     expect(parseTuiCommand('/security')).toEqual({ kind: 'security-review', args: [] });
     expect(parseTuiCommand('/sec-review')).toEqual({ kind: 'security-review', args: [] });
     expect(parseTuiCommand('/todos')).toEqual({ kind: 'todos' });
+    expect(parseTuiCommand('/export')).toEqual({
+      kind: 'export',
+      format: 'markdown',
+      path: '',
+    });
+    expect(parseTuiCommand('/export json notes.json')).toEqual({
+      kind: 'export',
+      format: 'json',
+      path: 'notes.json',
+    });
+    expect(parseTuiCommand('/export out.md')).toEqual({
+      kind: 'export',
+      format: 'markdown',
+      path: 'out.md',
+    });
     expect(parseTuiCommand('/todo')).toEqual({ kind: 'todos' });
     expect(parseTuiCommand('/resume session-1')).toEqual({
       kind: 'resume',
@@ -76,8 +91,11 @@ describe('TUI command parser', () => {
     expect(TUI_HELP).toContain('/context');
     expect(TUI_HELP).toContain('/stats');
     expect(TUI_HELP).toContain('/compact');
+    expect(TUI_HELP).toContain('/export');
+    expect(TUI_HELP).toContain('@path');
     expect(TUI_HELP).toContain('/effort');
     expect(TUI_HELP).toContain('/model');
+    expect(TUI_HELP).toContain('sync from the provider');
     expect(TUI_HELP).toContain('/plan');
     expect(TUI_HELP).toContain('/auto');
     expect(TUI_HELP).toContain('Shift+Tab');

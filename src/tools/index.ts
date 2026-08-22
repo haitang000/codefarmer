@@ -58,6 +58,14 @@ export {
   readSkillResourceDefinition,
 } from './skill-tools.js';
 export {
+  completePathMention,
+  expandPathMentions,
+  extractPathMentions,
+  locatePathMentions,
+  mentionAtCursor,
+} from './mentions.js';
+export { askUser, askUserDefinition } from './ask-user.js';
+export {
   classifyCommand,
   executeProcess,
   runCommand,

@@ -20,6 +20,7 @@ import {
   doctorAction,
   initAction,
   languageAction,
+  modelsListAction,
   pushAction,
   runAction,
   sessionsCompactAction,
@@ -116,7 +117,7 @@ program
   .name('codefarmer')
   .description('安全、可审计的多 Provider Coding Agent CLI')
   .usage('[选项] [命令]')
-  .version('0.1.6', '-V, --version', '显示版本')
+  .version('0.1.7', '-V, --version', '显示版本')
   .helpOption('-h, --help', '显示帮助')
   .helpCommand('help [command]', '显示命令帮助')
   .option('--cwd <path>', '工作区目录')
@@ -209,15 +210,22 @@ program
   .option('--json', '仅输出机器可读 JSON')
   .option('--no-history', '不保存本地会话历史')
   .option('--session <id>', '继续已有会话')
-  .option('--skill <ref>', '显式加载技能（可重复）', (value: string, previous: string[] | undefined) => [
-    ...(previous ?? []),
-    value,
-  ])
+  .option(
+    '--skill <ref>',
+    '显式加载技能（可重复）',
+    (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
+  )
   .option('--plan', '计划模式：只允许只读工具，输出实施方案而不修改文件')
   .action(
     async (
       prompt: string[],
-      options: { json?: boolean; history?: boolean; session?: string; plan?: boolean; skill?: string[] },
+      options: {
+        json?: boolean;
+        history?: boolean;
+        session?: string;
+        plan?: boolean;
+        skill?: string[];
+      },
       command: Command,
     ) => {
       await runAction(prompt, globals(command), {
@@ -289,8 +297,9 @@ skills
   .description('显示技能说明或其目录中的文本资源')
   .argument('<ref>', '技能引用')
   .argument('[path]', '可选的技能相对资源路径')
-  .action(async (ref: string, resourcePath: string | undefined, _options: unknown, command: Command) =>
-    skillsShowAction(globals(command), ref, resourcePath),
+  .action(
+    async (ref: string, resourcePath: string | undefined, _options: unknown, command: Command) =>
+      skillsShowAction(globals(command), ref, resourcePath),
   );
 sessions
   .command('resume')
@@ -363,6 +372,14 @@ config
   .command('path')
   .description('显示用户和项目配置路径')
   .action(async (_options: unknown, command: Command) => configPathAction(globals(command)));
+
+program
+  .command('models')
+  .description('列出当前 Provider 的模型（自动同步上游 /models）')
+  .option('--refresh', '忽略缓存，重新向端点拉取')
+  .action(async (options: { refresh?: boolean }, command: Command) =>
+    modelsListAction(globals(command), options.refresh ?? false),
+  );
 
 program
   .command('doctor')

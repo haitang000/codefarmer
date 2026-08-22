@@ -189,7 +189,7 @@ describe('AgentRunner', () => {
       input: 'Introduce yourself',
       store: true,
     });
-    expect(provider.requests[0]?.tools).toHaveLength(16);
+    expect(provider.requests[0]?.tools).toHaveLength(17);
   });
 
   it('executes a tool call and continues with its call id and response id', async () => {
@@ -631,7 +631,7 @@ describe('AgentRunner', () => {
 
     await agent.run('Do something', { history: false });
 
-    expect(provider.requests[0]?.tools).toHaveLength(16);
+    expect(provider.requests[0]?.tools).toHaveLength(17);
     expect(provider.requests[0]?.instructions).not.toContain('Plan mode is ON');
   });
 

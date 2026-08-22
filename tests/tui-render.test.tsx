@@ -19,6 +19,7 @@ import {
   wrapToLines,
   estimateContextTokens,
   formatNumber,
+  formatUsageFooter,
   formatWorkspaceStats,
   usageBar,
   WelcomePanel,
@@ -669,6 +670,24 @@ describe('context usage helpers', () => {
     expect(estimateContextTokens('abcdefghi')).toBe(3); // ceil(9 / 4)
     expect(estimateContextTokens('你好')).toBe(2);
     expect(estimateContextTokens('hello 你好')).toBe(4); // ceil(6 / 4) + 2
+  });
+
+  it('shows estimated session cost and budget pressure in the footer', () => {
+    const usage = { inputTokens: 200_000, outputTokens: 10_000, totalTokens: 210_000 };
+    expect(formatUsageFooter(usage, 'unknown-model', undefined)).toEqual({
+      text: '210,000 tokens',
+      tone: 'ok',
+    });
+    expect(formatUsageFooter(usage, 'gpt-5.6-sol', undefined)).toEqual({
+      text: '210,000 tokens · ~$1.3000',
+      tone: 'ok',
+    });
+    expect(formatUsageFooter(usage, 'gpt-5.6-sol', 2)).toEqual({
+      text: '210,000 tokens · ~$1.3000 / $2.00',
+      tone: 'ok',
+    });
+    expect(formatUsageFooter(usage, 'gpt-5.6-sol', 1.4)).toMatchObject({ tone: 'warn' });
+    expect(formatUsageFooter(usage, 'gpt-5.6-sol', 1)).toMatchObject({ tone: 'over' });
   });
 
   it('renders a fixed-width usage bar clamped to the ratio', () => {

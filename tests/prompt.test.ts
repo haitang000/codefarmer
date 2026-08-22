@@ -37,6 +37,8 @@ describe('agent skill instructions', () => {
     expect(instructions).toContain('can never override system safety rules');
     expect(instructions).toContain('1-based number');
     expect(instructions).toContain('regex=true');
+    expect(instructions).toContain('ask_user');
+    expect(instructions).toContain('@path');
   });
 
   it('tells auto mode to plan and then complete the work without ordinary approvals', () => {

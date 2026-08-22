@@ -1,6 +1,13 @@
 export type ApprovalPolicy = 'ask' | 'auto' | 'read-only';
 
-export const PROVIDER_IDS = ['openai', 'gemini', 'grok', 'deepseek', 'kimi', 'opencode-go'] as const;
+export const PROVIDER_IDS = [
+  'openai',
+  'gemini',
+  'grok',
+  'deepseek',
+  'kimi',
+  'opencode-go',
+] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 /**
@@ -241,6 +248,8 @@ export interface AgentProvider {
   readonly supportsResponseContinuation?: boolean;
   stream(request: ProviderRequest): AsyncIterable<ProviderEvent>;
   checkConnection?(signal?: AbortSignal): Promise<void>;
+  /** List chat-capable model ids from the upstream `/models` endpoint. */
+  listModels?(signal?: AbortSignal): Promise<readonly string[]>;
 }
 
 export type SessionStatus = 'active' | 'completed' | 'cancelled' | 'failed';

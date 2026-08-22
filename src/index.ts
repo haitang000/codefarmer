@@ -34,5 +34,12 @@ export * from './infra/index.js';
 export * from './providers/openai.js';
 export * from './providers/openai-compatible.js';
 export * from './providers/catalog.js';
+export {
+  fetchCompatibleModels,
+  isLikelyChatModel,
+  mergeModelLists,
+  parseModelListPayload,
+  syncProviderModels,
+} from './providers/model-sync.js';
 export { createToolRegistry, type ToolRegistry } from './tools/registry.js';
 export type { ToolExecutionOptions, ToolLifecycleHooks } from './tools/types.js';

@@ -1,4 +1,5 @@
 import type { ApprovalDecision, ApprovalRequest } from '../core/approval.js';
+import type { AskUserAnswer, AskUserRequest } from '../tools/types.js';
 import {
   createAgentRuntime,
   type AgentRuntime,
@@ -12,6 +13,7 @@ import type { ProviderToolCall } from '../types.js';
 
 type ApprovalHandler = (request: ApprovalRequest) => Promise<boolean>;
 type ApprovalDecisionHandler = (request: ApprovalRequest) => Promise<ApprovalDecision>;
+type AskUserHandler = (request: AskUserRequest) => Promise<AskUserAnswer>;
 type ToolEventHandler = (event: TuiToolEvent) => void;
 
 /**
@@ -22,6 +24,7 @@ type ToolEventHandler = (event: TuiToolEvent) => void;
 export class TuiInteractionBridge {
   private approvalHandler: ApprovalHandler | undefined;
   private approvalDecisionHandler: ApprovalDecisionHandler | undefined;
+  private askUserHandler: AskUserHandler | undefined;
   private toolEventHandler: ToolEventHandler | undefined;
 
   public readonly approvalPrompt: ApprovalHandler = async (request) => {
@@ -59,6 +62,15 @@ export class TuiInteractionBridge {
 
   public setApprovalDecisionHandler(handler: ApprovalDecisionHandler | undefined): void {
     this.approvalDecisionHandler = handler;
+  }
+
+  public readonly askUserPrompt: AskUserHandler = async (request) => {
+    const handler = this.askUserHandler;
+    return handler === undefined ? { cancelled: true } : handler(request);
+  };
+
+  public setAskUserHandler(handler: AskUserHandler | undefined): void {
+    this.askUserHandler = handler;
   }
 
   public setToolEventHandler(handler: ToolEventHandler | undefined): void {
@@ -109,6 +121,7 @@ export function createTuiRuntimeFactory(
       history: true,
       approvalPrompt: bridge.approvalPrompt,
       approvalDecisionPrompt: bridge.approvalDecisionPrompt,
+      askUser: bridge.askUserPrompt,
       interactive: true,
       toolHooks: bridge.toolHooks,
       ...(sessionId === undefined ? {} : { sessionId }),

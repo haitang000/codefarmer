@@ -23,6 +23,7 @@ import { failedResult, requireObject } from './output.js';
 import { runCommand, runCommandDefinition } from './run-command.js';
 import { writeFileDefinition, writeWorkspaceFile } from './write-file.js';
 import { todoWriteDefinition, writeTodos } from './todo-write.js';
+import { askUser, askUserDefinition } from './ask-user.js';
 import { webFetch, webFetchDefinition } from './web-fetch.js';
 import { webSearch, webSearchDefinition } from './web-search.js';
 import {
@@ -289,6 +290,7 @@ export async function createToolRegistry(options: ToolContextOptions): Promise<T
       ? {}
       : { webSearchEndpoint: options.webSearchEndpoint }),
     ...(options.todos === undefined ? {} : { todos: options.todos }),
+    ...(options.askUser === undefined ? {} : { askUser: options.askUser }),
   };
 
   const register = (
@@ -335,6 +337,9 @@ export async function createToolRegistry(options: ToolContextOptions): Promise<T
       ),
       register(todoWriteDefinition, (arguments_, callId, options = {}) =>
         writeTodos(callId, arguments_, executionContext(context, options)),
+      ),
+      register(askUserDefinition, (arguments_, callId, options = {}) =>
+        askUser(callId, arguments_, executionContext(context, options)),
       ),
       register(listSkillsDefinition, (arguments_, callId, options = {}) =>
         listSkills(callId, arguments_, executionContext(context, options)),

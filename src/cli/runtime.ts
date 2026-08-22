@@ -25,7 +25,12 @@ import { OpenAIProvider } from '../providers/openai.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible.js';
 import { isProviderId, providerPreset } from '../providers/catalog.js';
 import { createToolRegistry } from '../tools/registry.js';
-import type { ToolCall, ToolLifecycleHooks } from '../tools/types.js';
+import type {
+  AskUserAnswer,
+  AskUserRequest,
+  ToolCall,
+  ToolLifecycleHooks,
+} from '../tools/types.js';
 import type {
   AgentProvider,
   CodeFarmerConfig,
@@ -33,7 +38,7 @@ import type {
   SkillCatalog,
   ToolResult,
 } from '../types.js';
-import { promptForApproval } from './ui.js';
+import { promptForApproval, promptForAskUser } from './ui.js';
 
 export interface GlobalOptions {
   cwd?: string;
@@ -79,6 +84,7 @@ export interface AgentRuntimeOptions {
   interactive?: boolean;
   toolHooks?: ToolLifecycleHooks;
   hooks?: AgentHooks;
+  askUser?: (request: AskUserRequest) => Promise<AskUserAnswer>;
 }
 
 /** Environment variable hint for a custom endpoint's API key, if any. */
@@ -225,6 +231,9 @@ export async function createAgentRuntime(
     agentOptions.approvalDecisionPrompt ?? agentOptions.approvalPrompt ?? promptForApproval,
     agentOptions.interactive ?? process.stdin.isTTY,
   );
+  const askUser =
+    agentOptions.askUser ??
+    (agentOptions.interactive !== false && process.stdin.isTTY ? promptForAskUser : undefined);
   const tools = await createToolRegistry({
     workspace: runtimeBase.workspace,
     maxFileBytes: config.maxFileSizeBytes,
@@ -234,6 +243,7 @@ export async function createAgentRuntime(
     ...(runtimeBase.skills === undefined ? {} : { skillCatalog: runtimeBase.skills }),
     ...(session === undefined ? {} : { sessionId: session.id }),
     todos,
+    ...(askUser === undefined ? {} : { askUser }),
     approve: async (request) => {
       const approvalRequest: ApprovalRequest = {
         kind: request.kind === 'file-mutation' ? 'patch' : 'command',

@@ -1,5 +1,6 @@
-import { access } from 'node:fs/promises';
+import { access, mkdir, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import path from 'node:path';
 
 import { execa } from 'execa';
 import wrapAnsi from 'wrap-ansi';
@@ -35,8 +36,19 @@ import {
   sessionContextChars,
 } from '../core/session-compact.js';
 import { formatSkillCatalog } from '../core/skills.js';
-import { computeWorkspaceStats, type WorkspaceStats } from '../core/stats.js';
+import {
+  computeWorkspaceStats,
+  estimateCostUsd,
+  lookupModelPrice,
+  type WorkspaceStats,
+} from '../core/stats.js';
+import { renderSessionExport } from '../cli/session-export.js';
+import { completePathMention, expandPathMentions, mentionAtCursor } from '../tools/mentions.js';
+import { isPathInside, WorkspaceGuard } from '../tools/workspace.js';
+import type { AskUserAnswer, AskUserRequest } from '../tools/types.js';
 import { modelsForProvider } from '../providers/catalog.js';
+import { syncProviderModels } from '../providers/model-sync.js';
+import { resolveProviderApiKey } from '../infra/credentials.js';
 import { DiffView, MarkdownLine, MarkdownView, diffLineColor } from './markdown.js';
 import {
   extractCommitMessage,
@@ -97,6 +109,7 @@ const READ_ONLY_COMMANDS: ReadonlySet<TuiCommand['kind']> = new Set([
   'sessions',
   'diff',
   'todos',
+  'export',
 ]);
 
 function canRunWhileBusy(command: TuiCommand): boolean {
@@ -464,7 +477,7 @@ export function WelcomePanel({
             {'CodeFarmer'}
           </Text>
           <Text color={PANEL_BORDER_COLOR}>{'  /  '}</Text>
-          <Text color={SECONDARY_TEXT_COLOR}>{'v0.1.6'}</Text>
+          <Text color={SECONDARY_TEXT_COLOR}>{'v0.1.7'}</Text>
         </Box>
         <Text color={READY_COLOR} bold>
           {zh ? '● 就绪' : '● READY'}
@@ -563,6 +576,30 @@ export const ESTIMATED_CONTEXT_WINDOW_TOKENS = 128_000;
 /** Group thousands for readability, independent of the terminal locale. */
 export function formatNumber(value: number): string {
   return value.toLocaleString('en-US');
+}
+
+export type UsageFooterTone = 'ok' | 'warn' | 'over';
+
+/**
+ * Compact session usage for the TUI footer: token count plus an estimated
+ * USD cost from the public list-price table. Unknown models omit the cost
+ * rather than pretending it is zero.
+ */
+export function formatUsageFooter(
+  usage: TokenUsage,
+  model: string,
+  budgetUsd: number | undefined,
+): { text: string; tone: UsageFooterTone } {
+  const tokens = `${formatNumber(usage.totalTokens)} tokens`;
+  const price = lookupModelPrice(model);
+  if (price === undefined) return { text: tokens, tone: 'ok' };
+  const spent = estimateCostUsd(usage, price);
+  const cost = `~$${spent.toFixed(4)}`;
+  if (budgetUsd === undefined) return { text: `${tokens} · ${cost}`, tone: 'ok' };
+  const text = `${tokens} · ${cost} / $${budgetUsd.toFixed(2)}`;
+  if (spent >= budgetUsd) return { text, tone: 'over' };
+  if (spent >= budgetUsd * 0.8) return { text, tone: 'warn' };
+  return { text, tone: 'ok' };
 }
 
 /**
@@ -861,7 +898,20 @@ const TOOL_DISPLAY_LABELS: Record<string, ToolDisplayLabel> = {
     zh: { active: '更新任务清单中', done: '已更新任务清单', failed: '更新任务清单失败' },
     en: { active: 'Updating todos', done: 'Updated todos', failed: 'Todo update failed' },
   },
+  ask_user: {
+    zh: { active: '等待选择中', done: '已选择', failed: '提问失败' },
+    en: { active: 'Waiting for choice', done: 'Chose', failed: 'Question failed' },
+  },
 };
+
+function ringTurnCompleteBell(): void {
+  if (!process.stdout.isTTY) return;
+  try {
+    process.stdout.write('\u0007');
+  } catch {
+    // The terminal may already be gone.
+  }
+}
 
 function toolDisplayName(name: string, language: Language, status: ToolViewStatus): string {
   const label = TOOL_DISPLAY_LABELS[name];
@@ -1585,6 +1635,42 @@ export function SessionPicker({
   );
 }
 
+export function AskUserPicker({
+  request,
+  selected,
+  language = 'en',
+  columns,
+}: {
+  request: AskUserRequest;
+  selected: number;
+  language?: Language;
+  columns: number;
+}): React.ReactElement {
+  const zh = language === 'zh-CN';
+  const width = Math.max(1, Math.min(92, columns - 4));
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} width={width}>
+      <Text color="cyan" bold>
+        {zh ? '请选择' : 'CHOOSE'}
+      </Text>
+      <Text wrap="wrap">{request.question}</Text>
+      <Text dimColor>
+        {zh ? '↑/↓ 选择 · Enter 确认 · Esc 跳过' : '↑/↓ select · Enter confirm · Esc skip'}
+      </Text>
+      {request.options.map((option, index) => (
+        <Text
+          key={`${String(index)}-${option}`}
+          {...(index === selected ? { color: 'cyan' } : {})}
+          bold={index === selected}
+          wrap="truncate-end"
+        >
+          {`${index === selected ? '›' : ' '} ${option}`}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
 /** A keyboard-first model switcher opened by a bare `/model`. */
 export function ModelPicker({
   models,
@@ -1703,10 +1789,16 @@ export function TuiApp({
   // highlighted model. Opened by a bare `/model`, adjusted with ↑/↓,
   // confirmed with Enter, dismissed with Esc (or Ctrl+C).
   const [modelPicker, setModelPicker] = useState<number | null>(null);
+  const [syncedModels, setSyncedModels] = useState<string[] | null>(null);
+  const syncedModelsRef = useRef<string[] | null>(null);
+  syncedModelsRef.current = syncedModels;
   // Loaded on demand for `/sessions`; the picker holds keyboard focus until
   // the user resumes a session or closes it.
   const [sessionPicker, setSessionPicker] = useState<SessionRecord[] | null>(null);
   const [sessionPickerSelection, setSessionPickerSelection] = useState(0);
+  const [askPrompt, setAskPrompt] = useState<AskUserRequest | null>(null);
+  const [askSelection, setAskSelection] = useState(0);
+  const askResolverRef = useRef<((answer: AskUserAnswer) => void) | undefined>(undefined);
   const controllerRef = useRef<AbortController | undefined>(undefined);
   const approvalQueueRef = useRef<PendingApproval[]>([]);
   const currentApprovalRef = useRef<PendingApproval | undefined>(undefined);
@@ -1792,12 +1884,32 @@ export function TuiApp({
     [pumpApproval],
   );
 
+  const requestAskUser = useCallback((request: AskUserRequest): Promise<AskUserAnswer> => {
+    return new Promise((resolve) => {
+      askResolverRef.current?.({ cancelled: true });
+      askResolverRef.current = resolve;
+      setAskSelection(0);
+      setAskPrompt(request);
+    });
+  }, []);
+
+  const resolveAskUser = useCallback((answer: AskUserAnswer): void => {
+    const resolve = askResolverRef.current;
+    askResolverRef.current = undefined;
+    setAskPrompt(null);
+    resolve?.(answer);
+  }, []);
+
   useEffect(() => {
     bridge.setApprovalHandler(requestApproval);
     bridge.setApprovalDecisionHandler(requestApprovalDecision);
+    bridge.setAskUserHandler(requestAskUser);
     return () => {
       bridge.setApprovalHandler(undefined);
       bridge.setApprovalDecisionHandler(undefined);
+      bridge.setAskUserHandler(undefined);
+      askResolverRef.current?.({ cancelled: true });
+      askResolverRef.current = undefined;
       const current = currentApprovalRef.current;
       currentApprovalRef.current = undefined;
       current?.resolve({ approved: false, scope: 'once' });
@@ -1805,7 +1917,7 @@ export function TuiApp({
         pending.resolve({ approved: false, scope: 'once' });
       }
     };
-  }, [bridge, requestApproval]);
+  }, [bridge, requestApproval, requestAskUser]);
 
   const handleToolEvent = useCallback((event: TuiToolEvent): void => {
     if (event.type === 'tool_start' && event.call !== undefined) {
@@ -1896,18 +2008,62 @@ export function TuiApp({
     setMode(nextAgentMode(agentModeRef.current));
   }, [setMode]);
 
-  const swapRuntime = useCallback((next: AgentRuntime): void => {
-    runtimeRef.current = next;
-    setRuntime(next);
-    setEntries(runtimeEntries(next));
-    setUsage(next.session?.usage ?? EMPTY_USAGE);
-    setStatus(next.config.language === 'zh-CN' ? '就绪' : 'Ready');
-    setTitleStatus('idle');
-    setTopLine(-1);
-    setSelectedSkills([]);
-    languageRef.current = next.config.language;
-    setLanguage(next.config.language);
+  const pickerModelsFor = useCallback((active: AgentRuntime): string[] => {
+    return (
+      syncedModelsRef.current ??
+      modelsForProvider(active.config.provider, active.config.customEndpoints, active.config.model)
+    );
   }, []);
+
+  const refreshProviderModels = useCallback(async (force = false): Promise<void> => {
+    const active = runtimeRef.current;
+    const apiKeyEnv = active.config.customEndpoints.find(
+      (endpoint) => endpoint.id === active.config.provider,
+    )?.apiKeyEnv;
+    const apiKey =
+      (await resolveProviderApiKey(
+        active.config.provider,
+        apiKeyEnv === undefined ? {} : { apiKeyEnv },
+      )) ?? 'codefarmer-local-endpoint';
+    const result = await syncProviderModels({
+      provider: active.config.provider,
+      baseURL: active.config.baseURL,
+      apiKey,
+      currentModel: active.config.model,
+      customEndpoints: active.config.customEndpoints,
+      ...(force ? { force: true } : {}),
+    });
+    syncedModelsRef.current = result.models;
+    setSyncedModels(result.models);
+    setModelPicker((selected) => {
+      if (selected === null) return selected;
+      const index = result.models.indexOf(active.config.model);
+      return index < 0 ? 0 : index;
+    });
+  }, []);
+
+  useEffect(() => {
+    void refreshProviderModels();
+  }, [refreshProviderModels]);
+
+  const swapRuntime = useCallback(
+    (next: AgentRuntime): void => {
+      runtimeRef.current = next;
+      setRuntime(next);
+      setEntries(runtimeEntries(next));
+      setUsage(next.session?.usage ?? EMPTY_USAGE);
+      setStatus(next.config.language === 'zh-CN' ? '就绪' : 'Ready');
+      setTitleStatus('idle');
+      setTopLine(-1);
+      setSelectedSkills([]);
+      languageRef.current = next.config.language;
+      setLanguage(next.config.language);
+      syncedModelsRef.current = null;
+      setSyncedModels(null);
+      void refreshProviderModels();
+    },
+    [refreshProviderModels],
+  );
 
   interface RunPromptOptions {
     /** Run against an ephemeral session so the turn is not recorded in history. */
@@ -1959,6 +2115,19 @@ export function TuiApp({
       const controller = new AbortController();
       controllerRef.current = controller;
       const activeRuntime = runtimeRef.current;
+      const expanded = await expandPathMentions(prompt, {
+        workspace: activeRuntime.workspace,
+        ignoredPaths: activeRuntime.config.ignoredPaths,
+        maxFileBytes: activeRuntime.config.maxFileSizeBytes,
+      });
+      const modelPrompt = expanded.prompt;
+      if (expanded.attached.length > 0) {
+        appendSystem(
+          languageRef.current === 'zh-CN'
+            ? `已附加 ${expanded.attached.join(', ')}`
+            : `Attached ${expanded.attached.join(', ')}`,
+        );
+      }
       const handleProviderEvent = (event: ProviderEvent): void => {
         if (event.type === 'text_delta') {
           const currentAssistantId = ensureAssistantEntry();
@@ -2051,7 +2220,7 @@ export function TuiApp({
         const turnAuto = options?.plan !== true && agentModeRef.current === 'auto';
         let result: AgentRunResult;
         if (activeRuntime.orchestrator !== undefined && options?.ephemeral !== true) {
-          const queued = activeRuntime.orchestrator.enqueue(prompt, {
+          const queued = activeRuntime.orchestrator.enqueue(modelPrompt, {
             displayPrompt,
             ...(turnPlan ? { plan: true } : {}),
             ...(turnAuto ? { auto: true } : {}),
@@ -2073,7 +2242,7 @@ export function TuiApp({
           });
           result = await queued.promise;
         } else {
-          result = await activeRuntime.runner.run(prompt, {
+          result = await activeRuntime.runner.run(modelPrompt, {
             ...(options?.ephemeral === true || activeRuntime.session === undefined
               ? {}
               : { session: activeRuntime.session }),
@@ -2109,6 +2278,7 @@ export function TuiApp({
         if (result.status === 'failed' && result.error !== undefined) {
           appendSystem(`${result.error.code}: ${result.error.message}`, 'error');
         }
+        if (!nested) ringTurnCompleteBell();
         if (!nested && activeRuntime.session !== undefined) {
           const session = activeRuntime.session;
           const contextChars = sessionContextChars(session);
@@ -2128,6 +2298,7 @@ export function TuiApp({
         if (activeAssistant.id !== undefined) flushDeltaBuffer(activeAssistant.id);
         appendSystem(displayError(error), 'error');
         setStatus('Error');
+        if (!nested) ringTurnCompleteBell();
         return undefined;
       } finally {
         unsubscribe?.();
@@ -2347,6 +2518,8 @@ export function TuiApp({
           if (usage.reasoningTokens !== undefined) {
             lines.push(`           reasoning ${formatNumber(usage.reasoningTokens)}`);
           }
+          const costLine = formatUsageFooter(usage, active.config.model, active.config.budgetUsd);
+          lines.push(`Cost       ${costLine.text}`);
           appendSystem(lines.join('\n'));
         } else if (command.kind === 'compact') {
           const active = runtimeRef.current;
@@ -2386,14 +2559,11 @@ export function TuiApp({
           const nextModel = command.value.trim();
           if (nextModel.length === 0) {
             // Bare /model opens the picker; /model NAME switches directly.
-            const models = modelsForProvider(
-              runtimeRef.current.config.provider,
-              runtimeRef.current.config.customEndpoints,
-              runtimeRef.current.config.model,
-            );
+            const models = pickerModelsFor(runtimeRef.current);
             const index = models.indexOf(runtimeRef.current.config.model);
             setEffortPicker(null);
             setModelPicker(index < 0 ? 0 : index);
+            void refreshProviderModels();
           } else {
             await setActiveModel(nextModel);
           }
@@ -2712,6 +2882,34 @@ export function TuiApp({
           } else {
             appendSystem(`Pushed ${preview.branch} to ${preview.remote}.`);
           }
+        } else if (command.kind === 'export') {
+          const session = runtimeRef.current.session;
+          if (session === undefined || session.messages.length === 0) {
+            appendSystem(
+              languageRef.current === 'zh-CN' ? '没有可导出的会话。' : 'Nothing to export.',
+            );
+          } else {
+            const fallback = `codefarmer-${session.id.slice(0, 8)}.${command.format === 'json' ? 'json' : 'md'}`;
+            const relative = command.path.length === 0 ? fallback : command.path;
+            const target = path.resolve(runtimeRef.current.workspace, relative);
+            if (!isPathInside(runtimeRef.current.workspace, target)) {
+              appendSystem(
+                languageRef.current === 'zh-CN'
+                  ? '导出路径必须位于工作区内。'
+                  : 'Export path must stay inside the workspace.',
+                'error',
+              );
+            } else {
+              await mkdir(path.dirname(target), { recursive: true });
+              await writeFile(target, renderSessionExport(session, command.format), 'utf8');
+              const shown = path.relative(runtimeRef.current.workspace, target) || relative;
+              appendSystem(
+                languageRef.current === 'zh-CN'
+                  ? `已导出会话到 ${shown}`
+                  : `Exported session to ${shown}`,
+              );
+            }
+          }
         } else if (command.kind === 'undo') {
           const transaction = await runtimeRef.current.transactions.undoLatest(
             runtimeRef.current.session?.id,
@@ -2883,11 +3081,7 @@ export function TuiApp({
         return;
       }
       if (modelPicker !== null) {
-        const models = modelsForProvider(
-          runtimeRef.current.config.provider,
-          runtimeRef.current.config.customEndpoints,
-          runtimeRef.current.config.model,
-        );
+        const models = pickerModelsFor(runtimeRef.current);
         if (key.escape || (key.ctrl && input.toLowerCase() === 'c')) {
           setModelPicker(null);
         } else if (key.return) {
@@ -2900,6 +3094,22 @@ export function TuiApp({
           setModelPicker((selected) =>
             selected === null ? selected : selected >= models.length - 1 ? 0 : selected + 1,
           );
+        }
+        return;
+      }
+      if (askPrompt !== null) {
+        if (key.escape || (key.ctrl && input.toLowerCase() === 'c')) {
+          resolveAskUser({ cancelled: true });
+        } else if (key.return) {
+          const selected = askPrompt.options[askSelection];
+          if (selected === undefined) resolveAskUser({ cancelled: true });
+          else resolveAskUser({ cancelled: false, selected, index: askSelection });
+        } else if (key.upArrow) {
+          setAskSelection((current) =>
+            current <= 0 ? Math.max(0, askPrompt.options.length - 1) : current - 1,
+          );
+        } else if (key.downArrow) {
+          setAskSelection((current) => (current >= askPrompt.options.length - 1 ? 0 : current + 1));
         }
         return;
       }
@@ -2949,6 +3159,21 @@ export function TuiApp({
         const completed = completeTuiCommand(draftRef.current);
         if (completed !== draftRef.current) {
           applyDraft(completed, completed.length);
+          return;
+        }
+        const mention = mentionAtCursor(draftRef.current, cursorRef.current);
+        if (mention !== undefined) {
+          void (async () => {
+            const guard = await WorkspaceGuard.create(
+              runtimeRef.current.workspace,
+              runtimeRef.current.config.ignoredPaths,
+            );
+            const suggestion = await completePathMention(mention.path, guard);
+            if (suggestion === undefined) return;
+            const current = draftRef.current;
+            const next = `${current.slice(0, mention.start + 1)}${suggestion}${current.slice(mention.end)}`;
+            applyDraft(next, mention.start + 1 + suggestion.length);
+          })();
         }
         return;
       }
@@ -3281,11 +3506,7 @@ export function TuiApp({
       )}
       {modelPicker === null ? null : (
         <ModelPicker
-          models={modelsForProvider(
-            runtime.config.provider,
-            runtime.config.customEndpoints,
-            runtime.config.model,
-          )}
+          models={pickerModelsFor(runtime)}
           selected={modelPicker}
           current={runtime.config.model}
           language={language}
@@ -3297,6 +3518,14 @@ export function TuiApp({
           sessions={sessionPicker}
           selected={sessionPickerSelection}
           activeSessionId={runtime.session?.id}
+          language={language}
+          columns={columns}
+        />
+      )}
+      {askPrompt === null ? null : (
+        <AskUserPicker
+          request={askPrompt}
+          selected={askSelection}
           language={language}
           columns={columns}
         />
@@ -3366,7 +3595,19 @@ export function TuiApp({
           <Text color={modeColor} bold>
             {modeLabel}
           </Text>
-          <Text dimColor>{` · ${String(usage.totalTokens)} tokens`}</Text>
+          {(() => {
+            const footer = formatUsageFooter(usage, runtime.config.model, runtime.config.budgetUsd);
+            return (
+              <Text
+                dimColor={footer.tone === 'ok'}
+                {...(footer.tone === 'ok'
+                  ? {}
+                  : { color: footer.tone === 'over' ? 'red' : 'yellow' })}
+              >
+                {` · ${footer.text}`}
+              </Text>
+            );
+          })()}
         </Text>
       </Box>
     </Box>
