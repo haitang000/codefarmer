@@ -6,6 +6,19 @@ All notable changes to CodeFarmer are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- `list_skills` tool: the agent can rediscover the full skill catalog on
+  demand instead of relying only on the compact catalog in the initial
+  instructions. The output lists every skill's reference, description, and
+  scope, including scoped references for duplicate names.
+
+### Changed
+
+- Sessions are now only persisted once they contain at least one message.
+  Opening the TUI (or creating a session) and quitting without sending
+  anything no longer leaves an empty session in `sessions list`.
+
 ## [0.1.5] - 2026-08-13
 
 ### Added

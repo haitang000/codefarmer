@@ -21,6 +21,7 @@ export type ToolName =
   | 'web_fetch'
   | 'web_search'
   | 'todo_write'
+  | 'list_skills'
   | 'read_skill'
   | 'read_skill_resource';
 

@@ -494,12 +494,14 @@ describe('CodeFarmer CLI', () => {
         cachedInputTokens: 500_000,
       });
       const second = await store.createSession('openai', 'gpt-5-mini');
+      await store.appendMessage(second, 'user', 'Second task');
       await store.setStatus(second, 'failed', {
         inputTokens: 2_000,
         outputTokens: 0,
         totalTokens: 2_000,
       });
       const third = await store.createSession('openai', 'gpt-5.6-sol');
+      await store.appendMessage(third, 'user', 'Third task');
       await store.setStatus(third, 'cancelled', {
         inputTokens: 10,
         outputTokens: 10,
@@ -522,6 +524,7 @@ describe('CodeFarmer CLI', () => {
     await withIsolatedEnv(environmentRoot, async (SessionStoreRef) => {
       const store = await SessionStoreRef.create(workspace);
       const first = await store.createSession('openai', 'gpt-5-mini');
+      await store.appendMessage(first, 'user', 'First task');
       await store.setStatus(first, 'completed', {
         inputTokens: 1_000_000,
         outputTokens: 100_000,
@@ -530,12 +533,14 @@ describe('CodeFarmer CLI', () => {
         cachedInputTokens: 500_000,
       });
       const second = await store.createSession('openai', 'gpt-5-mini');
+      await store.appendMessage(second, 'user', 'Second task');
       await store.setStatus(second, 'failed', {
         inputTokens: 2_000,
         outputTokens: 0,
         totalTokens: 2_000,
       });
       const third = await store.createSession('openai', 'gpt-5.6-sol');
+      await store.appendMessage(third, 'user', 'Third task');
       await store.setStatus(third, 'cancelled', {
         inputTokens: 10,
         outputTokens: 10,

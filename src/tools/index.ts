@@ -49,6 +49,8 @@ export type { SearchResult } from './web-search.js';
 export { TodoStore } from '../core/todos.js';
 export type { TodoItem, TodoStatus } from '../core/todos.js';
 export {
+  listSkills,
+  listSkillsDefinition,
   readSkill,
   readSkillDefinition,
   readSkillResource,

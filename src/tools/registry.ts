@@ -26,6 +26,8 @@ import { todoWriteDefinition, writeTodos } from './todo-write.js';
 import { webFetch, webFetchDefinition } from './web-fetch.js';
 import { webSearch, webSearchDefinition } from './web-search.js';
 import {
+  listSkills,
+  listSkillsDefinition,
   readSkill,
   readSkillDefinition,
   readSkillResource,
@@ -333,6 +335,9 @@ export async function createToolRegistry(options: ToolContextOptions): Promise<T
       ),
       register(todoWriteDefinition, (arguments_, callId, options = {}) =>
         writeTodos(callId, arguments_, executionContext(context, options)),
+      ),
+      register(listSkillsDefinition, (arguments_, callId, options = {}) =>
+        listSkills(callId, arguments_, executionContext(context, options)),
       ),
       register(readSkillDefinition, (arguments_, callId, options = {}) =>
         readSkill(callId, arguments_, executionContext(context, options)),

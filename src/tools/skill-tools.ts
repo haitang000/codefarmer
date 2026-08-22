@@ -3,13 +3,28 @@ import { successfulResult, requiredString, truncateUtf8 } from './output.js';
 import type { ResolvedToolContext } from './types.js';
 import { ToolError } from './errors.js';
 
+export const listSkillsDefinition: ToolDefinition = {
+  name: 'list_skills',
+  description:
+    'List every skill available in the workspace, user, and system skill catalogs, including duplicate names as scoped references. Use it to rediscover skills the agent can load with read_skill.',
+  readOnly: true,
+  inputSchema: {
+    type: 'object',
+    properties: {},
+    required: [],
+    additionalProperties: false,
+  },
+};
+
 export const readSkillDefinition: ToolDefinition = {
   name: 'read_skill',
   description: 'Read the complete instructions from a discovered Codex SKILL.md file.',
   readOnly: true,
   inputSchema: {
     type: 'object',
-    properties: { skill: { type: 'string', description: 'Skill reference from the available skills list.' } },
+    properties: {
+      skill: { type: 'string', description: 'Skill reference from the available skills list.' },
+    },
     required: ['skill'],
     additionalProperties: false,
   },
@@ -31,8 +46,36 @@ export const readSkillResourceDefinition: ToolDefinition = {
 };
 
 function catalog(context: ResolvedToolContext): NonNullable<ResolvedToolContext['skillCatalog']> {
-  if (context.skillCatalog === undefined) throw new ToolError('SKILLS_UNAVAILABLE', 'No skill catalog is available.');
+  if (context.skillCatalog === undefined)
+    throw new ToolError('SKILLS_UNAVAILABLE', 'No skill catalog is available.');
   return context.skillCatalog;
+}
+
+export function listSkills(
+  callId: string,
+  _arguments: Record<string, unknown>,
+  context: ResolvedToolContext,
+): Promise<ToolResult> {
+  const skillCatalog = catalog(context);
+  const lines = skillCatalog.skills.map(
+    (skill) => `- ${skill.ref}: ${skill.description} [${skill.scope}]`,
+  );
+  const output = lines.length === 0 ? 'No skills were discovered.' : lines.join('\n');
+  return Promise.resolve(
+    successfulResult(callId, 'list_skills', output, {
+      data: {
+        skills: skillCatalog.skills.map((skill) => ({
+          ref: skill.ref,
+          name: skill.name,
+          description: skill.description,
+          scope: skill.scope,
+          path: skill.skillFile,
+        })),
+        warnings: skillCatalog.warnings,
+        truncated: skillCatalog.truncated,
+      } as JsonObject,
+    }),
+  );
 }
 
 export async function readSkill(

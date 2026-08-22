@@ -824,6 +824,10 @@ const TOOL_DISPLAY_LABELS: Record<string, ToolDisplayLabel> = {
     zh: { active: '查Git提交中', done: '已查Git提交', failed: '查Git提交失败' },
     en: { active: 'Checking Git show', done: 'Git show checked', failed: 'Git show check failed' },
   },
+  list_skills: {
+    zh: { active: '列出技能中', done: '已列出技能', failed: '列出技能失败' },
+    en: { active: 'Listing skills', done: 'Listed skills', failed: 'Skill list failed' },
+  },
   read_skill: {
     zh: { active: '读取技能中', done: '已读取技能', failed: '读取技能失败' },
     en: { active: 'Reading skill', done: 'Read skill', failed: 'Skill read failed' },
@@ -2022,12 +2026,12 @@ export function TuiApp({
           };
           setEntries((previous) => {
             if (previous.some((entry) => entry.tool?.callId === call.callId)) return previous;
-            return appendToolEntryAtResponseBoundary(
-              previous,
-              currentAssistantId,
-              hadOutput,
-              { id: `tool-${call.callId}`, kind: 'tool', content: call.name, tool },
-            );
+            return appendToolEntryAtResponseBoundary(previous, currentAssistantId, hadOutput, {
+              id: `tool-${call.callId}`,
+              kind: 'tool',
+              content: call.name,
+              tool,
+            });
           });
           setStatus(`Preparing ${call.name}`);
         }
@@ -2589,20 +2593,13 @@ export function TuiApp({
             command.args.length === 0
               ? '/security-review — 安全审查工作区差异'
               : `/security-review ${command.args.join(' ')} — 安全审查指定路径`;
-          const review = await runPrompt(
-            securityReviewPrompt(command.args),
-            displayPrompt,
-            {
-              ephemeral: true,
-              plan: true,
-              nested: true,
-            },
-          );
+          const review = await runPrompt(securityReviewPrompt(command.args), displayPrompt, {
+            ephemeral: true,
+            plan: true,
+            nested: true,
+          });
           if (review === undefined) {
-            appendSystem(
-              'Security review failed: the agent could not produce findings.',
-              'error',
-            );
+            appendSystem('Security review failed: the agent could not produce findings.', 'error');
           } else if (review.status === 'cancelled') {
             appendSystem('Security review cancelled.', 'error');
           }

@@ -29,6 +29,12 @@ export class SessionStore {
   // order without blocking the agent loop, and `flush` drains the chain.
   private pendingWrites: Promise<void> = Promise.resolve();
 
+  // Sessions created but not yet persisted. A session is only written to disk
+  // once it carries at least one message, so abandoned conversations (for
+  // example a TUI opened and closed without sending anything) never appear in
+  // `list()` or leave stray files behind.
+  private readonly unsaved = new Map<string, SessionRecord>();
+
   private constructor(
     public readonly workspace: string,
     private readonly directory: string,
@@ -40,11 +46,7 @@ export class SessionStore {
     return new SessionStore(paths.workspace, paths.sessions);
   }
 
-  public async createSession(
-    provider: string,
-    model: string,
-    baseURL?: string,
-  ): Promise<SessionRecord> {
+  public createSession(provider: string, model: string, baseURL?: string): Promise<SessionRecord> {
     const now = new Date().toISOString();
     const session: SessionRecord = {
       version: 1,
@@ -59,15 +61,24 @@ export class SessionStore {
       messages: [],
       toolCalls: [],
     };
-    await this.save(session);
-    return session;
+    // Defer the first write until the session has a message; see `save`.
+    this.unsaved.set(session.id, session);
+    return Promise.resolve(session);
   }
 
   public async get(id: string): Promise<SessionRecord> {
+    const pending = this.unsaved.get(id);
+    if (pending !== undefined) return pending;
     return readJsonFile<SessionRecord>(sessionFile(this.directory, id));
   }
 
   public async save(session: SessionRecord): Promise<void> {
+    if (session.messages.length === 0) {
+      // Empty sessions stay in memory until their first message arrives.
+      this.unsaved.set(session.id, session);
+      return;
+    }
+    this.unsaved.delete(session.id);
     await writeJsonAtomic(sessionFile(this.directory, session.id), {
       ...session,
       updatedAt: new Date().toISOString(),
@@ -79,6 +90,12 @@ export class SessionStore {
    * in queue order; later snapshots supersede earlier ones.
    */
   public saveQueued(session: SessionRecord): void {
+    if (session.messages.length === 0) {
+      // Not persisted yet; the live record in `unsaved` is authoritative.
+      this.unsaved.set(session.id, session);
+      return;
+    }
+    this.unsaved.delete(session.id);
     const snapshot = { ...session, updatedAt: new Date().toISOString() };
     this.pendingWrites = this.pendingWrites.then(() =>
       writeJsonAtomic(sessionFile(this.directory, snapshot.id), snapshot).catch(() => undefined),
@@ -101,6 +118,7 @@ export class SessionStore {
   }
 
   public async delete(id: string): Promise<void> {
+    this.unsaved.delete(id);
     await rm(sessionFile(this.directory, id), { force: true });
   }
 

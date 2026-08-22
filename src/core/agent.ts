@@ -204,9 +204,7 @@ function trimTranscript(transcript: ProviderInput[], maximumChars: number): void
       const content = largest.type === 'message' ? largest.content : largest.output;
       const keep = Math.max(1, maximumChars - (total - content.length));
       const truncated =
-        content.length <= keep
-          ? content
-          : `${content.slice(0, Math.max(1, keep - 24))}\n…[context truncated]`;
+        content.length <= keep ? content : trimOutputSemantic(content, keep);
       transcript[largestIndex] =
         largest.type === 'message'
           ? { ...largest, content: truncated }
@@ -215,10 +213,89 @@ function trimTranscript(transcript: ProviderInput[], maximumChars: number): void
   }
 }
 
+const DIAGNOSTIC_PATTERN =
+  /(?:error|fail|exception|fatal|traceback|warning|syntaxerror|cannot find|not found|denied|rejected)/iu;
+
+/**
+ * Semantically trim tool or log output by preserving the beginning context,
+ * key diagnostic/error lines, and the tail summary while omitting bulky middle lines.
+ */
+export function trimOutputSemantic(content: string, maxChars: number): string {
+  if (content.length <= maxChars) return content;
+  if (maxChars <= 80) {
+    return `${content.slice(0, Math.max(1, maxChars - 24))}\n…[truncated]`;
+  }
+  const lines = content.split('\n');
+  if (lines.length <= 6) {
+    const keepHead = Math.max(1, Math.floor(maxChars * 0.6));
+    const keepTail = Math.max(1, maxChars - keepHead - 35);
+    return `${content.slice(0, keepHead)}\n…[output truncated for context]…\n${content.slice(-keepTail)}`;
+  }
+
+  const headBudget = Math.min(8, Math.max(2, Math.floor(lines.length / 5)));
+  const tailBudget = Math.min(8, Math.max(2, Math.floor(lines.length / 5)));
+  const headLines = lines.slice(0, headBudget);
+  const tailLines = lines.slice(-tailBudget);
+  const middleLines = lines.slice(headBudget, -tailBudget);
+
+  const diagLines: string[] = [];
+  let diagChars = 0;
+  const maxDiagChars = Math.floor(maxChars * 0.4);
+  for (const line of middleLines) {
+    if (DIAGNOSTIC_PATTERN.test(line)) {
+      if (diagChars + line.length > maxDiagChars) break;
+      diagLines.push(line);
+      diagChars += line.length;
+    }
+  }
+
+  const omittedCount = middleLines.length - diagLines.length;
+  const marker =
+    omittedCount > 0 ? `…[${String(omittedCount)} intermediate lines omitted for context]…` : '';
+  const assembled = [...headLines, ...(marker ? [marker] : []), ...diagLines, ...tailLines].join(
+    '\n',
+  );
+
+  if (assembled.length <= maxChars) {
+    return assembled;
+  }
+
+  const keepHead = Math.max(1, Math.floor(maxChars * 0.6));
+  const keepTail = Math.max(1, maxChars - keepHead - 35);
+  return `${content.slice(0, keepHead)}\n…[output truncated for context]…\n${content.slice(-keepTail)}`;
+}
+
+function hasFilePath(value: unknown): value is { path: string } {
+  if (typeof value !== 'object' || value === null || !('path' in value)) return false;
+  return typeof (value as Record<string, unknown>).path === 'string';
+}
+
+/** Extract a distinct target identifier for a tool call to track failures by target. */
+export function extractToolTarget(name: string, args: unknown): string {
+  if (typeof args === 'object' && args !== null && !Array.isArray(args)) {
+    const obj = args as Record<string, unknown>;
+    if (typeof obj.path === 'string') return obj.path;
+    const files = obj.files;
+    if (Array.isArray(files) && files.length > 0) {
+      const first: unknown = files[0];
+      if (hasFilePath(first)) return first.path;
+    }
+    if (typeof obj.executable === 'string') {
+      const argsArray = Array.isArray(obj.arguments)
+        ? (obj.arguments as unknown[]).map(String).join(' ')
+        : '';
+      return `${obj.executable} ${argsArray}`.trim();
+    }
+    if (typeof obj.command === 'string') return obj.command;
+    if (typeof obj.query === 'string') return obj.query;
+  }
+  return name;
+}
+
 /**
  * Clamp the combined size of tool outputs sent back to the model so a batch
  * of parallel calls does not overflow the context window on the next turn.
- * Outputs are trimmed proportionally, keeping the tail of each result.
+ * Outputs are trimmed semantically, preserving diagnostic error traces.
  */
 function clampToolOutputs(
   outputs: ProviderToolResultInput[],
@@ -229,11 +306,11 @@ function clampToolOutputs(
   if (total <= maximumChars) return outputs;
   const ratio = maximumChars / total;
   return outputs.map((item) => {
-    const cut = Math.max(0, Math.floor(item.output.length * ratio) - 20);
-    if (cut >= item.output.length) return item;
+    const targetLength = Math.max(60, Math.floor(item.output.length * ratio) - 20);
+    if (targetLength >= item.output.length) return item;
     return {
       ...item,
-      output: `${item.output.slice(0, cut)}\n…[output truncated for context]`,
+      output: trimOutputSemantic(item.output, targetLength),
     };
   });
 }
@@ -458,6 +535,7 @@ export class AgentRunner {
     }
     let lastOutputs: ProviderToolResultInput[] | undefined;
     let emptyTurns = 0;
+    const consecutiveFailures = new Map<string, number>();
     // Agent instructions depend only on run-level settings, so render them
     // once instead of rebuilding the same string on every turn (including the
     // final summary request).
@@ -690,7 +768,43 @@ export class AgentRunner {
           ...(runOptions.plan === true ? { plan: true } : {}),
           ...(runOptions.auto === true ? { autoApprove: true } : {}),
         });
+
+        const resultsByCallId = new Map(results.map(({ callId, result }) => [callId, result]));
+        const adviceByCallId = new Map<string, string>();
+
         for (const call of pendingCalls) {
+          const result = resultsByCallId.get(call.callId);
+          if (result !== undefined) {
+            const parsedArguments = parseArguments(call.arguments);
+            const targetKey = extractToolTarget(call.name, parsedArguments);
+            const failKey = `${call.name}:${targetKey}`;
+
+            if (!result.success) {
+              const count = (consecutiveFailures.get(failKey) ?? 0) + 1;
+              consecutiveFailures.set(failKey, count);
+              if (count >= 2) {
+                if (call.name === 'apply_patch') {
+                  adviceByCallId.set(
+                    call.callId,
+                    `[Self-Correction Advice] apply_patch has failed repeatedly on "${targetKey}". Re-read the file with read_file to verify current content/line numbers, or switch to write_file for a full rewrite if diffs keep conflicting.`,
+                  );
+                } else if (call.name === 'run_command') {
+                  adviceByCallId.set(
+                    call.callId,
+                    `[Self-Correction Advice] Command "${targetKey}" has failed repeatedly. Inspect the error output above, check working directory/arguments/dependencies, and avoid re-running identical failing commands without adjustments.`,
+                  );
+                } else {
+                  adviceByCallId.set(
+                    call.callId,
+                    `[Self-Correction Advice] Tool "${call.name}" has failed repeatedly on "${targetKey}". Review parameters and adopt an alternative approach.`,
+                  );
+                }
+              }
+            } else {
+              consecutiveFailures.delete(failKey);
+            }
+          }
+
           transcript.push({
             type: 'function_call',
             callId: call.callId,
@@ -699,17 +813,31 @@ export class AgentRunner {
             ...(streamedReasoning.length === 0 ? {} : { reasoningContent: streamedReasoning }),
           });
         }
-        lastOutputs = results.map(({ result }) => ({
-          type: 'function_call_output' as const,
-          callId: result.callId,
-          output: JSON.stringify({
-            success: result.success,
-            output: result.output,
-            ...(result.data === undefined ? {} : { data: result.data }),
-            ...(result.error === undefined ? {} : { error: result.error }),
-            ...(result.truncated === undefined ? {} : { truncated: result.truncated }),
-          }),
-        }));
+
+        lastOutputs = results.map(({ result }) => {
+          const advice = adviceByCallId.get(result.callId);
+          return {
+            type: 'function_call_output' as const,
+            callId: result.callId,
+            output: JSON.stringify({
+              success: result.success,
+              output:
+                advice !== undefined && advice.length > 0
+                  ? `${result.output}\n\n${advice}`
+                  : result.output,
+              ...(result.data === undefined ? {} : { data: result.data }),
+              ...(result.error === undefined
+                ? {}
+                : {
+                    error: {
+                      ...result.error,
+                      ...(advice === undefined ? {} : { selfCorrectionAdvice: advice }),
+                    },
+                  }),
+              ...(result.truncated === undefined ? {} : { truncated: result.truncated }),
+            }),
+          };
+        });
         // Keep both the replay transcript and the next request inside the
         // context window: without clamping, long tool chains overflow it and
         // fail the run with a context-length error.
@@ -718,9 +846,6 @@ export class AgentRunner {
         trimTranscript(transcript, MAX_TRANSCRIPT_CHARS);
 
         const now = new Date().toISOString();
-        // Index the batch once: with several parallel tool calls, a linear
-        // scan per call would make this bookkeeping quadratic in batch size.
-        const resultsByCallId = new Map(results.map(({ callId, result }) => [callId, result]));
         for (const call of pendingCalls) {
           const result = resultsByCallId.get(call.callId);
           if (result === undefined) throw new ToolError(`工具未返回结果: ${call.name}`);

@@ -142,3 +142,59 @@ describe('SessionStore titles', () => {
     });
   });
 });
+
+describe('SessionStore empty sessions', () => {
+  it('does not persist a session until it has at least one message', async () => {
+    const workspace = await temporaryDirectory();
+    const environmentRoot = await temporaryDirectory();
+    await withIsolatedEnv(environmentRoot, async () => {
+      const store = await SessionStore.create(workspace);
+      const session = await store.createSession('test-provider', 'test-model');
+
+      // Created but never used: readable in memory, invisible on disk and in
+      // the session list.
+      expect((await store.get(session.id)).id).toBe(session.id);
+      expect(await store.list()).toEqual([]);
+
+      // Saves of an empty session still do not create a file.
+      await store.save(session);
+      store.saveQueued(session);
+      await store.flush();
+      expect(await store.list()).toEqual([]);
+
+      // The first message materialises the session.
+      await store.appendMessage(session, 'user', 'Fix the build');
+      expect(await store.list()).toHaveLength(1);
+      expect((await store.get(session.id)).messages).toHaveLength(1);
+    });
+  });
+
+  it('keeps in-memory updates (rename, status) of an empty session', async () => {
+    const workspace = await temporaryDirectory();
+    const environmentRoot = await temporaryDirectory();
+    await withIsolatedEnv(environmentRoot, async () => {
+      const store = await SessionStore.create(workspace);
+      const session = await store.createSession('test-provider', 'test-model');
+
+      await store.rename(session.id, 'Draft');
+      await store.setStatus(session, 'cancelled');
+
+      const pending = await store.get(session.id);
+      expect(pending.title).toBe('Draft');
+      expect(pending.status).toBe('cancelled');
+      expect(await store.list()).toEqual([]);
+    });
+  });
+
+  it('removes an empty session from memory on delete', async () => {
+    const workspace = await temporaryDirectory();
+    const environmentRoot = await temporaryDirectory();
+    await withIsolatedEnv(environmentRoot, async () => {
+      const store = await SessionStore.create(workspace);
+      const session = await store.createSession('test-provider', 'test-model');
+
+      await store.delete(session.id);
+      await expect(store.get(session.id)).rejects.toThrow();
+    });
+  });
+});

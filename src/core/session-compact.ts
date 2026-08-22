@@ -32,20 +32,20 @@ export const COMPACT_HINT_MIN_MESSAGES = 24;
  */
 export const COMPACT_HINT_MIN_CHARS = 48_000;
 
-const COMPACTION_INSTRUCTIONS = `You are compressing a long coding-agent conversation into one dense summary.
+const COMPACTION_INSTRUCTIONS = `You are compressing a long coding-agent conversation into one dense structured summary.
 
 The conversation belongs to CodeFarmer, an agent that edits a workspace with tools (read_file, apply_patch, run_command, git tools, ...). The history below may contain user prompts, assistant replies, and a synthetic audit trail of tool calls.
 
-Produce a single system-style summary that preserves, in order of importance:
-- The user's goal, decided direction, and any explicit constraints or instructions that still apply.
-- Every file created or modified, what changed in each, and why.
-- Commands run and their outcomes, problems found, and remaining work or next steps.
-- The most recent assistant reply almost verbatim, since it describes the current state of the task.
+Produce a dense, high-fidelity summary organized into the following clear sections:
+1. [Goal & Constraints]: The user's core task goal, technical direction, and explicit constraints.
+2. [Modified Files & Changes]: All files created, edited, or deleted, what changed in each, and the current code state.
+3. [Key Decisions & Findings]: Key architectural decisions, verified facts, investigated findings, and command outcomes.
+4. [Current Status & Next Steps]: The current state of execution, remaining tasks, blockers, and next planned actions.
 
 Rules:
 - Write in the same language as the conversation (Chinese when the conversation is Chinese).
-- Be concrete and specific (paths, commands, decisions); do not pad with generic filler.
-- Output ONLY the summary text with no preamble, headings, or code fences.`;
+- Be concrete and specific with file paths, identifiers, and command results; eliminate generic conversational filler.
+- Output ONLY the summary text with no preamble or code fences.`;
 
 interface CompactInput {
   input: ProviderInput[];

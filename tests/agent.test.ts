@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { AgentRunner } from '../src/core/agent.js';
+import { AgentRunner, trimOutputSemantic } from '../src/core/agent.js';
 import { SessionStore } from '../src/core/session-store.js';
 import { DEFAULT_CONFIG } from '../src/infra/config.js';
 import { ProviderError } from '../src/infra/errors.js';
@@ -189,7 +189,7 @@ describe('AgentRunner', () => {
       input: 'Introduce yourself',
       store: true,
     });
-    expect(provider.requests[0]?.tools).toHaveLength(15);
+    expect(provider.requests[0]?.tools).toHaveLength(16);
   });
 
   it('executes a tool call and continues with its call id and response id', async () => {
@@ -631,7 +631,7 @@ describe('AgentRunner', () => {
 
     await agent.run('Do something', { history: false });
 
-    expect(provider.requests[0]?.tools).toHaveLength(15);
+    expect(provider.requests[0]?.tools).toHaveLength(16);
     expect(provider.requests[0]?.instructions).not.toContain('Plan mode is ON');
   });
 
@@ -1224,5 +1224,87 @@ describe('AgentRunner', () => {
     });
 
     expect(result.status).toBe('completed');
+  });
+
+  it('semantically trims long output while preserving error and diagnostic lines', () => {
+    const rawOutput = [
+      'Line 1: starting build process',
+      'Line 2: loading configuration',
+      'Line 3: resolving dependencies',
+      'Line 4: verbose log chunk 1',
+      'Line 5: verbose log chunk 2',
+      'Line 6: verbose log chunk 3',
+      'Line 7: verbose log chunk 4',
+      'Line 8: verbose log chunk 5',
+      'Line 9: error: TS2304 cannot find name Foo',
+      'Line 10: verbose log chunk 6',
+      'Line 11: verbose log chunk 7',
+      'Line 12: verbose log chunk 8',
+      'Line 13: build failed with 1 error',
+      'Line 14: exit code 1',
+    ].join('\n');
+
+    const trimmed = trimOutputSemantic(rawOutput, 260);
+    expect(trimmed.length).toBeLessThanOrEqual(260);
+    expect(trimmed).toContain('error: TS2304 cannot find name Foo');
+    expect(trimmed).toContain('starting build process');
+    expect(trimmed).toContain('exit code 1');
+  });
+
+  it('injects self-correction advice after consecutive tool failures on the same target', async () => {
+    const workspace = await temporaryWorkspace();
+    const provider = new RecordingScriptedProvider([
+      [
+        {
+          type: 'tool_call',
+          call: {
+            callId: 'call-patch-1',
+            name: 'apply_patch',
+            arguments: JSON.stringify({
+              path: 'nonexistent.txt',
+              patch: '@@ -1,1 +1,1 @@\n-old\n+new\n',
+              expectedSha256: '0000000000000000000000000000000000000000000000000000000000000000',
+            }),
+          },
+        },
+        { type: 'response_completed', responseId: 'resp-1' },
+      ],
+      [
+        {
+          type: 'tool_call',
+          call: {
+            callId: 'call-patch-2',
+            name: 'apply_patch',
+            arguments: JSON.stringify({
+              path: 'nonexistent.txt',
+              patch: '@@ -1,1 +1,1 @@\n-old\n+new\n',
+              expectedSha256: '0000000000000000000000000000000000000000000000000000000000000000',
+            }),
+          },
+        },
+        { type: 'response_completed', responseId: 'resp-2' },
+      ],
+      [
+        { type: 'text_delta', delta: 'Recovered.' },
+        { type: 'response_completed', responseId: 'resp-3', outputText: 'Recovered.' },
+      ],
+    ]);
+    const agent = await runner(workspace, provider);
+
+    const result = await agent.run('Fix nonexistent file', { history: false });
+    expect(result.status).toBe('completed');
+    expect(provider.requests).toHaveLength(3);
+
+    const lastRequest = provider.requests[2];
+    const input = lastRequest?.input;
+    expect(Array.isArray(input)).toBe(true);
+    if (Array.isArray(input)) {
+      const lastOutputItem = input[input.length - 1];
+      expect(lastOutputItem?.type).toBe('function_call_output');
+      if (lastOutputItem?.type === 'function_call_output') {
+        expect(lastOutputItem.output).toContain('Self-Correction Advice');
+        expect(lastOutputItem.output).toContain('apply_patch has failed repeatedly');
+      }
+    }
   });
 });

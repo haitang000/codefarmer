@@ -173,32 +173,32 @@ approving ordinary workspace operations. Protected operations such as
 `git push` still require explicit confirmation. The same modes can be selected
 with `/plan [on|off]` and `/auto [on|off]`.
 
-| TUI command      | Action                                                                                     |
-| ---------------- | ------------------------------------------------------------------------------------------ |
-| `/help`          | Show local commands                                                                        |
-| `/init`          | Inspect the workspace and create or update `AGENT.md`                                      |
-| `/status`        | Show session, workspace, Git, and runtime                                                  |
-| `/context`       | Show context messages and token usage                                                      |
-| `/compact`       | Compress early messages of the current session into a summary (suggested on long sessions) |
-| `/effort`        | Open the reasoning effort picker (↑/↓ + Enter)                                             |
-| `/plan [on/off]` | Enable or disable read-only planning mode                                                  |
-| `/auto [on/off]` | Enable or disable automatic plan-and-execute mode                                          |
-| `/language [en   | zh-CN]`                                                                                    | Switch the interface and agent response language and save it as your default (inherited by later sessions) |
-| `/config`        | Show effective configuration                                                               |
-| `/sessions`      | Open the saved-session picker (`↑/↓`, Enter to switch, Esc to close)                       |
-| `/resume <id>`   | Switch to a saved session                                                                  |
-| `/retry`         | Rerun the last submitted prompt, e.g. after switching the model or mode                    |
-| `/delete <id>`   | Delete a non-active local session                                                          |
-| `/diff`          | Show current Git diff with colored additions, removals, headers, and hunks                 |
-| `/review`        | Review the working-tree diff (staged and unstaged) without committing                      |
+| TUI command                  | Action                                                                                             |
+| ---------------------------- | -------------------------------------------------------------------------------------------------- |
+| `/help`                      | Show local commands                                                                                |
+| `/init`                      | Inspect the workspace and create or update `AGENT.md`                                              |
+| `/status`                    | Show session, workspace, Git, and runtime                                                          |
+| `/context`                   | Show context messages and token usage                                                              |
+| `/compact`                   | Compress early messages of the current session into a summary (suggested on long sessions)         |
+| `/effort`                    | Open the reasoning effort picker (↑/↓ + Enter)                                                     |
+| `/plan [on/off]`             | Enable or disable read-only planning mode                                                          |
+| `/auto [on/off]`             | Enable or disable automatic plan-and-execute mode                                                  |
+| `/language [en               | zh-CN]`                                                                                            | Switch the interface and agent response language and save it as your default (inherited by later sessions) |
+| `/config`                    | Show effective configuration                                                                       |
+| `/sessions`                  | Open the saved-session picker (`↑/↓`, Enter to switch, Esc to close)                               |
+| `/resume <id>`               | Switch to a saved session                                                                          |
+| `/retry`                     | Rerun the last submitted prompt, e.g. after switching the model or mode                            |
+| `/delete <id>`               | Delete a non-active local session                                                                  |
+| `/diff`                      | Show current Git diff with colored additions, removals, headers, and hunks                         |
+| `/review`                    | Review the working-tree diff (staged and unstaged) without committing                              |
 | `/security-review [PATH...]` | Review the diff for security vulnerabilities, ordered by severity; optional paths focus the review |
-| `/commit [msg]`  | Stage and commit all workspace changes; without a message the agent summarizes the diff    |
-| `/push`          | Push the current branch to its configured upstream after confirmation                      |
-| `/undo`          | Undo the most recent eligible file mutation                                                |
-| `/todos`         | Show the agent's current todo list (maintained with the `todo_write` tool)                 |
-| `/new`           | Start a fresh session                                                                      |
-| `/cancel`        | Cancel the active request or tool                                                          |
-| `/quit`          | Leave the TUI and restore the terminal                                                     |
+| `/commit [msg]`              | Stage and commit all workspace changes; without a message the agent summarizes the diff            |
+| `/push`                      | Push the current branch to its configured upstream after confirmation                              |
+| `/undo`                      | Undo the most recent eligible file mutation                                                        |
+| `/todos`                     | Show the agent's current todo list (maintained with the `todo_write` tool)                         |
+| `/new`                       | Start a fresh session                                                                              |
+| `/cancel`                    | Cancel the active request or tool                                                                  |
+| `/quit`                      | Leave the TUI and restore the terminal                                                             |
 
 Read-only slash commands, `/cancel`, and `/quit` remain available while the
 model is generating; ordinary prompts stay in the input buffer until it is
@@ -247,7 +247,8 @@ or `codefarmer run --skill <ref> "task"`; in the TUI use `/skills`, `/skill <ref
 
 Only a compact catalog is added to the initial model instructions. The agent reads a full skill with
 the read-only `read_skill` tool when needed, and can read UTF-8 resources inside that skill with
-`read_skill_resource`. Duplicate names remain separate and receive scoped references in the catalog.
+`read_skill_resource`. `list_skills` rediscloses the full catalog on demand (including scoped
+references for duplicate names) whenever the model needs to refresh its view of what is available.
 Skills and their resources are untrusted instructions and cannot override approval, path, or command
 restrictions. Skill scripts are never run implicitly; any execution still goes through `run_command`
 and its normal approval and safety checks.
@@ -476,6 +477,10 @@ session before changing endpoints; CodeFarmer refuses to resume a stored
 After the first turn, the model generates a short title from the conversation.
 The first-message title remains as a fallback when generation fails, and
 `sessions rename` always takes precedence.
+
+Sessions are recorded locally only once they contain at least one message:
+opening a session and quitting without sending anything leaves no session
+file behind and keeps `sessions list` clean.
 
 Local sessions store messages, response IDs, tool/audit summaries, approvals,
 patches, and hashes. Undo snapshots can contain prior source text. Pino writes
