@@ -43,6 +43,9 @@ describe('WorkspaceGuard', () => {
     const guard = await WorkspaceGuard.create(workspace, ['generated/**', '!.env']);
 
     expect(isIgnoredRelativePath('.env.example')).toBe(false);
+    expect(isIgnoredRelativePath('src/__pycache__/mod.cpython-312.pyc')).toBe(true);
+    expect(isIgnoredRelativePath('.venv/lib/python3.12/site.py')).toBe(true);
+    expect(isIgnoredRelativePath('.DS_Store')).toBe(true);
     await expect(guard.resolveExisting('.env')).rejects.toMatchObject({ code: 'PATH_IGNORED' });
     await expect(guard.resolveExisting('generated/file.ts')).rejects.toMatchObject({
       code: 'PATH_IGNORED',

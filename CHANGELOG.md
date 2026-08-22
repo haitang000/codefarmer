@@ -6,18 +6,49 @@ All notable changes to CodeFarmer are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-08-22
+
 ### Added
 
 - `list_skills` tool: the agent can rediscover the full skill catalog on
   demand instead of relying only on the compact catalog in the initial
   instructions. The output lists every skill's reference, description, and
   scope, including scoped references for duplicate names.
+- `search_text` accepts `regex: true` to treat the query as a JavaScript
+  regular expression, so the agent can find patterns instead of only literal
+  strings.
+- `read_file` prefixes each line with its 1-based line number so the model
+  can target `apply_patch` hunks without guessing.
 
 ### Changed
 
 - Sessions are now only persisted once they contain at least one message.
   Opening the TUI (or creating a session) and quitting without sending
   anything no longer leaves an empty session in `sessions list`.
+- Workspace discovery is faster: sibling directories are walked in parallel,
+  `list_files`/`search_text` skip common language caches (for example
+  `__pycache__`, `.venv`, `.mypy_cache`) and junk files, and `search_text`
+  skips likely-binary files before decoding them.
+- `search_text` reports every match on a line, not only the first column.
+- `web_fetch` converts HTML to readable text and keeps the downloaded prefix
+  when a response hits the size cap, instead of discarding it.
+- `web_search` retries with POST when the GET page has no parseable results,
+  which recovers from DuckDuckGo bot-interstitial pages.
+- TUI input keeps pasted newlines and supports real multiline editing:
+  `Shift+Enter` / `Alt+Enter` insert a newline, ↑/↓ move between lines, and
+  Home/End jump to the start or end of the current line.
+- `autoCompact` is now on by default, so long sessions are summarised before
+  they overflow the model context. Set it to `false` to keep the previous
+  opt-in behaviour.
+- `search_text` uses ripgrep (`rg`) for literal searches when it is installed,
+  and falls back to the JavaScript scanner otherwise. Regular-expression
+  searches stay in JavaScript so the syntax stays consistent.
+
+### Fixed
+
+- Consecutive-failure tracking for `run_command` now includes the argument
+  list (`args`), so repeated identical command failures receive
+  self-correction advice.
 
 ## [0.1.5] - 2026-08-13
 

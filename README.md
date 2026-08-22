@@ -205,23 +205,30 @@ model is generating; ordinary prompts stay in the input buffer until it is
 ready for the next turn.
 
 `Esc` or `Ctrl+C` cancels an active turn. When no turn is active, `Ctrl+C`
-exits and restores the terminal. In a non-interactive shell, no-argument
-invocation prints help instead of starting a renderer.
+exits and restores the terminal. `Shift+Enter` or `Alt+Enter` inserts a
+newline in the prompt; Enter still submits. In a non-interactive shell,
+no-argument invocation prints help instead of starting a renderer.
 
 ## Agent tools
 
 CodeFarmer exposes a fixed v1 tool set to the model:
 
 - `list_files`, `read_file`, and `search_text` inspect allowed workspace files.
+  `read_file` prefixes each line with its 1-based line number; `search_text`
+  matches literal text by default (and uses ripgrep when `rg` is on PATH), or a
+  JavaScript regular expression when `regex` is true, and skips likely-binary
+  files.
 - `apply_patch` creates, modifies, or deletes UTF-8 files after checking their
   expected SHA-256 hashes; a single call can apply several file patches, and
   each write is atomic and recorded for conflict-aware undo.
 - `run_command` accepts an executable and argument array, never a shell string.
 - `web_fetch` fetches an HTTP(S) URL and returns its text content, bounded in
-  size and time. Private, loopback, and link-local addresses are blocked so
-  repository content cannot turn the agent into a local-network scanner.
+  size and time. HTML is converted to readable text. Private, loopback, and
+  link-local addresses are blocked so repository content cannot turn the agent
+  into a local-network scanner.
 - `web_search` searches the web through DuckDuckGo and returns titles, URLs,
-  and snippets; use it to discover pages, then `web_fetch` for full content.
+  and snippets; if the GET page has no results it retries with POST. Use it to
+  discover pages, then `web_fetch` for full content.
 - `todo_write` maintains a session todo list for multi-step tasks; `/todos`
   shows it in the TUI.
 - `git_status` and `git_diff` show the working-tree state, `git_log` shows
@@ -281,7 +288,7 @@ Example project configuration:
   "maxFileSizeBytes": 1048576,
   "maxToolOutputBytes": 12288,
   "commandTimeoutMs": 120000,
-  "autoCompact": false,
+  "autoCompact": true,
   "autoCompactMinMessages": 40,
   "autoCompactMinChars": 100000,
   "budgetUsd": 2.5,
@@ -308,7 +315,7 @@ Supported environment overrides are:
 | `maxFileSizeBytes`       | `CODEFARMER_MAX_FILE_SIZE_BYTES`       | `1048576`                     |
 | `maxToolOutputBytes`     | `CODEFARMER_MAX_TOOL_OUTPUT_BYTES`     | `12288`                       |
 | `commandTimeoutMs`       | `CODEFARMER_COMMAND_TIMEOUT_MS`        | `120000`                      |
-| `autoCompact`            | `CODEFARMER_AUTO_COMPACT`              | `false`                       |
+| `autoCompact`            | `CODEFARMER_AUTO_COMPACT`              | `true`                        |
 | `autoCompactMinMessages` | `CODEFARMER_AUTO_COMPACT_MIN_MESSAGES` | `40`                          |
 | `autoCompactMinChars`    | `CODEFARMER_AUTO_COMPACT_MIN_CHARS`    | `100000`                      |
 | `budgetUsd`              | `CODEFARMER_BUDGET_USD`                | off                           |
@@ -318,11 +325,12 @@ Supported environment overrides are:
 list. Default exclusions cover `.git`, dependencies, builds, coverage, `.env`
 files, private keys, and certificates; `.env.example` remains readable.
 
-`autoCompact` (off by default) automatically compresses a long session into a
+`autoCompact` (on by default) automatically compresses a long session into a
 summary before a turn once the conversation reaches `autoCompactMinMessages`
 messages or `autoCompactMinChars` characters of stored content, keeping the
 last few turns verbatim. Each auto-compaction costs one extra summarising
-request; run `/compact` manually for the same behaviour.
+request; set `autoCompact` to `false` or run `/compact` manually to control
+the same behaviour.
 
 `budgetUsd` (off by default) sets a per-session cost ceiling in USD, estimated
 with the same public list prices as `stats`. Once a session's cumulative

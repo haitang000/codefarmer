@@ -46,6 +46,15 @@ import {
 } from './runtime.js';
 import { formatTerminalTitle, normaliseSessionTitle, type TuiTitleStatus } from './title.js';
 import {
+  composerHeight,
+  insertAtCursor,
+  lineEnd,
+  lineHome,
+  MAX_COMPOSER_LINES,
+  moveCursorVertical,
+  visibleComposerLines,
+} from './composer.js';
+import {
   parseTuiCommand,
   nextAgentMode,
   getTuiHelp,
@@ -455,7 +464,7 @@ export function WelcomePanel({
             {'CodeFarmer'}
           </Text>
           <Text color={PANEL_BORDER_COLOR}>{'  /  '}</Text>
-          <Text color={SECONDARY_TEXT_COLOR}>{'v0.1.5'}</Text>
+          <Text color={SECONDARY_TEXT_COLOR}>{'v0.1.6'}</Text>
         </Box>
         <Text color={READY_COLOR} bold>
           {zh ? '● 就绪' : '● READY'}
@@ -2822,10 +2831,11 @@ export function TuiApp({
   }, [appendSystem, runtimeFactory, sessionPicker, sessionPickerSelection, swapRuntime]);
 
   const contentWidth = Math.max(10, columns - 2);
+  const inputHeight = composerHeight(draft);
   // Header, command deck, and footer have fixed heights in the normal view.
   // Reserving the transcript height explicitly lets the latest content anchor
   // to the command deck instead of relying on terminal flexbox behavior.
-  const transcriptHeight = Math.max(5, rows - 9);
+  const transcriptHeight = Math.max(5, rows - 9 - (inputHeight - 1));
   const visibleHeight = Math.max(4, transcriptHeight - 1);
 
   useInput(
@@ -2973,6 +2983,11 @@ export function TuiApp({
         });
         return;
       }
+      if (key.return && (key.shift || key.meta)) {
+        const next = insertAtCursor(draftRef.current, cursorRef.current, '\n');
+        applyDraft(next.value, next.cursor);
+        return;
+      }
       if (key.return) {
         submitDraft();
         return;
@@ -3001,31 +3016,53 @@ export function TuiApp({
         applyDraft(draftRef.current, Math.min(draftRef.current.length, cursorRef.current + 1));
         return;
       }
-      if (key.home || (key.ctrl && input.toLowerCase() === 'a')) {
+      if (key.ctrl && input.toLowerCase() === 'a') {
         applyDraft(draftRef.current, 0);
         return;
       }
-      if (key.end || (key.ctrl && input.toLowerCase() === 'e')) {
+      if (key.ctrl && input.toLowerCase() === 'e') {
         applyDraft(draftRef.current, draftRef.current.length);
         return;
       }
-      if (key.upArrow && draftRef.current.length === 0 && historyRef.current.length > 0) {
-        const next = Math.min(historyRef.current.length - 1, historyIndexRef.current + 1);
-        historyIndexRef.current = next;
-        const value = historyRef.current[historyRef.current.length - 1 - next] ?? '';
-        applyDraft(value, value.length);
+      if (key.home) {
+        applyDraft(draftRef.current, lineHome(draftRef.current, cursorRef.current));
         return;
       }
-      if (key.downArrow && historyIndexRef.current >= 0) {
-        const next = historyIndexRef.current - 1;
-        historyIndexRef.current = next;
-        const value =
-          next < 0 ? '' : (historyRef.current[historyRef.current.length - 1 - next] ?? '');
-        applyDraft(value, value.length);
+      if (key.end) {
+        applyDraft(draftRef.current, lineEnd(draftRef.current, cursorRef.current));
+        return;
+      }
+      if (key.upArrow) {
+        const moved = moveCursorVertical(draftRef.current, cursorRef.current, -1);
+        if (moved !== undefined) {
+          applyDraft(draftRef.current, moved);
+          return;
+        }
+        if (draftRef.current.length === 0 && historyRef.current.length > 0) {
+          const next = Math.min(historyRef.current.length - 1, historyIndexRef.current + 1);
+          historyIndexRef.current = next;
+          const value = historyRef.current[historyRef.current.length - 1 - next] ?? '';
+          applyDraft(value, value.length);
+        }
+        return;
+      }
+      if (key.downArrow) {
+        const moved = moveCursorVertical(draftRef.current, cursorRef.current, 1);
+        if (moved !== undefined) {
+          applyDraft(draftRef.current, moved);
+          return;
+        }
+        if (historyIndexRef.current >= 0) {
+          const next = historyIndexRef.current - 1;
+          historyIndexRef.current = next;
+          const value =
+            next < 0 ? '' : (historyRef.current[historyRef.current.length - 1 - next] ?? '');
+          applyDraft(value, value.length);
+        }
         return;
       }
       if (input.length > 0 && !key.ctrl && !key.meta) {
-        const inserted = input.replace(/[\r\n]+/gu, ' ');
+        const inserted = input.replace(/\r\n/gu, '\n').replace(/\r/gu, '\n');
         const current = draftRef.current;
         const position = cursorRef.current;
         applyDraft(
@@ -3125,7 +3162,7 @@ export function TuiApp({
   const atBottom = topLine < 0;
   const sessionId = runtime.session?.id ?? 'pending';
   const sessionTitle = normaliseSessionTitle(runtime.session?.title) ?? 'NEW SESSION';
-  const cursorDraft = `${draft.slice(0, cursor)}|${draft.slice(cursor)}`;
+  const composerLines = visibleComposerLines(draft, cursor, MAX_COMPOSER_LINES);
   const advice = cursor === draft.length ? tuiCommandAdvice(draft) : '';
   const approvalView = approval;
   const modeLabel = agentMode.toUpperCase();
@@ -3281,11 +3318,11 @@ export function TuiApp({
                 ? `${String(runtime.orchestrator?.snapshot().queuedTurns.length ?? 0)} 条排队 · 回车添加`
                 : `${String(runtime.orchestrator?.snapshot().queuedTurns.length ?? 0)} queued · Enter to add`
               : language === 'zh-CN'
-                ? '回车执行'
-                : 'Enter to run'}
+                ? '回车执行 · Shift+Enter 换行'
+                : 'Enter to run · Shift+Enter newline'}
           </Text>
         </Text>
-        <Box>
+        <Box flexDirection="column">
           {draft.length === 0 ? (
             <Text dimColor wrap="truncate-end">
               {busy
@@ -3305,10 +3342,14 @@ export function TuiApp({
                       : 'Describe the task, or type /help'}
             </Text>
           ) : (
-            <Text wrap="truncate-end">
-              {cursorDraft}
-              {advice.length === 0 ? null : <Text dimColor>{advice}</Text>}
-            </Text>
+            composerLines.map((line, index) => (
+              <Text key={`composer-${String(index)}`} wrap="truncate-end">
+                {line}
+                {index === composerLines.length - 1 && advice.length > 0 ? (
+                  <Text dimColor>{advice}</Text>
+                ) : null}
+              </Text>
+            ))
           )}
         </Box>
       </Box>

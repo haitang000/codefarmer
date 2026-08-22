@@ -203,8 +203,7 @@ function trimTranscript(transcript: ProviderInput[], maximumChars: number): void
     if (largest?.type === 'message' || largest?.type === 'function_call_output') {
       const content = largest.type === 'message' ? largest.content : largest.output;
       const keep = Math.max(1, maximumChars - (total - content.length));
-      const truncated =
-        content.length <= keep ? content : trimOutputSemantic(content, keep);
+      const truncated = content.length <= keep ? content : trimOutputSemantic(content, keep);
       transcript[largestIndex] =
         largest.type === 'message'
           ? { ...largest, content: truncated }
@@ -281,9 +280,12 @@ export function extractToolTarget(name: string, args: unknown): string {
       if (hasFilePath(first)) return first.path;
     }
     if (typeof obj.executable === 'string') {
-      const argsArray = Array.isArray(obj.arguments)
-        ? (obj.arguments as unknown[]).map(String).join(' ')
-        : '';
+      const rawArgs = Array.isArray(obj.args)
+        ? obj.args
+        : Array.isArray(obj.arguments)
+          ? obj.arguments
+          : [];
+      const argsArray = rawArgs.map(String).join(' ');
       return `${obj.executable} ${argsArray}`.trim();
     }
     if (typeof obj.command === 'string') return obj.command;

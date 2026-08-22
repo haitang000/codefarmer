@@ -11,6 +11,10 @@ const MIN_FETCH_BYTES = 1024;
 const MAX_FETCH_BYTES = 4 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15_000;
 
+/** Browser-like UA: some hosts reject a bare "CodeFarmer" identifier. */
+export const WEB_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 CodeFarmer/1.0';
+
 const TEXT_CONTENT_TYPES = new Set([
   'application/json',
   'application/xml',
@@ -193,6 +197,50 @@ function decodeUtf8(buffer: Buffer): string {
   }
 }
 
+function decodeUtf8Prefix(buffer: Buffer): string {
+  // A size cap can split a multi-byte character; replacement keeps the
+  // already-downloaded prefix instead of failing the whole fetch.
+  return new TextDecoder('utf-8', { fatal: false }).decode(buffer);
+}
+
+function isHtmlContentType(contentType: string | null): boolean {
+  const type = (contentType?.split(';', 1)[0] ?? '').trim().toLowerCase();
+  return type === 'text/html' || type === 'application/xhtml+xml';
+}
+
+/**
+ * Turn fetched HTML into compact readable text so the model is not billed
+ * for scripts, chrome, and tags. Plain text, JSON, and other types are left
+ * alone by the caller.
+ */
+export function htmlToReadableText(html: string): string {
+  let text = html;
+  text = text.replace(/<script\b[\s\S]*?<\/script>/giu, '');
+  text = text.replace(/<style\b[\s\S]*?<\/style>/giu, '');
+  text = text.replace(/<noscript\b[\s\S]*?<\/noscript>/giu, '');
+  text = text.replace(/<!--[\s\S]*?-->/gu, '');
+  text = text.replace(/<br\s*\/?>/giu, '\n');
+  text = text.replace(
+    /<\/(p|div|h[1-6]|li|tr|section|article|header|footer|main|blockquote)[^>]*>/giu,
+    '\n',
+  );
+  text = text.replace(/<li\b[^>]*>/giu, '- ');
+  text = text.replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/giu, '$2 ($1)');
+  text = text.replace(/<[^>]+>/gu, '');
+  text = text
+    .replace(/&nbsp;/giu, ' ')
+    .replace(/&amp;/giu, '&')
+    .replace(/&lt;/giu, '<')
+    .replace(/&gt;/giu, '>')
+    .replace(/&quot;/giu, '"')
+    .replace(/&#0*39;|&#x27;/giu, "'");
+  return text
+    .replace(/[ \t]+\n/gu, '\n')
+    .replace(/\n{3,}/gu, '\n\n')
+    .replace(/[ \t]{2,}/gu, ' ')
+    .trim();
+}
+
 export async function readBounded(
   response: Response,
   maximumBytes: number,
@@ -204,12 +252,15 @@ export async function readBounded(
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    total += value.byteLength;
-    if (total > maximumBytes) {
+    const chunk = Buffer.from(value);
+    if (total + chunk.byteLength > maximumBytes) {
       await reader.cancel();
-      return { text: '', overLimit: true };
+      const remaining = Math.max(0, maximumBytes - total);
+      if (remaining > 0) chunks.push(chunk.subarray(0, remaining));
+      return { text: decodeUtf8Prefix(Buffer.concat(chunks)), overLimit: true };
     }
-    chunks.push(Buffer.from(value));
+    chunks.push(chunk);
+    total += chunk.byteLength;
   }
   return { text: decodeUtf8(Buffer.concat(chunks)), overLimit: false };
 }
@@ -217,7 +268,7 @@ export async function readBounded(
 export const webFetchDefinition: ToolDefinition = {
   name: 'web_fetch',
   description:
-    'Fetch an http(s) URL and return its text content. Bounded in size and time; private, loopback, and link-local addresses are blocked.',
+    'Fetch an http(s) URL and return its text content. HTML is converted to readable text. Bounded in size and time; private, loopback, and link-local addresses are blocked.',
   readOnly: true,
   inputSchema: {
     type: 'object',
@@ -262,7 +313,7 @@ export async function webFetch(
       signal,
       headers: {
         accept: 'text/*, application/json, application/xml, application/javascript, */*;q=0.8',
-        'user-agent': 'CodeFarmer',
+        'user-agent': WEB_USER_AGENT,
       },
     });
   } catch (error) {
@@ -288,20 +339,23 @@ export async function webFetch(
     await assertPublicHost(parseFetchUrl(response.url), context.allowPrivateAddresses ?? false);
   }
 
-  assertTextContentType(response.headers.get('content-type'));
+  const contentType = response.headers.get('content-type');
+  assertTextContentType(contentType);
   const { text, overLimit } = await readBounded(response, maxBytes);
+  const extractedHtml = isHtmlContentType(contentType);
+  const readable = extractedHtml ? htmlToReadableText(text) : text;
   const finalUrl = response.redirected ? response.url : url.href;
-  const truncated = truncateUtf8(text, context.maxOutputBytes);
+  const truncated = truncateUtf8(readable, context.maxOutputBytes);
   const data: JsonObject = {
     url: finalUrl,
     status: response.status,
-    contentType: response.headers.get('content-type') ?? '',
+    contentType: contentType ?? '',
     size: truncated.originalBytes,
+    ...(extractedHtml ? { extracted: true } : {}),
   };
-  const output =
-    overLimit && truncated.text.length === 0
-      ? `...[response exceeded the ${String(maxBytes)} byte limit]`
-      : truncated.text;
+  const output = overLimit
+    ? `${truncated.text}\n...[response exceeded the ${String(maxBytes)} byte limit]`
+    : truncated.text;
   return successfulResult(callId, 'web_fetch', output, {
     data,
     truncated: truncated.truncated || overLimit,

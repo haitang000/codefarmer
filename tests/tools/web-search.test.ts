@@ -120,6 +120,33 @@ describe('web_search tool', () => {
     expect(result.data).toMatchObject({ query: 'codefarmer docs', count: 3 });
   });
 
+  it('retries with POST when GET returns no parseable results', async () => {
+    const workspace = await temporaryWorkspace();
+    const baseUrl = await startServer((request, response) => {
+      response.setHeader('content-type', 'text/html; charset=utf-8');
+      if (request.method === 'POST') {
+        response.end(RESULTS_HTML);
+        return;
+      }
+      response.end('<html><body>If you are not a robot, enable JavaScript.</body></html>');
+    });
+    const registry = await createToolRegistry({
+      workspace,
+      webSearchEndpoint: baseUrl,
+      allowPrivateAddresses: true,
+    });
+
+    const result = await registry.execute({
+      callId: 'search-post',
+      name: 'web_search',
+      arguments: { query: 'codefarmer docs', maxResults: 5 },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('1. Example Docs');
+    expect(result.data).toMatchObject({ query: 'codefarmer docs', count: 3 });
+  });
+
   it('reports an empty result set without failing', async () => {
     const workspace = await temporaryWorkspace();
     const baseUrl = await startServer((_request, response) => {

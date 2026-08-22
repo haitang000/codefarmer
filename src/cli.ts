@@ -116,7 +116,7 @@ program
   .name('codefarmer')
   .description('安全、可审计的多 Provider Coding Agent CLI')
   .usage('[选项] [命令]')
-  .version('0.1.5', '-V, --version', '显示版本')
+  .version('0.1.6', '-V, --version', '显示版本')
   .helpOption('-h, --help', '显示帮助')
   .helpCommand('help [command]', '显示命令帮助')
   .option('--cwd <path>', '工作区目录')

@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { AgentRunner, trimOutputSemantic } from '../src/core/agent.js';
+import { AgentRunner, extractToolTarget, trimOutputSemantic } from '../src/core/agent.js';
 import { SessionStore } from '../src/core/session-store.js';
 import { DEFAULT_CONFIG } from '../src/infra/config.js';
 import { ProviderError } from '../src/infra/errors.js';
@@ -1249,6 +1249,19 @@ describe('AgentRunner', () => {
     expect(trimmed).toContain('error: TS2304 cannot find name Foo');
     expect(trimmed).toContain('starting build process');
     expect(trimmed).toContain('exit code 1');
+  });
+
+  it('identifies run_command targets from the args array', () => {
+    expect(
+      extractToolTarget('run_command', { executable: 'git', args: ['status', '--short'] }),
+    ).toBe('git status --short');
+    expect(
+      extractToolTarget('run_command', {
+        executable: 'pnpm',
+        arguments: ['test', 'file-tools'],
+      }),
+    ).toBe('pnpm test file-tools');
+    expect(extractToolTarget('read_file', { path: 'src/cli.ts' })).toBe('src/cli.ts');
   });
 
   it('injects self-correction advice after consecutive tool failures on the same target', async () => {

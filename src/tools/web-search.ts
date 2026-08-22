@@ -2,7 +2,7 @@ import type { JsonObject, ToolDefinition, ToolResult } from '../types.js';
 import { ToolError } from './errors.js';
 import { optionalInteger, requiredString, successfulResult, truncateUtf8 } from './output.js';
 import type { ResolvedToolContext } from './types.js';
-import { assertPublicHost, parseFetchUrl, readBounded } from './web-fetch.js';
+import { assertPublicHost, parseFetchUrl, readBounded, WEB_USER_AGENT } from './web-fetch.js';
 
 /**
  * DuckDuckGo HTML search endpoint: public, no API key, plain HTML results.
@@ -70,6 +70,8 @@ export function resolveResultUrl(rawHref: string): string | undefined {
  * result block (after the title, before the next result title).
  */
 export function parseSearchResults(html: string, maximum: number): SearchResult[] {
+  RESULT_ANCHOR.lastIndex = 0;
+  SNIPPET_ANCHOR.lastIndex = 0;
   const anchors = [...html.matchAll(RESULT_ANCHOR)].map((match) => ({
     title: stripHtml(match[2] ?? ''),
     href: match[1] ?? '',
@@ -112,11 +114,11 @@ function fetchError(error: unknown, rawUrl: string, context: ResolvedToolContext
   );
 }
 
-async function fetchSearchHtml(query: string, context: ResolvedToolContext): Promise<string> {
-  const endpoint = context.webSearchEndpoint ?? SEARCH_ENDPOINT;
-  const url = parseFetchUrl(`${endpoint}?q=${encodeURIComponent(query)}`);
-  await assertPublicHost(url, context.allowPrivateAddresses ?? false);
-
+async function requestSearchHtml(
+  url: URL,
+  init: RequestInit,
+  context: ResolvedToolContext,
+): Promise<string> {
   const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
   const signal =
     context.signal === undefined ? timeoutSignal : AbortSignal.any([context.signal, timeoutSignal]);
@@ -128,9 +130,11 @@ async function fetchSearchHtml(query: string, context: ResolvedToolContext): Pro
       signal,
       headers: {
         accept: 'text/html, */*;q=0.8',
-        'user-agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 CodeFarmer/1.0',
+        'user-agent': WEB_USER_AGENT,
+        ...((init.headers ?? {}) as Record<string, string>),
       },
+      ...(init.method === undefined ? {} : { method: init.method }),
+      ...(init.body === undefined ? {} : { body: init.body }),
     });
   } catch (error) {
     throw fetchError(error, url.href, context);
@@ -146,6 +150,28 @@ async function fetchSearchHtml(query: string, context: ResolvedToolContext): Pro
     throw new ToolError('WEB_SEARCH_NETWORK', 'Search response exceeded the size limit.');
   }
   return text;
+}
+
+async function fetchSearchHtml(query: string, context: ResolvedToolContext): Promise<string> {
+  const endpoint = context.webSearchEndpoint ?? SEARCH_ENDPOINT;
+  const getUrl = parseFetchUrl(`${endpoint}?q=${encodeURIComponent(query)}`);
+  await assertPublicHost(getUrl, context.allowPrivateAddresses ?? false);
+  const getHtml = await requestSearchHtml(getUrl, { method: 'GET' }, context);
+  // DuckDuckGo's HTML endpoint often serves a bot-interstitial on GET.
+  // Retry once with POST before giving the model an empty result set.
+  if (parseSearchResults(getHtml, 1).length > 0) return getHtml;
+
+  const postUrl = parseFetchUrl(endpoint);
+  await assertPublicHost(postUrl, context.allowPrivateAddresses ?? false);
+  return requestSearchHtml(
+    postUrl,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ q: query }).toString(),
+    },
+    context,
+  );
 }
 
 export const webSearchDefinition: ToolDefinition = {

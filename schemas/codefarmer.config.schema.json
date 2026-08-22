@@ -158,7 +158,7 @@
     },
     "autoCompact": {
       "type": "boolean",
-      "default": false,
+      "default": true,
       "description": "Automatically compress the early part of a session once it grows past the autoCompact thresholds, before a turn runs."
     },
     "autoCompactMinMessages": {

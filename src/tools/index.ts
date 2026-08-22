@@ -15,6 +15,7 @@ export {
   searchText,
   searchTextDefinition,
 } from './file-tools.js';
+export { buildRipgrepArgs, parseRipgrepJson } from './search-rg.js';
 export {
   detectGitAvailability,
   gitDiff,
@@ -38,7 +39,7 @@ export {
   todoWriteDefinition,
   writeTodos,
 } from './todo-write.js';
-export { webFetch, webFetchDefinition } from './web-fetch.js';
+export { htmlToReadableText, webFetch, webFetchDefinition } from './web-fetch.js';
 export {
   parseSearchResults,
   resolveResultUrl,

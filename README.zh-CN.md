@@ -193,20 +193,25 @@ TUI 在同一个备用屏幕中承载对话、工具状态、审批、工作区�
 等待当前轮次结束后再提交。
 
 当前请求运行时，按 Esc 或 Ctrl+C 会取消请求或工具并记录会话状态；空闲时按
-Ctrl+C 会退出 TUI。非交互 shell 中直接运行命令只显示帮助，不会启动渲染器。
+Ctrl+C 会退出 TUI。`Shift+Enter` 或 `Alt+Enter` 在输入中插入换行，回车仍提交。
+非交互 shell 中直接运行命令只显示帮助，不会启动渲染器。
 
 ## Agent 工具
 
 首版向模型提供固定工具集：
 
 - `list_files`、`read_file`、`search_text`：检查允许访问的工作区文件。
+  `read_file` 会为每一行加上从 1 开始的行号；`search_text` 默认按字面量匹配
+  （PATH 上有 `rg` 时走 ripgrep），将 `regex` 设为 true 时按 JavaScript 正则
+  搜索，并跳过可能的二进制文件。
 - `apply_patch`：在核对预期 SHA-256 后创建、修改或删除 UTF-8 文件；一次调用
   可批量修改多个文件，每个文件写入均为原子替换，并记录可检测冲突的撤销事务。
 - `run_command`：只接收可执行文件和参数数组，不接收 shell 字符串。
-- `web_fetch`：抓取 HTTP(S) URL 并返回文本内容，限制响应大小与时间；默认阻止
-  私有、回环和链路本地地址，避免仓库内容把 Agent 变成内网扫描器。
-- `web_search`：通过 DuckDuckGo 搜索网页并返回标题、URL 和摘要；用它发现页面，
-  再用 `web_fetch` 读取完整内容。
+- `web_fetch`：抓取 HTTP(S) URL 并返回文本内容，限制响应大小与时间；HTML
+  会转成可读正文。默认阻止私有、回环和链路本地地址，避免仓库内容把 Agent
+  变成内网扫描器。
+- `web_search`：通过 DuckDuckGo 搜索网页并返回标题、URL 和摘要；GET 无结果时
+  会再用 POST 重试。用它发现页面，再用 `web_fetch` 读取完整内容。
 - `todo_write`：维护会话内的任务清单，配合多步骤任务使用；TUI 中用 `/todos` 查看。
 - `git_status` 和 `git_diff` 显示工作区状态，`git_log` 显示提交历史，`git_show`
   查看单个提交（补丁或 `--stat` 摘要），全部只读、不修改仓库状态。Git 为可选
@@ -259,7 +264,7 @@ TUI 提供 `/skills`、`/skill <ref>` 和 `/skill off`。
   "maxFileSizeBytes": 1048576,
   "maxToolOutputBytes": 12288,
   "commandTimeoutMs": 120000,
-  "autoCompact": false,
+  "autoCompact": true,
   "autoCompactMinMessages": 40,
   "autoCompactMinChars": 100000,
   "budgetUsd": 2.5,
@@ -286,7 +291,7 @@ TUI 提供 `/skills`、`/skill <ref>` 和 `/skill off`。
 | `maxFileSizeBytes`       | `CODEFARMER_MAX_FILE_SIZE_BYTES`       | `1048576`                   |
 | `maxToolOutputBytes`     | `CODEFARMER_MAX_TOOL_OUTPUT_BYTES`     | `12288`                     |
 | `commandTimeoutMs`       | `CODEFARMER_COMMAND_TIMEOUT_MS`        | `120000`                    |
-| `autoCompact`            | `CODEFARMER_AUTO_COMPACT`              | `false`                     |
+| `autoCompact`            | `CODEFARMER_AUTO_COMPACT`              | `true`                      |
 | `autoCompactMinMessages` | `CODEFARMER_AUTO_COMPACT_MIN_MESSAGES` | `40`                        |
 | `autoCompactMinChars`    | `CODEFARMER_AUTO_COMPACT_MIN_CHARS`    | `100000`                    |
 | `budgetUsd`              | `CODEFARMER_BUDGET_USD`                | 关闭                        |
@@ -296,10 +301,10 @@ TUI 提供 `/skills`、`/skill <ref>` 和 `/skill off`。
 `.git`、依赖目录、构建与覆盖率输出、`.env`、私钥和证书；`.env.example`
 仍允许读取。
 
-`autoCompact`（默认关闭）会在会话达到 `autoCompactMinMessages` 条消息或
+`autoCompact`（默认开启）会在会话达到 `autoCompactMinMessages` 条消息或
 `autoCompactMinChars` 字符后，在下一轮开始前自动把早期消息压缩为摘要，
-并保留最近几轮逐字内容。每次自动压缩会产生一次额外的摘要请求；手动
-执行 `/compact` 也可获得相同效果。
+并保留最近几轮逐字内容。每次自动压缩会产生一次额外的摘要请求；设为
+`false` 可关闭，或手动执行 `/compact` 获得相同效果。
 
 `budgetUsd`（默认关闭）设置会话的成本上限（美元），使用与 `stats` 相同的
 公开列表价估算。当会话累计估算成本达到预算后，新一轮任务会被拒绝并返回

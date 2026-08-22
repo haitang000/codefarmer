@@ -12,6 +12,7 @@ import {
   truncateUtf8,
 } from './output.js';
 import type { ResolvedToolContext } from './types.js';
+import { searchWithRipgrep } from './search-rg.js';
 import { isPathInside } from './workspace.js';
 import type { WorkspaceGuard } from './workspace.js';
 
@@ -34,7 +35,8 @@ export const listFilesDefinition: ToolDefinition = {
 
 export const readFileDefinition: ToolDefinition = {
   name: 'read_file',
-  description: 'Read a UTF-8 text file, optionally restricted to an inclusive line range.',
+  description:
+    'Read a UTF-8 text file, optionally restricted to an inclusive line range. Each output line is prefixed with its 1-based line number and a `|`; the prefixes are not part of the file.',
   readOnly: true,
   inputSchema: {
     type: 'object',
@@ -50,7 +52,8 @@ export const readFileDefinition: ToolDefinition = {
 
 export const searchTextDefinition: ToolDefinition = {
   name: 'search_text',
-  description: 'Safely search for literal text in UTF-8 workspace files.',
+  description:
+    'Search UTF-8 workspace files. Matches literal text by default (uses ripgrep when installed), or a JavaScript regular expression when regex is true. Returns path:line:column matches.',
   readOnly: true,
   inputSchema: {
     type: 'object',
@@ -63,8 +66,12 @@ export const searchTextDefinition: ToolDefinition = {
       glob: { type: ['string', 'null'], description: 'Optional file glob, for example **/*.ts.' },
       caseSensitive: { type: ['boolean', 'null'] },
       maxResults: { type: ['integer', 'null'], minimum: 1, maximum: 500 },
+      regex: {
+        type: ['boolean', 'null'],
+        description: 'When true, treat query as a JavaScript regular expression.',
+      },
     },
-    required: ['query', 'path', 'glob', 'caseSensitive', 'maxResults'],
+    required: ['query', 'path', 'glob', 'caseSensitive', 'maxResults', 'regex'],
     additionalProperties: false,
   },
 };
@@ -133,6 +140,97 @@ async function readTextFile(
   };
 }
 
+const COLLECT_DIRECTORY_CONCURRENCY = 12;
+const SEARCH_FILE_CONCURRENCY = 12;
+const SEARCH_DEADLINE_MS = 15_000;
+const MAX_REGEX_SOURCE_CHARS = 200;
+const MAX_REGEX_LINE_CHARS = 8_000;
+const BINARY_SAMPLE_BYTES = 8_192;
+const BINARY_EXTENSIONS = new Set([
+  '.7z',
+  '.a',
+  '.avi',
+  '.bin',
+  '.bmp',
+  '.class',
+  '.dll',
+  '.dylib',
+  '.eot',
+  '.exe',
+  '.flac',
+  '.gif',
+  '.gz',
+  '.ico',
+  '.jar',
+  '.jpeg',
+  '.jpg',
+  '.lib',
+  '.mkv',
+  '.mov',
+  '.mp3',
+  '.mp4',
+  '.o',
+  '.obj',
+  '.ogg',
+  '.otf',
+  '.pdf',
+  '.png',
+  '.pyc',
+  '.pyo',
+  '.rar',
+  '.so',
+  '.tar',
+  '.tgz',
+  '.tif',
+  '.tiff',
+  '.ttf',
+  '.wasm',
+  '.wav',
+  '.webm',
+  '.webp',
+  '.woff',
+  '.woff2',
+  '.xz',
+  '.zip',
+]);
+
+function comparePaths(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+export function isBinaryExtension(relativePath: string): boolean {
+  return BINARY_EXTENSIONS.has(path.extname(relativePath).toLowerCase());
+}
+
+function looksBinary(buffer: Buffer): boolean {
+  return buffer.subarray(0, Math.min(buffer.byteLength, BINARY_SAMPLE_BYTES)).includes(0);
+}
+
+/** Prefix each line with a right-aligned 1-based number and `|`. */
+export function formatNumberedLines(lines: string[], startLine: number): string {
+  if (lines.length === 0) return '';
+  const width = String(startLine + lines.length - 1).length;
+  return lines
+    .map((line, index) => `${String(startLine + index).padStart(width, ' ')}|${line}`)
+    .join('\n');
+}
+
+function compileSearchRegex(source: string, caseSensitive: boolean): RegExp {
+  if (source.length > MAX_REGEX_SOURCE_CHARS) {
+    throw new ToolError(
+      'INVALID_ARGUMENT',
+      `regex query cannot exceed ${String(MAX_REGEX_SOURCE_CHARS)} characters.`,
+    );
+  }
+  try {
+    return new RegExp(source, caseSensitive ? 'gu' : 'giu');
+  } catch (error) {
+    throw new ToolError('INVALID_ARGUMENT', `Invalid regular expression: ${source}`, {
+      cause: error as Error,
+    });
+  }
+}
+
 async function collectFiles(
   guard: WorkspaceGuard,
   startDirectory: string,
@@ -152,14 +250,18 @@ async function collectFiles(
     if (visitedDirectories.has(directoryKey)) return;
     visitedDirectories.add(directoryKey);
 
-    const entries = await readdir(directory, { withFileTypes: true });
-    // Plain code-unit comparison: faster than localeCompare and stable across
-    // host locales, which keeps directory listing deterministic everywhere.
-    entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    const subdirectories: { path: string; depth: number }[] = [];
     for (const entry of entries) {
       if (files.length >= maximumResults) {
         limitReached = true;
-        return;
+        break;
       }
       const lexicalPath = path.join(directory, entry.name);
       const relativePath = guard.toRelative(lexicalPath);
@@ -181,14 +283,40 @@ async function collectFiles(
       }
 
       if (info.isDirectory()) {
-        if (depth < maximumDepth) await visit(resolvedPath, depth + 1);
+        if (depth < maximumDepth) subdirectories.push({ path: resolvedPath, depth: depth + 1 });
       } else if (info.isFile()) {
         files.push({ path: relativePath, size: info.size });
       }
     }
+
+    if (subdirectories.length === 0 || files.length >= maximumResults) return;
+    let cursor = 0;
+    const workers = Math.min(COLLECT_DIRECTORY_CONCURRENCY, subdirectories.length);
+    await Promise.all(
+      Array.from({ length: workers }, async () => {
+        for (;;) {
+          if (files.length >= maximumResults) {
+            limitReached = true;
+            return;
+          }
+          const index = cursor;
+          cursor += 1;
+          const next = subdirectories[index];
+          if (next === undefined) return;
+          await visit(next.path, next.depth);
+        }
+      }),
+    );
   }
 
   await visit(startDirectory, 0);
+  if (files.length > maximumResults) {
+    files.length = maximumResults;
+    limitReached = true;
+  }
+  // Sibling walks finish out of directory order; sort so list_files and
+  // search stay deterministic across hosts and timings.
+  files.sort((left, right) => comparePaths(left.path, right.path));
   return { files, limitReached };
 }
 
@@ -277,7 +405,7 @@ export async function readWorkspaceFile(
   if (endLine < startLine) {
     throw new ToolError('INVALID_ARGUMENT', 'endLine cannot be less than startLine.');
   }
-  const selected = lines.slice(startLine - 1, endLine).join('\n');
+  const selected = formatNumberedLines(lines.slice(startLine - 1, endLine), startLine);
   const truncated = truncateUtf8(selected, context.maxOutputBytes);
   return successfulResult(callId, 'read_file', truncated.text, {
     data: {
@@ -303,50 +431,102 @@ export async function searchText(
   const glob = optionalString(arguments_.glob, 'glob');
   const caseSensitive = optionalBoolean(arguments_.caseSensitive, 'caseSensitive', false);
   const maxResults = optionalInteger(arguments_.maxResults, 'maxResults', 100, 1, 500);
+  const useRegex = optionalBoolean(arguments_.regex, 'regex', false);
   const matcher = glob === undefined ? undefined : globToRegExp(glob);
+  const regex = useRegex ? compileSearchRegex(query, caseSensitive) : undefined;
   // Accept a single file as well as a directory: models frequently point the
   // search at one specific file instead of its parent directory.
   const resolvedPath = await guard.resolveExisting(requestedPath);
+  if (regex === undefined) {
+    const ripgrepMatches = await searchWithRipgrep({
+      query,
+      targetRelative: guard.toRelative(resolvedPath),
+      caseSensitive,
+      ...(glob === undefined ? {} : { glob }),
+      maxResults,
+      context,
+      guard,
+      skipPath: isBinaryExtension,
+    });
+    if (ripgrepMatches !== undefined) {
+      const rendered = ripgrepMatches
+        .map(
+          (match) => `${match.path}:${String(match.line)}:${String(match.column)}: ${match.text}`,
+        )
+        .join('\n');
+      const truncated = truncateUtf8(rendered, context.maxOutputBytes);
+      return successfulResult(callId, 'search_text', truncated.text, {
+        data: {
+          count: ripgrepMatches.length,
+          limitReached: ripgrepMatches.length >= maxResults,
+          engine: 'rg',
+        },
+        truncated: truncated.truncated || ripgrepMatches.length >= maxResults,
+      });
+    }
+  }
   const pathInfo = await stat(resolvedPath);
   const files: ListedFile[] = pathInfo.isFile()
     ? [{ path: guard.toRelative(resolvedPath), size: pathInfo.size }]
     : (await collectFiles(guard, resolvedPath, 20, 5000)).files;
-  const needle = caseSensitive ? query : query.toLowerCase();
+  const needle = caseSensitive || regex !== undefined ? query : query.toLowerCase();
   const matches: { path: string; line: number; column: number; text: string }[] = [];
+  const deadline = Date.now() + SEARCH_DEADLINE_MS;
+
+  const pushMatch = (filePath: string, line: number, column: number, text: string): boolean => {
+    matches.push({ path: filePath, line, column, text: text.trim().slice(0, 500) });
+    return matches.length >= maxResults;
+  };
 
   // collectFiles already validated every path inside the workspace, so the
   // scanner only re-checks the final file instead of re-walking parents.
   const scanFile = async (file: ListedFile): Promise<void> => {
-    if (matches.length >= maxResults) return;
+    if (matches.length >= maxResults || Date.now() > deadline) return;
+    if (isBinaryExtension(file.path)) return;
     try {
       const absolutePath = await guard.resolveExisting(file.path, { kind: 'file' });
-      const { content } = await readTextFile(
-        absolutePath,
-        file.path,
-        context.maxFileBytes,
-        false,
-        file.size,
-      );
+      const buffer = await readFile(absolutePath);
+      if (buffer.byteLength > context.maxFileBytes || looksBinary(buffer)) return;
+      let content: string;
+      try {
+        content = decodeUtf8(buffer, file.path);
+      } catch (error) {
+        if (error instanceof ToolError && error.code === 'INVALID_UTF8') return;
+        throw error;
+      }
+      const sourceLines = content.split(/\r?\n/u);
+      if (regex !== undefined) {
+        // Clone so concurrent file scans cannot share lastIndex.
+        const localRegex = new RegExp(regex.source, regex.flags);
+        for (let index = 0; index < sourceLines.length; index += 1) {
+          const line = sourceLines.at(index);
+          if (line === undefined || line.length > MAX_REGEX_LINE_CHARS) continue;
+          localRegex.lastIndex = 0;
+          let match = localRegex.exec(line);
+          while (match !== null) {
+            if (pushMatch(file.path, index + 1, match.index + 1, line)) return;
+            const consumed = Math.max(1, match[0].length);
+            localRegex.lastIndex = match.index + consumed;
+            match = localRegex.exec(line);
+          }
+        }
+        return;
+      }
       // Lowercasing the whole file once (instead of per line) turns O(lines)
       // allocations into one per file, which adds up when scanning thousands
       // of files; toLowerCase is locale-independent and stays consistent with
       // the lowercased needle above.
-      const sourceLines = content.split(/\r?\n/u);
-      const searchLines =
-        caseSensitive ? sourceLines : content.toLowerCase().split(/\r?\n/u);
+      const searchLines = caseSensitive ? sourceLines : content.toLowerCase().split(/\r?\n/u);
       for (let index = 0; index < sourceLines.length; index += 1) {
         const line = sourceLines.at(index);
         if (line === undefined) continue;
         const haystack = caseSensitive ? line : (searchLines.at(index) ?? line);
-        const column = haystack.indexOf(needle);
-        if (column >= 0) {
-          matches.push({
-            path: file.path,
-            line: index + 1,
-            column: column + 1,
-            text: line.trim().slice(0, 500),
-          });
-          if (matches.length >= maxResults) return;
+        let from = 0;
+        while (from < haystack.length) {
+          const column = haystack.indexOf(needle, from);
+          if (column < 0) break;
+          if (pushMatch(file.path, index + 1, column + 1, line)) return;
+          from = column + Math.max(1, needle.length);
         }
       }
     } catch (error) {
@@ -356,7 +536,9 @@ export async function searchText(
 
   const candidates = files.filter(
     (file) =>
-      file.size <= context.maxFileBytes && (matcher === undefined || matcher.test(file.path)),
+      file.size <= context.maxFileBytes &&
+      !isBinaryExtension(file.path) &&
+      (matcher === undefined || matcher.test(file.path)),
   );
 
   if (pathInfo.isFile()) {
@@ -365,7 +547,7 @@ export async function searchText(
   } else {
     // Bounded concurrency keeps large workspaces fast without exhausting file
     // handles; results stay roughly in directory order.
-    const concurrency = 8;
+    const concurrency = SEARCH_FILE_CONCURRENCY;
     let cursor = 0;
     await Promise.all(
       Array.from({ length: concurrency }, async () => {
@@ -381,12 +563,22 @@ export async function searchText(
     );
   }
 
+  matches.sort((left, right) => {
+    const pathOrder = left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
+    if (pathOrder !== 0) return pathOrder;
+    if (left.line !== right.line) return left.line - right.line;
+    return left.column - right.column;
+  });
   const rendered = matches
     .map((match) => `${match.path}:${String(match.line)}:${String(match.column)}: ${match.text}`)
     .join('\n');
   const truncated = truncateUtf8(rendered, context.maxOutputBytes);
   return successfulResult(callId, 'search_text', truncated.text, {
-    data: { count: matches.length, limitReached: matches.length >= maxResults },
+    data: {
+      count: matches.length,
+      limitReached: matches.length >= maxResults,
+      engine: 'js',
+    },
     truncated: truncated.truncated || matches.length >= maxResults,
   });
 }

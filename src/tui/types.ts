@@ -113,6 +113,7 @@ const TUI_HELP_EN = [
   '  /skill REF  select a skill for this session; /skill off clears it',
   '  /doctor     check local runtime prerequisites',
   '  Ctrl+O      toggle the reasoning display',
+  '  Shift+Enter / Alt+Enter  insert a newline in the prompt',
 ].join('\n');
 
 const TUI_HELP_ZH = [
@@ -151,6 +152,7 @@ const TUI_HELP_ZH = [
   '  /skill REF  为本会话选择技能；/skill off 清除',
   '  /doctor     检查本地运行环境',
   '  Ctrl+O      切换推理摘要显示',
+  '  Shift+Enter / Alt+Enter  在输入中插入换行',
 ].join('\n');
 
 export function getTuiHelp(language: Language = 'en'): string {

@@ -81,6 +81,7 @@ describe('TUI command parser', () => {
     expect(TUI_HELP).toContain('/plan');
     expect(TUI_HELP).toContain('/auto');
     expect(TUI_HELP).toContain('Shift+Tab');
+    expect(TUI_HELP).toContain('Shift+Enter');
     expect(TUI_HELP).toContain('/init');
     expect(TUI_HELP).toContain('/push');
     expect(TUI_HELP).toContain('/retry');

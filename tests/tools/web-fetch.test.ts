@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { htmlToReadableText } from '../../src/tools/web-fetch.js';
 import { createToolRegistry } from '../../src/tools/registry.js';
 
 const temporaryDirectories: string[] = [];
@@ -39,6 +40,21 @@ afterEach(async () => {
         }),
     ),
   ]);
+});
+
+describe('htmlToReadableText', () => {
+  it('strips chrome and keeps headings, lists, and link targets', () => {
+    const text = htmlToReadableText(`
+      <html><head><script>void 0</script></head>
+      <body><h1>Title</h1><p>One</p><ul><li>Item</li></ul>
+      <a href="https://example.com">Site</a></body></html>
+    `);
+    expect(text).toContain('Title');
+    expect(text).toContain('One');
+    expect(text).toContain('- Item');
+    expect(text).toContain('Site (https://example.com)');
+    expect(text).not.toContain('void 0');
+  });
 });
 
 describe('web_fetch', () => {
@@ -146,7 +162,39 @@ describe('web_fetch', () => {
     });
     expect(result.success).toBe(true);
     expect(result.truncated).toBe(true);
+    expect(result.output.startsWith('x')).toBe(true);
     expect(result.output).toContain('...[response exceeded the 1024 byte limit]');
+  });
+
+  it('converts HTML pages into readable text', async () => {
+    const workspace = await temporaryWorkspace();
+    const baseUrl = await startServer((_request, response) => {
+      response.setHeader('content-type', 'text/html; charset=utf-8');
+      response.end(`
+        <html><head><style>nav{display:none}</style><script>alert(1)</script></head>
+        <body>
+          <h1>Docs</h1>
+          <p>Hello <b>world</b>.</p>
+          <a href="https://example.com/more">More</a>
+        </body></html>
+      `);
+    });
+    const registry = await createToolRegistry({
+      workspace,
+      allowPrivateAddresses: true,
+    });
+    const result = await registry.execute({
+      callId: 'html-1',
+      name: 'web_fetch',
+      arguments: { url: baseUrl, maxBytes: null },
+    });
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('Docs');
+    expect(result.output).toContain('Hello world.');
+    expect(result.output).toContain('More (https://example.com/more)');
+    expect(result.output).not.toContain('<script>');
+    expect(result.output).not.toContain('alert(1)');
+    expect(result.data).toMatchObject({ extracted: true });
   });
 
   it('rejects invalid schemes and embedded credentials', async () => {

@@ -11,6 +11,17 @@ const IGNORED_DIRECTORY_NAMES = new Set([
   '.nuxt',
   '.turbo',
   '.cache',
+  '.direnv',
+  '.eggs',
+  '.idea',
+  '.mypy_cache',
+  '.pnpm-store',
+  '.pytest_cache',
+  '.ruff_cache',
+  '.terraform',
+  '.tox',
+  '.venv',
+  '__pycache__',
   'node_modules',
   'bower_components',
   'coverage',
@@ -18,7 +29,10 @@ const IGNORED_DIRECTORY_NAMES = new Set([
   'build',
   'out',
   'target',
+  'venv',
 ]);
+
+const JUNK_FILE_NAMES = new Set(['.ds_store', 'thumbs.db']);
 
 const SENSITIVE_FILE_NAMES = new Set([
   '.env',
@@ -76,8 +90,9 @@ export function isIgnoredRelativePath(relativePath: string): boolean {
 
   const fileName = (segments.at(-1) ?? '').toLowerCase();
   if (fileName === '.env.example') return false;
-  if (SENSITIVE_FILE_NAMES.has(fileName)) return true;
+  if (SENSITIVE_FILE_NAMES.has(fileName) || JUNK_FILE_NAMES.has(fileName)) return true;
   if (fileName.startsWith('.env.')) return true;
+  if (fileName.endsWith('.pyc') || fileName.endsWith('.pyo')) return true;
   return SENSITIVE_EXTENSIONS.has(path.extname(fileName));
 }
 

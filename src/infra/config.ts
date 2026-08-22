@@ -23,6 +23,15 @@ export const DEFAULT_IGNORED_PATHS = [
   'dist/**',
   'build/**',
   'coverage/**',
+  '__pycache__/**',
+  '.venv/**',
+  'venv/**',
+  '.tox/**',
+  '.mypy_cache/**',
+  '.pytest_cache/**',
+  '.ruff_cache/**',
+  '.idea/**',
+  '.pnpm-store/**',
   '.env',
   '.env.*',
   '!.env.example',
@@ -30,6 +39,7 @@ export const DEFAULT_IGNORED_PATHS = [
   '*.key',
   '*.p12',
   '*.pfx',
+  '*.pyc',
 ] as const;
 
 export const DEFAULT_CONFIG: Readonly<CodeFarmerConfig> = {
@@ -49,7 +59,7 @@ export const DEFAULT_CONFIG: Readonly<CodeFarmerConfig> = {
   maxFileSizeBytes: 1_048_576,
   maxToolOutputBytes: 12_288,
   commandTimeoutMs: 120_000,
-  autoCompact: false,
+  autoCompact: true,
   autoCompactMinMessages: 40,
   autoCompactMinChars: 100_000,
   ignoredPaths: [...DEFAULT_IGNORED_PATHS],
@@ -172,7 +182,10 @@ export const codeFarmerConfigSchema = z
  * merged configuration, because a single file is just a partial view.
  */
 export const configFileSchema = z
-  .object({ ...configShape, provider: z.union([z.string().trim().min(1), customEndpointInputSchema]) })
+  .object({
+    ...configShape,
+    provider: z.union([z.string().trim().min(1), customEndpointInputSchema]),
+  })
   .partial()
   .extend({ $schema: z.string().optional() })
   .strict();
@@ -363,9 +376,7 @@ async function readConfigFile(filePath: string): Promise<ConfigFile | undefined>
 /** Derive a stable endpoint id from a baseURL hostname (e.g. `localhost`). */
 export function endpointIdFromBaseURL(baseURL: string): string {
   try {
-    const id = new URL(baseURL)
-      .hostname.replace(/[^A-Za-z0-9_-]/g, '-')
-      .replace(/^-+|-+$/g, '');
+    const id = new URL(baseURL).hostname.replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '');
     return id.length > 0 ? id.slice(0, 64) : 'custom';
   } catch {
     return 'custom';
