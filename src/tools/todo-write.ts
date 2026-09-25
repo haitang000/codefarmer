@@ -75,7 +75,7 @@ export function renderTodos(todos: TodoItem[]): string {
   return todos.map((item) => `${statusMarker[item.status]} ${item.content}`).join('\n');
 }
 
-export function writeTodos(
+export async function writeTodos(
   callId: string,
   arguments_: Record<string, unknown>,
   context: ResolvedToolContext,
@@ -92,10 +92,8 @@ export function writeTodos(
     throw new ToolError('INVALID_ARGUMENT', `At most ${String(MAX_TODOS)} todos are allowed.`);
   }
   const items = todos.map((entry, index) => parseTodo(entry, index));
-  const list = store.replace(items);
-  return Promise.resolve(
-    successfulResult(callId, 'todo_write', renderTodos(list), {
-      data: { count: list.length },
-    }),
-  );
+  const list = await store.replacePersisted(items);
+  return successfulResult(callId, 'todo_write', renderTodos(list), {
+    data: { count: list.length },
+  });
 }

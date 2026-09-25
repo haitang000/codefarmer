@@ -278,6 +278,29 @@ export interface SessionToolCall {
   completedAt?: string;
 }
 
+export type TodoStatus = 'pending' | 'in_progress' | 'done' | 'cancelled';
+
+export interface TodoItem {
+  content: string;
+  status: TodoStatus;
+}
+
+export interface PersistedTurn {
+  id: string;
+  prompt: string;
+  displayPrompt?: string;
+  mode: 'code' | 'plan' | 'auto';
+  skills: string[];
+  createdAt: string;
+}
+
+export interface SessionExecutionState {
+  todos: TodoItem[];
+  queuedTurns: PersistedTurn[];
+  activeTurn?: PersistedTurn;
+  interruptedTurn?: { turn: PersistedTurn; interruptedAt: string };
+}
+
 export interface SessionRecord {
   version: 1;
   id: string;
@@ -300,6 +323,8 @@ export interface SessionRecord {
   compactedAt?: string;
   messages: SessionMessage[];
   toolCalls: SessionToolCall[];
+  /** Durable task state. Absent in sessions created before task recovery. */
+  execution?: SessionExecutionState;
   usage?: TokenUsage;
   error?: {
     code: string;

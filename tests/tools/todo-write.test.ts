@@ -23,6 +23,20 @@ afterEach(async () => {
 });
 
 describe('todo_write', () => {
+  it('does not report success or change the list when persistence fails', async () => {
+    const workspace = await temporaryWorkspace();
+    const todos = new TodoStore([{ content: 'Original', status: 'pending' }], () =>
+      Promise.reject(new Error('disk full')),
+    );
+    const registry = await createToolRegistry({ workspace, todos });
+    const response = await registry.execute({
+      callId: 'todo-failure',
+      name: 'todo_write',
+      arguments: { todos: [{ content: 'Replacement', status: 'done' }] },
+    });
+    expect(response.success).toBe(false);
+    expect(todos.list()).toEqual([{ content: 'Original', status: 'pending' }]);
+  });
   it('replaces the todo list and returns the rendered items', async () => {
     const workspace = await temporaryWorkspace();
     const todos = new TodoStore();

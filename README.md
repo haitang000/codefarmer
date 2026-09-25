@@ -82,7 +82,10 @@ one-shot automation and CI.
 
 The full-screen session uses a single-workbench model: you can type follow-up
 tasks while a turn is running and CodeFarmer executes them serially from a
-bounded in-memory queue. File and command approvals support one-time, current
+bounded queue saved with the session. Pending tasks and `/todos` survive a restart or session
+switch. Resume the session, inspect `/queue`, and explicitly run `/queue continue` to start the
+saved queue. An interrupted active task is shown but never replayed automatically. File and command
+approvals support one-time, current
 session, and current workspace grants. Workspace grants are stored under the
 user data directory and never expand the workspace boundary.
 
@@ -200,15 +203,15 @@ with `/plan [on|off]` and `/auto [on|off]`.
 | `/push`                      | Push the current branch to its configured upstream after confirmation                              |
 | `/undo`                      | Undo the most recent eligible file mutation                                                        |
 | `/todos`                     | Show the agent's current todo list (maintained with the `todo_write` tool)                         |
+| `/queue [continue\|clear]`    | Review pending tasks, explicitly continue the queue, or clear it                                   |
 | `/new`                       | Start a fresh session                                                                              |
 | `/cancel`                    | Cancel the active request or tool                                                                  |
 | `/quit`                      | Leave the TUI and restore the terminal                                                             |
 
-Read-only slash commands, `/cancel`, and `/quit` remain available while the
-model is generating; ordinary prompts stay in the input buffer until it is
-ready for the next turn.
+Read-only slash commands, `/queue`, `/cancel`, and `/quit` remain available while the
+model is generating; pressing Enter on an ordinary prompt saves it in the pending queue.
 
-`Esc` or `Ctrl+C` cancels an active turn. When no turn is active, `Ctrl+C`
+`Ctrl+C` cancels an active turn; `Esc` closes a picker or clears the draft. When no turn is active, `Ctrl+C`
 exits and restores the terminal. `Shift+Enter` or `Alt+Enter` inserts a
 newline in the prompt; Enter still submits. Prefix a workspace path with `@`
 (for example `@src/cli.ts`) to attach that file to the prompt; Tab completes

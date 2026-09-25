@@ -74,6 +74,57 @@ describe('deriveSessionTitle', () => {
   });
 });
 
+describe('durable execution state', () => {
+  it('writes an empty queue when clearing a persisted session with no messages', async () => {
+    const workspace = await temporaryDirectory();
+    const environmentRoot = await temporaryDirectory();
+    await withIsolatedEnv(environmentRoot, async () => {
+      const store = await SessionStore.create(workspace);
+      const session = await store.createSession('test-provider', 'test-model');
+      await store.updateExecution(session, (current) => ({
+        ...current,
+        queuedTurns: [{
+          id: 'queued',
+          prompt: 'Later',
+          mode: 'code',
+          skills: [],
+          createdAt: new Date().toISOString(),
+        }],
+      }));
+      await store.updateExecution(session, (current) => ({ ...current, queuedTurns: [] }));
+      expect((await store.get(session.id)).execution?.queuedTurns).toEqual([]);
+    });
+  });
+  it('persists todos and converts an unfinished active turn into an interruption once', async () => {
+    const workspace = await temporaryDirectory();
+    const environmentRoot = await temporaryDirectory();
+    await withIsolatedEnv(environmentRoot, async () => {
+      const store = await SessionStore.create(workspace);
+      const session = await store.createSession('test-provider', 'test-model');
+      const turn = {
+        id: 'turn-1',
+        prompt: 'change a file',
+        mode: 'auto' as const,
+        skills: ['test'],
+        createdAt: new Date().toISOString(),
+      };
+      await store.updateExecution(session, (current) => ({
+        ...current,
+        todos: [{ content: 'Inspect', status: 'in_progress' }],
+        activeTurn: turn,
+      }));
+      expect((await store.list()).map((entry) => entry.id)).toContain(session.id);
+      const loaded = await store.get(session.id);
+      expect(loaded.execution?.todos).toEqual([{ content: 'Inspect', status: 'in_progress' }]);
+      expect(await store.recoverInterrupted(loaded)).toBe(true);
+      expect(await store.recoverInterrupted(loaded)).toBe(false);
+      expect(loaded.execution?.activeTurn).toBeUndefined();
+      expect(loaded.execution?.interruptedTurn?.turn).toEqual(turn);
+      expect((await store.get(session.id)).execution?.interruptedTurn?.turn).toEqual(turn);
+    });
+  });
+});
+
 describe('SessionStore titles', () => {
   it('derives a title from the first user message only', async () => {
     const workspace = await temporaryDirectory();

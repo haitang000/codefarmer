@@ -17,6 +17,9 @@ describe('TUI command parser', () => {
       value: 'inspect this workspace',
     });
     expect(parseTuiCommand('/sessions')).toEqual({ kind: 'sessions' });
+    expect(parseTuiCommand('/queue')).toEqual({ kind: 'queue', action: 'show' });
+    expect(parseTuiCommand('/queue continue')).toEqual({ kind: 'queue', action: 'continue' });
+    expect(parseTuiCommand('/queue clear')).toEqual({ kind: 'queue', action: 'clear' });
     expect(parseTuiCommand('/init')).toEqual({ kind: 'init' });
     expect(parseTuiCommand('/skills')).toEqual({ kind: 'skills' });
     expect(parseTuiCommand('/skill docs')).toEqual({ kind: 'skill', ref: 'docs' });

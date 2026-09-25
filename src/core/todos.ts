@@ -1,20 +1,30 @@
-export type TodoStatus = 'pending' | 'in_progress' | 'done' | 'cancelled';
+import type { TodoItem } from '../types.js';
 
-export interface TodoItem {
-  content: string;
-  status: TodoStatus;
-}
+export type { TodoItem, TodoStatus } from '../types.js';
 
 /**
- * In-memory, per-session todo list maintained by the agent through the
- * `todo_write` tool and inspected by the user through `/todos`. It is not
- * part of a SessionRecord: a fresh runtime starts with an empty list.
+ * Session-scoped todo list maintained by the agent through `todo_write`.
+ * When a session is available, changes are saved before they are acknowledged.
  */
 export class TodoStore {
-  private items: TodoItem[] = [];
+  private items: TodoItem[];
+
+  public constructor(
+    initial: TodoItem[] = [],
+    private readonly persist?: (items: TodoItem[]) => Promise<void>,
+  ) {
+    this.items = initial.map((item) => ({ ...item }));
+  }
 
   replace(items: TodoItem[]): TodoItem[] {
     this.items = items.map((item) => ({ content: item.content, status: item.status }));
+    return this.list();
+  }
+
+  async replacePersisted(items: TodoItem[]): Promise<TodoItem[]> {
+    const next = items.map((item) => ({ ...item }));
+    await this.persist?.(next);
+    this.items = next;
     return this.list();
   }
 

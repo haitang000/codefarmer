@@ -25,6 +25,7 @@ import { OpenAIProvider } from '../providers/openai.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible.js';
 import { isProviderId, providerPreset } from '../providers/catalog.js';
 import { createToolRegistry } from '../tools/registry.js';
+import { expandPathMentions } from '../tools/mentions.js';
 import type {
   AskUserAnswer,
   AskUserRequest,
@@ -194,6 +195,7 @@ export async function createAgentRuntime(
           )
         : undefined
       : await base.sessions.get(agentOptions.sessionId);
+  if (session !== undefined) await base.sessions.recoverInterrupted(session);
   const config = resolveSessionConfig(
     base.config,
     options,
@@ -225,7 +227,16 @@ export async function createAgentRuntime(
     if (history) await runtimeBase.sessions.save(session);
   }
   const permissions = await PermissionStore.create(runtimeBase.workspace);
-  const todos = new TodoStore();
+  const todos = new TodoStore(session?.execution?.todos ?? [],
+    session === undefined || !history
+      ? undefined
+      : async (items) => {
+          await runtimeBase.sessions.updateExecution(session, (current) => ({
+            ...current,
+            todos: items,
+          }));
+        },
+  );
   const approval = new PolicyApprovalController(
     config.approval,
     agentOptions.approvalDecisionPrompt ?? agentOptions.approvalPrompt ?? promptForApproval,
@@ -342,6 +353,15 @@ export async function createAgentRuntime(
   const orchestrator = new SessionOrchestrator(runner, {
     workspace: runtimeBase.workspace,
     ...(session === undefined ? {} : { session, sessionId: session.id }),
+    ...(history ? { sessionStore: runtimeBase.sessions } : {}),
+    preparePrompt: async (prompt) => {
+      const expanded = await expandPathMentions(prompt, {
+        workspace: runtimeBase.workspace,
+        ignoredPaths: config.ignoredPaths,
+        maxFileBytes: config.maxFileSizeBytes,
+      });
+      return expanded.prompt;
+    },
     ...(agentOptions.hooks === undefined ? {} : { hooks: agentOptions.hooks }),
   });
   runtimeBase.logger.info(

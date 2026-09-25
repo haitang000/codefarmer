@@ -28,6 +28,7 @@ export type TuiCommand =
   | { kind: 'push'; args: string[] }
   | { kind: 'undo' }
   | { kind: 'todos' }
+  | { kind: 'queue'; action: 'show' | 'continue' | 'clear' | 'invalid' }
   | { kind: 'export'; format: 'markdown' | 'json'; path: string }
   | { kind: 'sessions' }
   | { kind: 'resume'; id: string }
@@ -99,6 +100,7 @@ const TUI_HELP_EN = [
   '  /push       push the current branch to its upstream',
   '  /undo       undo the latest file mutation',
   "  /todos      show the agent's current todo list",
+  '  /queue [continue|clear]  show or manage saved pending tasks',
   '  /init       summarize this workspace into AGENT.md',
   'PERMISSIONS',
   '  /plan [on|off]  read-only research mode',
@@ -140,6 +142,7 @@ const TUI_HELP_ZH = [
   '  /push       推送当前分支到上游',
   '  /undo       撤销最近一次文件变更',
   '  /todos      显示 Agent 当前的任务清单',
+  '  /queue [continue|clear]  查看或处理待执行任务',
   '  /init       将工作区摘要写入 AGENT.md',
   '权限',
   '  /plan [on|off]  只读研究模式',
@@ -195,6 +198,7 @@ export const TUI_COMMANDS = [
   'push',
   'undo',
   'todos',
+  'queue',
   'export',
   'cancel',
   'quit',
@@ -285,6 +289,18 @@ export function parseTuiCommand(input: string): TuiCommand {
     case 'todos':
     case 'todo':
       return { kind: 'todos' };
+    case 'queue': {
+      const action = parts[0];
+      return {
+        kind: 'queue',
+        action:
+          action === undefined
+            ? 'show'
+            : action === 'continue' || action === 'clear'
+              ? action
+              : 'invalid',
+      };
+    }
     case 'export': {
       const first = parts[0];
       if (first === 'json' || first === 'md' || first === 'markdown') {

@@ -9,6 +9,7 @@ import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
 
 import type { ApprovalDecision, ApprovalRequest } from '../core/approval.js';
 import type { AgentRunResult } from '../core/runtime-types.js';
+import type { TurnRequest } from '../core/session-orchestrator.js';
 import type { AgentRuntime } from '../cli/runtime.js';
 import { writeConfigFile, type ConfigFile } from '../infra/config.js';
 import { getAppPaths } from '../infra/paths.js';
@@ -114,7 +115,11 @@ const READ_ONLY_COMMANDS: ReadonlySet<TuiCommand['kind']> = new Set([
 
 function canRunWhileBusy(command: TuiCommand): boolean {
   return (
-    command.kind === 'cancel' || command.kind === 'quit' || READ_ONLY_COMMANDS.has(command.kind)
+    command.kind === 'prompt' ||
+    command.kind === 'queue' ||
+    command.kind === 'cancel' ||
+    command.kind === 'quit' ||
+    READ_ONLY_COMMANDS.has(command.kind)
   );
 }
 
@@ -412,12 +417,33 @@ export function runtimeEntries(runtime: AgentRuntime): TranscriptEntry[] {
       priority: 1,
     });
   }
-  return timeline
+  const entries = timeline
     .sort((left, right) => {
       const timeOrder = left.timestamp.localeCompare(right.timestamp);
       return timeOrder === 0 ? left.priority - right.priority : timeOrder;
     })
     .map(({ entry }) => entry);
+  const execution = runtime.session?.execution;
+  const zh = runtime.config.language === 'zh-CN';
+  if (execution?.interruptedTurn !== undefined) {
+    entries.push({
+      id: `interrupted-${execution.interruptedTurn.turn.id}`,
+      kind: 'system',
+      content: zh
+        ? `已中断任务：${execution.interruptedTurn.turn.displayPrompt ?? execution.interruptedTurn.turn.prompt}。不会自动重跑。`
+        : `Interrupted task: ${execution.interruptedTurn.turn.displayPrompt ?? execution.interruptedTurn.turn.prompt}. It will not run automatically.`,
+    });
+  }
+  if ((execution?.queuedTurns.length ?? 0) > 0) {
+    entries.push({
+      id: `pending-${runtime.session?.id ?? ''}`,
+      kind: 'system',
+      content: zh
+        ? `已保存 ${String(execution?.queuedTurns.length ?? 0)} 条待执行任务。输入 /queue 查看，/queue continue 继续。`
+        : `${String(execution?.queuedTurns.length ?? 0)} pending task(s) saved. Use /queue to review and /queue continue to run them.`,
+    });
+  }
+  return entries;
 }
 
 /**
@@ -1756,6 +1782,7 @@ export function TuiApp({
   // closure would be stale, dropping characters when typing fast.
   const draftRef = useRef('');
   const cursorRef = useRef(0);
+  const submittingPromptRef = useRef(false);
   const applyDraft = useCallback((value: string, position: number): void => {
     draftRef.current = value;
     cursorRef.current = position;
@@ -2072,6 +2099,8 @@ export function TuiApp({
     plan?: boolean;
     /** Called from inside `runCommand`, which already manages the busy state. */
     nested?: boolean;
+    /** Turn already started by the durable session queue. */
+    managedTurn?: TurnRequest;
   }
 
   // Returns the agent run result, or undefined when the turn failed to run
@@ -2115,11 +2144,13 @@ export function TuiApp({
       const controller = new AbortController();
       controllerRef.current = controller;
       const activeRuntime = runtimeRef.current;
-      const expanded = await expandPathMentions(prompt, {
-        workspace: activeRuntime.workspace,
-        ignoredPaths: activeRuntime.config.ignoredPaths,
-        maxFileBytes: activeRuntime.config.maxFileSizeBytes,
-      });
+      const expanded = options?.managedTurn === undefined
+        ? await expandPathMentions(prompt, {
+            workspace: activeRuntime.workspace,
+            ignoredPaths: activeRuntime.config.ignoredPaths,
+            maxFileBytes: activeRuntime.config.maxFileSizeBytes,
+          })
+        : { prompt, attached: [] as string[] };
       const modelPrompt = expanded.prompt;
       if (expanded.attached.length > 0) {
         appendSystem(
@@ -2219,7 +2250,20 @@ export function TuiApp({
         const turnPlan = options?.plan === true || agentModeRef.current === 'plan';
         const turnAuto = options?.plan !== true && agentModeRef.current === 'auto';
         let result: AgentRunResult;
-        if (activeRuntime.orchestrator !== undefined && options?.ephemeral !== true) {
+        if (options?.managedTurn !== undefined && activeRuntime.orchestrator !== undefined) {
+          const managedId = options.managedTurn.id;
+          result = await new Promise<AgentRunResult>((resolve, reject) => {
+            unsubscribe = activeRuntime.orchestrator?.subscribe((event) => {
+              if ('turn' in event && event.turn.id !== managedId) return;
+              if (event.type === 'provider_event') handleProviderEvent(event.event);
+              else if (event.type === 'turn_completed' || event.type === 'turn_cancelled') {
+                resolve(event.result);
+              } else if (event.type === 'turn_failed') {
+                reject(event.error instanceof Error ? event.error : new Error(String(event.error)));
+              }
+            });
+          });
+        } else if (activeRuntime.orchestrator !== undefined && options?.ephemeral !== true) {
           const queued = activeRuntime.orchestrator.enqueue(modelPrompt, {
             displayPrompt,
             ...(turnPlan ? { plan: true } : {}),
@@ -2319,14 +2363,106 @@ export function TuiApp({
     [appendSystem, flushDeltaBuffer, selectedSkills],
   );
 
+  useEffect(() => {
+    const orchestrator = runtime.orchestrator;
+    if (orchestrator === undefined) return;
+    return orchestrator.subscribe((event) => {
+      if (
+        event.type === 'turn_started' &&
+        runtime.session?.execution?.activeTurn?.id === event.turn.id
+      ) {
+        void runPrompt(event.turn.prompt, event.turn.displayPrompt ?? event.turn.prompt, {
+          managedTurn: event.turn,
+        });
+      } else if (event.type === 'queue_error') {
+        appendSystem(displayError(event.error), 'error');
+      }
+    });
+  }, [appendSystem, runPrompt, runtime.orchestrator]);
+
   const runCommand = useCallback(
     async (command: TuiCommand): Promise<void> => {
       if (command.kind === 'prompt') {
-        if (command.value.length > 0) await runPrompt(command.value);
+        if (command.value.length === 0) return;
+        if (submittingPromptRef.current) return;
+        const active = runtimeRef.current;
+        const orchestrator = active.orchestrator;
+        if (orchestrator === undefined) {
+          appendSystem('No task queue is available for this session.', 'error');
+          return;
+        }
+        const wasPaused = orchestrator.snapshot().paused;
+        const mode = agentModeRef.current;
+        submittingPromptRef.current = true;
+        try {
+          const queued = await orchestrator.enqueueDurable(command.value, {
+            displayPrompt: command.value,
+            ...(mode === 'plan' ? { plan: true } : {}),
+            ...(mode === 'auto' ? { auto: true } : {}),
+            skills: selectedSkills,
+          });
+          void queued.promise.catch(() => undefined);
+          if (draftRef.current.trim() === command.value) applyDraft('', 0);
+          historyRef.current = [...historyRef.current.filter((entry) => entry !== command.value), command.value].slice(-50);
+          historyIndexRef.current = -1;
+          lastPromptRef.current = command.value;
+          appendSystem(languageRef.current === 'zh-CN'
+            ? `已入列第 ${String(orchestrator.snapshot().queuedTurns.length)} 条任务：${command.value}`
+            : `Queued task ${String(orchestrator.snapshot().queuedTurns.length)}: ${command.value}`);
+          if (!wasPaused) orchestrator.continueQueued();
+        } catch (error) {
+          appendSystem(displayError(error), 'error');
+        } finally {
+          submittingPromptRef.current = false;
+        }
+        return;
+      }
+      if (command.kind === 'queue') {
+        const orchestrator = runtimeRef.current.orchestrator;
+        if (orchestrator === undefined) return;
+        if (command.action === 'invalid') {
+          appendSystem('Usage: /queue [continue|clear]', 'error');
+          return;
+        }
+        if (command.action === 'continue') {
+          if (orchestrator.snapshot().queuedTurns.length === 0) appendSystem(languageRef.current === 'zh-CN' ? '队列为空。' : 'Queue is empty.');
+          else {
+            orchestrator.continueQueued();
+            appendSystem(languageRef.current === 'zh-CN' ? '正在继续已保存的任务队列。' : 'Continuing saved task queue.');
+          }
+          return;
+        }
+        if (command.action === 'clear') {
+          try {
+            const count = await orchestrator.clearQueued();
+            appendSystem(languageRef.current === 'zh-CN'
+              ? `已清空 ${String(count)} 条待执行任务。`
+              : `Cleared ${String(count)} pending task(s).`);
+          } catch (error) {
+            appendSystem(displayError(error), 'error');
+          }
+          return;
+        }
+        const snapshot = orchestrator.snapshot();
+        const lines = snapshot.queuedTurns.map((turn, index) =>
+          `${String(index + 1)}. [${turn.plan === true ? 'PLAN' : turn.auto === true ? 'AUTO' : 'CODE'}] ${turn.displayPrompt ?? turn.prompt}`,
+        );
+        const interrupted = runtimeRef.current.session?.execution?.interruptedTurn;
+        if (interrupted !== undefined) {
+          lines.push(languageRef.current === 'zh-CN'
+            ? `已中断（不在队列中）：${interrupted.turn.displayPrompt ?? interrupted.turn.prompt}`
+            : `Interrupted (not queued): ${interrupted.turn.displayPrompt ?? interrupted.turn.prompt}`);
+        }
+        appendSystem(lines.length === 0 ? languageRef.current === 'zh-CN' ? '队列为空。' : 'Queue is empty.' : lines.join('\n'));
         return;
       }
       if (command.kind === 'quit') {
-        runtimeRef.current.orchestrator?.cancelActive();
+        try {
+          await runtimeRef.current.orchestrator?.interruptForExit();
+        } catch (error) {
+          appendSystem(displayError(error), 'error');
+          return;
+        }
         controllerRef.current?.abort();
         exit();
         return;
@@ -2929,6 +3065,7 @@ export function TuiApp({
       }
     },
     [
+      applyDraft,
       appendSystem,
       exit,
       requestApproval,
@@ -2946,12 +3083,15 @@ export function TuiApp({
     if (value.length === 0) return;
     const command = parseTuiCommand(value);
     if (busyRef.current && !canRunWhileBusy(command)) return;
+    if (command.kind === 'prompt') {
+      void runCommand(command);
+      return;
+    }
     historyRef.current = [...historyRef.current.filter((entry) => entry !== value), value].slice(
       -50,
     );
     historyIndexRef.current = -1;
     applyDraft('', 0);
-    if (command.kind === 'prompt') lastPromptRef.current = command.value;
     void runCommand(command);
   }, [applyDraft, runCommand]);
 

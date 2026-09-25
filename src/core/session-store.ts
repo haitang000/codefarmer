@@ -5,7 +5,13 @@ import path from 'node:path';
 import { getWorkspacePaths, ensureWorkspaceDirectories } from '../infra/paths.js';
 import type { AppPaths } from '../infra/paths.js';
 import { readJsonFile, writeJsonAtomic } from '../infra/persistence.js';
-import type { SessionMessage, SessionRecord, SessionStatus, TokenUsage } from '../types.js';
+import type {
+  SessionExecutionState,
+  SessionMessage,
+  SessionRecord,
+  SessionStatus,
+  TokenUsage,
+} from '../types.js';
 
 const MAX_TITLE_LENGTH = 60;
 const UNTITLED = '未命名会话';
@@ -24,15 +30,24 @@ function sessionFile(directory: string, id: string): string {
   return path.join(directory, `${id}.json`);
 }
 
+function shouldDeferSession(session: SessionRecord): boolean {
+  return (
+    session.messages.length === 0 &&
+    (session.execution?.queuedTurns.length ?? 0) === 0 &&
+    session.execution?.activeTurn === undefined &&
+    (session.execution?.todos.length ?? 0) === 0 &&
+    session.execution?.interruptedTurn === undefined
+  );
+}
+
 export class SessionStore {
   // Serialised background write chain; saves queued with `saveQueued` run in
   // order without blocking the agent loop, and `flush` drains the chain.
   private pendingWrites: Promise<void> = Promise.resolve();
+  private executionMutations: Promise<void> = Promise.resolve();
 
-  // Sessions created but not yet persisted. A session is only written to disk
-  // once it carries at least one message, so abandoned conversations (for
-  // example a TUI opened and closed without sending anything) never appear in
-  // `list()` or leave stray files behind.
+  // New sessions are written only once they carry a message or durable task
+  // state, so opening and closing an empty TUI leaves no session file.
   private readonly unsaved = new Map<string, SessionRecord>();
 
   private constructor(
@@ -73,16 +88,62 @@ export class SessionStore {
   }
 
   public async save(session: SessionRecord): Promise<void> {
-    if (session.messages.length === 0) {
+    if (this.unsaved.has(session.id) && shouldDeferSession(session)) {
       // Empty sessions stay in memory until their first message arrives.
       this.unsaved.set(session.id, session);
       return;
     }
     this.unsaved.delete(session.id);
-    await writeJsonAtomic(sessionFile(this.directory, session.id), {
-      ...session,
-      updatedAt: new Date().toISOString(),
+    await this.enqueueWrite(session);
+  }
+
+  private enqueueWrite(session: SessionRecord): Promise<void> {
+    const snapshot = structuredClone({ ...session, updatedAt: new Date().toISOString() });
+    const write = this.pendingWrites.then(() =>
+      writeJsonAtomic(sessionFile(this.directory, snapshot.id), snapshot),
+    );
+    this.pendingWrites = write.catch(() => undefined);
+    return write;
+  }
+
+  /** Serialise execution-state changes and acknowledge only durable writes. */
+  public updateExecution(
+    session: SessionRecord,
+    update: (current: SessionExecutionState) => SessionExecutionState,
+  ): Promise<SessionExecutionState> {
+    const change = this.executionMutations.then(async () => {
+      const previous = session.execution;
+      const current: SessionExecutionState = previous ?? { todos: [], queuedTurns: [] };
+      const next = update(structuredClone(current));
+      session.execution = next;
+      try {
+        await this.save(session);
+      } catch (error) {
+        if (previous === undefined) delete session.execution;
+        else session.execution = previous;
+        throw error;
+      }
+      return next;
     });
+    this.executionMutations = change.then(() => undefined, () => undefined);
+    return change;
+  }
+
+  /** Convert a task left active by a previous process into a visible interruption. */
+  public async recoverInterrupted(session: SessionRecord): Promise<boolean> {
+    if (session.execution?.activeTurn === undefined) return false;
+    await this.updateExecution(session, (current) => {
+      const active = current.activeTurn;
+      const rest = { ...current };
+      delete rest.activeTurn;
+      return active === undefined
+        ? rest
+        : {
+            ...rest,
+            interruptedTurn: { turn: active, interruptedAt: new Date().toISOString() },
+          };
+    });
+    return true;
   }
 
   /**
@@ -90,16 +151,13 @@ export class SessionStore {
    * in queue order; later snapshots supersede earlier ones.
    */
   public saveQueued(session: SessionRecord): void {
-    if (session.messages.length === 0) {
+    if (this.unsaved.has(session.id) && shouldDeferSession(session)) {
       // Not persisted yet; the live record in `unsaved` is authoritative.
       this.unsaved.set(session.id, session);
       return;
     }
     this.unsaved.delete(session.id);
-    const snapshot = { ...session, updatedAt: new Date().toISOString() };
-    this.pendingWrites = this.pendingWrites.then(() =>
-      writeJsonAtomic(sessionFile(this.directory, snapshot.id), snapshot).catch(() => undefined),
-    );
+    void this.enqueueWrite(session).catch(() => undefined);
   }
 
   /** Wait for every queued background save to finish. */
@@ -119,6 +177,8 @@ export class SessionStore {
 
   public async delete(id: string): Promise<void> {
     this.unsaved.delete(id);
+    await this.executionMutations;
+    await this.pendingWrites;
     await rm(sessionFile(this.directory, id), { force: true });
   }
 

@@ -6,6 +6,14 @@ All notable changes to CodeFarmer are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- TUI prompts entered during an active task are saved in a per-session queue. Pending tasks and
+  `todo_write` items survive restart and session switching; `/queue` shows the saved work,
+  `/queue continue` explicitly resumes it, and `/queue clear` removes pending tasks.
+- An active task left by an exit or crash is shown as interrupted on resume and is never replayed
+  automatically.
+
 ## [0.1.7] - 2026-08-22
 
 ### Added

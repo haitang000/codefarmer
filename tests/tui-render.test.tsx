@@ -56,6 +56,35 @@ function mockRuntime(): AgentRuntime {
 }
 
 describe('TUI rendering', () => {
+  it('shows saved pending work and interrupted turns when a session is reopened', () => {
+    const runtime = mockRuntime();
+    const session = runtime.session;
+    if (session === undefined) throw new Error('missing session fixture');
+    session.execution = {
+      todos: [{ content: 'Inspect', status: 'pending' }],
+      queuedTurns: [{
+        id: 'queued-1',
+        prompt: 'Run tests',
+        mode: 'code',
+        skills: [],
+        createdAt: new Date(0).toISOString(),
+      }],
+      interruptedTurn: {
+        turn: {
+          id: 'interrupted-1',
+          prompt: 'Edit files',
+          mode: 'auto',
+          skills: [],
+          createdAt: new Date(0).toISOString(),
+        },
+        interruptedAt: new Date(0).toISOString(),
+      },
+    };
+    expect(runtimeEntries(runtime).map((entry) => entry.content)).toEqual([
+      expect.stringContaining('Interrupted task: Edit files'),
+      expect.stringContaining('1 pending task(s) saved'),
+    ]);
+  });
   it('renders the welcome panel with a clear workspace and quick-start hierarchy', () => {
     const output = renderToString(
       <WelcomePanel

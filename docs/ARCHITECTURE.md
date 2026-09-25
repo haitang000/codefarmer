@@ -95,11 +95,13 @@ silently resumed against another endpoint.
 Interactive turns are owned by `SessionOrchestrator`, which wraps
 `AgentRunner`. It serializes one session's work, accepts follow-up prompts while
 the active turn is running, and emits a provider-neutral event stream for the
-TUI, CLI renderers, logs, and integrations. The in-memory queue is bounded to
-eight prompts and is intentionally not restored after process exit; completed
-turns remain in the normal `SessionRecord` history.
+TUI, CLI renderers, logs, and integrations. The pending queue is bounded to
+eight prompts. TUI-submitted turns are saved with the session; completed turns
+remain in the normal `SessionRecord` history.
 
-The orchestrator also exposes process-local `AgentHooks` for before/after turn
+Queued TUI turns and todo items are saved with the session. A restored queue stays paused until
+`/queue continue`; an unfinished active turn becomes an interruption notice instead of being
+replayed. The orchestrator also exposes process-local `AgentHooks` for before/after turn
 and tool integrations. Hooks are observers or explicit veto points inside the
 runtime; CodeFarmer never executes arbitrary workspace hook scripts implicitly.
 
