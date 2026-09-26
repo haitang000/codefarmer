@@ -33,7 +33,7 @@ describe('configuration', () => {
     expect(config).toEqual(DEFAULT_CONFIG);
     expect(config.maxAgentTurns).toBe(12);
     expect(config.maxToolOutputBytes).toBe(12_288);
-    expect(config.reasoning).toBe('high');
+    expect(config.reasoning).toBe('medium');
     expect(config.verbosity).toBe('low');
     expect(config.reasoningSummary).toBe('none');
     expect(config.commandTimeoutMs).toBe(120_000);
@@ -83,7 +83,7 @@ describe('configuration', () => {
     expect(config.maxAgentTurns).toBe(19);
     expect(config.approval).toBe('auto');
     expect(config.logLevel).toBe('debug');
-    expect(config.reasoning).toBe('high');
+    expect(config.reasoning).toBe('medium');
     expect(config.verbosity).toBe('low');
     expect(config.reasoningSummary).toBe('none');
   });

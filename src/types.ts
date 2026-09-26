@@ -171,6 +171,13 @@ export interface TokenUsage {
   totalTokens: number;
   reasoningTokens?: number;
   cachedInputTokens?: number;
+  /** Number of provider requests represented by this usage record. */
+  requestCount?: number;
+  /** Cumulative serialized request characters, split by prompt component. */
+  instructionChars?: number;
+  toolSchemaChars?: number;
+  inputChars?: number;
+  toolOutputChars?: number;
 }
 
 export type ProviderEvent =

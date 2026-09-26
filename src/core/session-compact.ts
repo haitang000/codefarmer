@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { ConfigError, ProviderError } from '../infra/errors.js';
+import { measureRequestPayload } from './request-metrics.js';
 import type {
   AgentProvider,
   CodeFarmerConfig,
@@ -155,7 +156,6 @@ export async function compactSession(options: CompactSessionOptions): Promise<Co
 
   const { input } = buildCompactionInput(session, MAX_COMPACT_INPUT_CHARS);
   let summary = '';
-  const usage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   const request = {
     model: options.config.model,
     reasoning: options.config.reasoning,
@@ -167,6 +167,12 @@ export async function compactSession(options: CompactSessionOptions): Promise<Co
     store: false,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   };
+  const usage: TokenUsage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    ...measureRequestPayload(request),
+  };
   for await (const event of options.provider.stream(request)) {
     if (event.type === 'text_delta') summary += event.delta;
     if (event.type === 'response_completed') summary = event.outputText ?? summary;
@@ -174,6 +180,9 @@ export async function compactSession(options: CompactSessionOptions): Promise<Co
       usage.inputTokens += event.usage.inputTokens;
       usage.outputTokens += event.usage.outputTokens;
       usage.totalTokens += event.usage.totalTokens;
+      usage.reasoningTokens = (usage.reasoningTokens ?? 0) + (event.usage.reasoningTokens ?? 0);
+      usage.cachedInputTokens =
+        (usage.cachedInputTokens ?? 0) + (event.usage.cachedInputTokens ?? 0);
     }
     if (event.type === 'error') {
       throw new ProviderError(event.error.message, {

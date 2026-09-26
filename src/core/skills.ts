@@ -136,19 +136,29 @@ async function loadDescriptor(candidate: Candidate, directoryName: string): Prom
   }
 }
 
-export function formatSkillCatalog(catalog: SkillCatalog): string {
+export function formatSkillCatalog(
+  catalog: SkillCatalog,
+  excludedRefs: readonly string[] = [],
+): string {
   if (catalog.skills.length === 0) return 'No skills were discovered.';
+  const excluded = new Set(excludedRefs);
+  const skills = catalog.skills.filter((skill) => !excluded.has(skill.ref));
+  if (skills.length === 0) {
+    return 'All discovered skills are included below as selected instructions.';
+  }
   const lines = ['Available skills (load full instructions with read_skill when relevant):'];
   let remaining = MAX_CATALOG_CHARS - (lines[0]?.length ?? 0);
   let included = 0;
-  for (const skill of catalog.skills) {
-    const line = `- ${skill.ref}: ${skill.description} [${skill.skillFile}]`;
+  for (const skill of skills) {
+    const line = `- ${skill.ref}: ${skill.description}`;
     if (line.length + 1 > remaining) break;
     lines.push(line);
     remaining -= line.length + 1;
     included += 1;
   }
-  if (included < catalog.skills.length) lines.push(`- ... ${String(catalog.skills.length - included)} more skills omitted from this list.`);
+  if (included < skills.length) {
+    lines.push(`- ... ${String(skills.length - included)} more skills omitted from this list.`);
+  }
   return lines.join('\n');
 }
 

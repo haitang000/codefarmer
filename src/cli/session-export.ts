@@ -24,6 +24,17 @@ function usageLine(usage: TokenUsage): string {
   ];
   if (usage.reasoningTokens !== undefined) parts.push(`推理 ${String(usage.reasoningTokens)}`);
   if (usage.cachedInputTokens !== undefined) parts.push(`缓存输入 ${String(usage.cachedInputTokens)}`);
+  if (usage.requestCount !== undefined) {
+    const payloadChars =
+      (usage.instructionChars ?? 0) +
+      (usage.toolSchemaChars ?? 0) +
+      (usage.inputChars ?? 0);
+    parts.push(
+      `请求 ${String(usage.requestCount)} 次 / 指令 ${String(usage.instructionChars ?? 0)}、` +
+        `工具定义 ${String(usage.toolSchemaChars ?? 0)}、输入 ${String(usage.inputChars ?? 0)} 字符` +
+        `（工具输出 ${String(usage.toolOutputChars ?? 0)} 字符；累计 ${String(payloadChars)} 字符）`,
+    );
+  }
   return parts.join(' / ');
 }
 

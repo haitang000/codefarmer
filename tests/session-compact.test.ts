@@ -83,7 +83,12 @@ describe('compactSession', () => {
     expect(result.originalMessageCount).toBe(20);
     expect(result.keptMessageCount).toBe(COMPACT_KEEP_RECENT_MESSAGES);
     expect(result.compressedMessageCount).toBe(20 - COMPACT_KEEP_RECENT_MESSAGES);
-    expect(result.usage).toEqual({ inputTokens: 100, outputTokens: 5, totalTokens: 105 });
+    expect(result.usage).toMatchObject({
+      inputTokens: 100,
+      outputTokens: 5,
+      totalTokens: 105,
+      requestCount: 1,
+    });
 
     expect(record.messages).toHaveLength(COMPACT_KEEP_RECENT_MESSAGES + 1);
     expect(record.messages[0]).toMatchObject({

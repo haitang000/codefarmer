@@ -14,6 +14,7 @@ import type {
   SkillCatalog,
 } from '../types.js';
 import { buildAgentInstructions } from './prompt.js';
+import { measureRequestPayload } from './request-metrics.js';
 import { estimateCostUsd, lookupModelPrice } from './stats.js';
 import type { AgentRunResult } from './runtime-types.js';
 import { deriveSessionTitle, type SessionStore } from './session-store.js';
@@ -37,13 +38,13 @@ const RETRY_BASE_DELAY_MS = 2_000;
  * overflow the model context window, turning a recoverable mode into a hard
  * "maximum context length" failure.
  */
-const MAX_TRANSCRIPT_CHARS = 150_000;
+const MAX_TRANSCRIPT_CHARS = 100_000;
 /**
  * Upper bound for the tool outputs included in one request input. Several
  * parallel tools can each return tens of kilobytes; clamping keeps the
  * request inside the context window on the next turn.
  */
-const MAX_TOOL_OUTPUT_INPUT_CHARS = 24_000;
+const MAX_TOOL_OUTPUT_INPUT_CHARS = 16_000;
 /** DeepSeek can require long tool chains; its configured limit is a soft checkpoint. */
 const DEEPSEEK_HARD_TURN_LIMIT = 100;
 
@@ -76,6 +77,11 @@ function sumUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
     totalTokens: left.totalTokens + right.totalTokens,
     reasoningTokens: (left.reasoningTokens ?? 0) + (right.reasoningTokens ?? 0),
     cachedInputTokens: (left.cachedInputTokens ?? 0) + (right.cachedInputTokens ?? 0),
+    requestCount: (left.requestCount ?? 0) + (right.requestCount ?? 0),
+    instructionChars: (left.instructionChars ?? 0) + (right.instructionChars ?? 0),
+    toolSchemaChars: (left.toolSchemaChars ?? 0) + (right.toolSchemaChars ?? 0),
+    inputChars: (left.inputChars ?? 0) + (right.inputChars ?? 0),
+    toolOutputChars: (left.toolOutputChars ?? 0) + (right.toolOutputChars ?? 0),
   };
 }
 
@@ -401,6 +407,7 @@ export class AgentRunner {
       }
     }
 
+    let compactionUsage = { ...EMPTY_USAGE };
     // Auto-compact: when a persisted session has grown large, fold the early
     // part into a summary before this turn so the request stays small. The new
     // prompt is added afterwards, so it is never part of the summarised span.
@@ -419,6 +426,7 @@ export class AgentRunner {
           config: this.options.config,
           ...(runOptions.signal === undefined ? {} : { signal: runOptions.signal }),
         });
+        compactionUsage = sumUsage(compactionUsage, result.usage);
         if (store !== undefined) {
           store.saveQueued(session);
           await store.flush().catch(() => undefined);
@@ -451,7 +459,7 @@ export class AgentRunner {
     if (store !== undefined) store.saveQueued(session);
 
     let previousResponseId = session.previousResponseId;
-    let totalUsage = { ...EMPTY_USAGE };
+    let totalUsage = { ...compactionUsage };
     let finalMessage = '';
     const toolCalls: AgentRunResult['toolCalls'] = [];
 
@@ -535,6 +543,7 @@ export class AgentRunner {
           finishReason = undefined;
           const usageBeforeAttempt = { ...totalUsage };
           try {
+            totalUsage = sumUsage(totalUsage, measureRequestPayload(request));
             for await (const event of this.options.provider.stream(request)) {
               runOptions.onEvent?.(event);
               if (event.type === 'text_delta') streamedText += event.delta;
@@ -759,7 +768,9 @@ export class AgentRunner {
                 advice !== undefined && advice.length > 0
                   ? `${result.output}\n\n${advice}`
                   : result.output,
-              ...(result.data === undefined ? {} : { data: result.data }),
+              ...(result.data === undefined || result.toolName === 'list_skills'
+                ? {}
+                : { data: result.data }),
               ...(result.error === undefined
                 ? {}
                 : {
@@ -847,6 +858,7 @@ export class AgentRunner {
         ...(runOptions.signal === undefined ? {} : { signal: runOptions.signal }),
       };
       try {
+        totalUsage = sumUsage(totalUsage, measureRequestPayload(summaryRequest));
         for await (const event of this.options.provider.stream(summaryRequest)) {
           runOptions.onEvent?.(event);
           if (event.type === 'text_delta') summaryText += event.delta;

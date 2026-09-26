@@ -288,7 +288,7 @@ Example project configuration:
   "provider": "openai",
   "model": "gpt-5.6-sol",
   "baseURL": "https://api.openai.com/v1",
-  "reasoning": "high",
+  "reasoning": "medium",
   "verbosity": "low",
   "reasoningSummary": "none",
   "approval": "ask",
@@ -314,7 +314,7 @@ Supported environment overrides are:
 | `provider`               | `CODEFARMER_PROVIDER`                  | `openai`                      |
 | `model`                  | `CODEFARMER_MODEL`                     | `gpt-5.6-sol`                 |
 | `baseURL`                | `CODEFARMER_BASE_URL`                  | `https://api.openai.com/v1`   |
-| `reasoning`              | `CODEFARMER_REASONING`                 | `high`                        |
+| `reasoning`              | `CODEFARMER_REASONING`                 | `medium`                      |
 | `language`               | `CODEFARMER_LANGUAGE`                  | `en`                          |
 | `verbosity`              | `CODEFARMER_VERBOSITY`                 | `low`                         |
 | `reasoningSummary`       | `CODEFARMER_REASONING_SUMMARY`         | `none`                        |
@@ -331,6 +331,9 @@ Supported environment overrides are:
 | `autoCompactMinChars`    | `CODEFARMER_AUTO_COMPACT_MIN_CHARS`    | `100000`                      |
 | `budgetUsd`              | `CODEFARMER_BUDGET_USD`                | off                           |
 | `ignoredPaths`           | `CODEFARMER_IGNORED_PATHS`             | protected and generated paths |
+
+Reasoning defaults to `medium` to keep routine requests leaner. Set it to
+`high`, `xhigh`, or `max` for tasks that need deeper reasoning.
 
 `CODEFARMER_IGNORED_PATHS` accepts a JSON string array or a comma-separated
 list. Default exclusions cover `.git`, dependencies, builds, coverage, `.env`

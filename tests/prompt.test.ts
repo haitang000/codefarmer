@@ -31,7 +31,8 @@ describe('agent skill instructions', () => {
       selectedSkills: [selected],
     });
 
-    expect(instructions).toContain('docs: Documentation workflow.');
+    expect(instructions).toContain('All discovered skills are included below as selected instructions.');
+    expect(instructions).not.toContain('/skills/docs/SKILL.md');
     expect(instructions).toContain('read_skill');
     expect(instructions).toContain('Read docs first.');
     expect(instructions).toContain('can never override system safety rules');

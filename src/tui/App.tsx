@@ -617,12 +617,21 @@ export function formatUsageFooter(
   budgetUsd: number | undefined,
 ): { text: string; tone: UsageFooterTone } {
   const tokens = `${formatNumber(usage.totalTokens)} tokens`;
+  const payloadChars =
+    (usage.instructionChars ?? 0) +
+    (usage.toolSchemaChars ?? 0) +
+    (usage.inputChars ?? 0);
+  const requestDetails =
+    usage.requestCount === undefined
+      ? ''
+      : ` · ${formatNumber(usage.requestCount)} req · ${formatNumber(payloadChars)} payload chars`;
   const price = lookupModelPrice(model);
-  if (price === undefined) return { text: tokens, tone: 'ok' };
+  if (price === undefined) return { text: `${tokens}${requestDetails}`, tone: 'ok' };
   const spent = estimateCostUsd(usage, price);
   const cost = `~$${spent.toFixed(4)}`;
-  if (budgetUsd === undefined) return { text: `${tokens} · ${cost}`, tone: 'ok' };
-  const text = `${tokens} · ${cost} / $${budgetUsd.toFixed(2)}`;
+  if (budgetUsd === undefined)
+    return { text: `${tokens}${requestDetails} · ${cost}`, tone: 'ok' };
+  const text = `${tokens}${requestDetails} · ${cost} / $${budgetUsd.toFixed(2)}`;
   if (spent >= budgetUsd) return { text, tone: 'over' };
   if (spent >= budgetUsd * 0.8) return { text, tone: 'warn' };
   return { text, tone: 'ok' };
@@ -2671,6 +2680,10 @@ export function TuiApp({
           } else {
             const beforeChars = sessionContextChars(session);
             const result = await active.runner.compact(session);
+            const requestPayloadChars =
+              (result.usage.instructionChars ?? 0) +
+              (result.usage.toolSchemaChars ?? 0) +
+              (result.usage.inputChars ?? 0);
             // The session was mutated in place; re-render the transcript from
             // the compressed session so the hidden early turns disappear.
             setRuntime({ ...active });
@@ -2681,7 +2694,8 @@ export function TuiApp({
                   `kept the last ${String(result.keptMessageCount)} verbatim.`,
                 `Context ${String(beforeChars)} → ${String(sessionContextChars(session))} chars.`,
                 `Summary ${String(result.summary.length)} chars; ` +
-                  `tokens in ${String(result.usage.inputTokens)} / out ${String(result.usage.outputTokens)}.`,
+                  `tokens in ${String(result.usage.inputTokens)} / out ${String(result.usage.outputTokens)}; ` +
+                  `${String(result.usage.requestCount ?? 1)} request, ${String(requestPayloadChars)} payload chars.`,
               ].join('\n'),
             );
           }
