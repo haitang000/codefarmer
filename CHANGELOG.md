@@ -4,7 +4,7 @@ All notable changes to CodeFarmer are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the structure recommended by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.1.8] - 2026-09-26
 
 ### Added
 
@@ -13,6 +13,16 @@ All notable changes to CodeFarmer are documented here. This project follows
   `/queue continue` explicitly resumes it, and `/queue clear` removes pending tasks.
 - An active task left by an exit or crash is shown as interrupted on resume and is never replayed
   automatically.
+
+### Changed
+
+- Session persistence and workspace scanning avoid repeated work, and model requests use fewer
+  tokens.
+
+### Fixed
+
+- `web_fetch` validates redirect destinations, and ripgrep search respects workspace symlink
+  boundaries.
 
 ## [0.1.7] - 2026-08-22
 

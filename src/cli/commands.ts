@@ -382,7 +382,7 @@ export async function chatAction(globalOptions: GlobalOptions, sessionId?: strin
   }
 }
 
-const SETUP_SCHEMA_URL = 'https://unpkg.com/codefarmer@0.1.7/schemas/codefarmer.config.schema.json';
+const SETUP_SCHEMA_URL = 'https://unpkg.com/codefarmer@0.1.8/schemas/codefarmer.config.schema.json';
 
 export async function initAction(globalOptions: GlobalOptions, force = false): Promise<void> {
   const workspace = await canonicalWorkspace(globalOptions.cwd ?? process.cwd());
