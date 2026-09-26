@@ -141,6 +141,7 @@ async function readTextFile(
 }
 
 const COLLECT_DIRECTORY_CONCURRENCY = 12;
+const COLLECT_ENTRY_CONCURRENCY = 12;
 const SEARCH_FILE_CONCURRENCY = 12;
 const SEARCH_DEADLINE_MS = 15_000;
 const MAX_REGEX_SOURCE_CHARS = 200;
@@ -258,34 +259,51 @@ async function collectFiles(
     }
 
     const subdirectories: { path: string; depth: number }[] = [];
-    for (const entry of entries) {
+    for (let offset = 0; offset < entries.length; offset += COLLECT_ENTRY_CONCURRENCY) {
       if (files.length >= maximumResults) {
         limitReached = true;
         break;
       }
-      const lexicalPath = path.join(directory, entry.name);
-      const relativePath = guard.toRelative(lexicalPath);
-      if (guard.isIgnored(relativePath)) continue;
+      const batch = entries.slice(offset, offset + COLLECT_ENTRY_CONCURRENCY);
+      const inspected = await Promise.all(
+        batch.map(async (entry) => {
+          const lexicalPath = path.join(directory, entry.name);
+          const relativePath = guard.toRelative(lexicalPath);
+          if (guard.isIgnored(relativePath)) return undefined;
 
-      let info;
-      let resolvedPath = lexicalPath;
-      try {
-        const lexicalInfo = await lstat(lexicalPath);
-        if (lexicalInfo.isSymbolicLink()) {
-          resolvedPath = await guard.resolveExisting(relativePath);
-          if (!isPathInside(guard.root, resolvedPath)) continue;
-          info = await stat(resolvedPath);
-        } else {
-          info = lexicalInfo;
+          let info;
+          let resolvedPath = lexicalPath;
+          try {
+            const lexicalInfo = await lstat(lexicalPath);
+            if (lexicalInfo.isSymbolicLink()) {
+              resolvedPath = await guard.resolveExisting(relativePath);
+              if (!isPathInside(guard.root, resolvedPath)) return undefined;
+              info = await stat(resolvedPath);
+            } else {
+              info = lexicalInfo;
+            }
+          } catch {
+            return undefined;
+          }
+          return { info, relativePath, resolvedPath };
+        }),
+      );
+
+      // Promise.all preserves the readdir order, so the result limit stays
+      // deterministic even though metadata checks run concurrently.
+      for (const item of inspected) {
+        if (files.length >= maximumResults) {
+          limitReached = true;
+          break;
         }
-      } catch {
-        continue;
-      }
-
-      if (info.isDirectory()) {
-        if (depth < maximumDepth) subdirectories.push({ path: resolvedPath, depth: depth + 1 });
-      } else if (info.isFile()) {
-        files.push({ path: relativePath, size: info.size });
+        if (item === undefined) continue;
+        if (item.info.isDirectory()) {
+          if (depth < maximumDepth) {
+            subdirectories.push({ path: item.resolvedPath, depth: depth + 1 });
+          }
+        } else if (item.info.isFile()) {
+          files.push({ path: item.relativePath, size: item.info.size });
+        }
       }
     }
 

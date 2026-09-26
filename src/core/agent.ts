@@ -44,39 +44,8 @@ const MAX_TRANSCRIPT_CHARS = 150_000;
  * request inside the context window on the next turn.
  */
 const MAX_TOOL_OUTPUT_INPUT_CHARS = 24_000;
-/** Keep the title request cheap even when a resumed session is very long. */
-const MAX_TITLE_INPUT_CHARS = 12_000;
-const MAX_TITLE_LENGTH = 60;
 /** DeepSeek can require long tool chains; its configured limit is a soft checkpoint. */
 const DEEPSEEK_HARD_TURN_LIMIT = 100;
-
-const TITLE_INSTRUCTIONS = `请根据提供的会话内容生成一个简洁、准确的会话标题。
-要求：
-- 只输出标题本身，不要前缀、引号、解释、Markdown 或句末标点；
-- 使用会话主要使用的语言；
-- 突出用户要完成的主要任务，控制在 60 个字符以内。`;
-
-function cleanGeneratedTitle(value: string): string {
-  let title = value.split(/\r?\n/u, 1)[0]?.trim() ?? '';
-  title = title.replace(/^(标题|title)\s*[:：]\s*/iu, '');
-  title = title.replace(/^[`"“”'‘’]+|[`"“”'‘’]+$/gu, '').trim();
-  title = title.replace(/[。.!！?？；;]+$/u, '').trim();
-  if (title.length === 0) return '';
-  if (title.length <= MAX_TITLE_LENGTH) return title;
-  return `${title.slice(0, MAX_TITLE_LENGTH - 1)}…`;
-}
-
-function titleInput(session: SessionRecord): ProviderInput[] {
-  const input: ProviderInput[] = [];
-  let remaining = MAX_TITLE_INPUT_CHARS;
-  for (const message of session.messages) {
-    if (remaining <= 0) break;
-    const content = message.content.slice(0, remaining);
-    input.push({ type: 'message', role: message.role, content });
-    remaining -= content.length;
-  }
-  return input;
-}
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -384,42 +353,6 @@ export interface RunTurnOptions {
 
 export class AgentRunner {
   public constructor(private readonly options: AgentRunnerOptions) {}
-
-  /** Generate the title once, after the first assistant response is stored. */
-  private async generateSessionTitle(session: SessionRecord, signal?: AbortSignal): Promise<void> {
-    if (session.titleSource !== 'automatic' || session.titleGenerated === true) return;
-    const input = titleInput(session);
-    if (input.length === 0) return;
-    try {
-      let generated = '';
-      let completed = '';
-      let hasToolCall = false;
-      for await (const event of this.options.provider.stream({
-        model: this.options.config.model,
-        reasoning: 'none',
-        verbosity: 'low',
-        reasoningSummary: 'none',
-        maxOutputTokens: 128,
-        instructions: TITLE_INSTRUCTIONS,
-        input,
-        store: false,
-        ...(signal === undefined ? {} : { signal }),
-      })) {
-        if (event.type === 'text_delta') generated += event.delta;
-        if (event.type === 'tool_call') hasToolCall = true;
-        if (event.type === 'response_completed') completed = event.outputText ?? generated;
-        if (event.type === 'error') return;
-      }
-      const title = cleanGeneratedTitle(completed || generated);
-      if (hasToolCall || title.length === 0) return;
-      session.title = title;
-      session.titleSource = 'automatic';
-      session.titleGenerated = true;
-    } catch {
-      // Title generation is an enhancement; a provider failure must not fail
-      // an otherwise completed coding task.
-    }
-  }
 
   public async run(prompt: string, runOptions: RunTurnOptions = {}): Promise<AgentRunResult> {
     const history = runOptions.history ?? true;
@@ -732,7 +665,6 @@ export class AgentRunner {
             createdAt: new Date().toISOString(),
             ...(responseId === undefined ? {} : { responseId }),
           });
-          if (store !== undefined) await this.generateSessionTitle(session, runOptions.signal);
           session.status = 'completed';
           session.usage = totalUsage;
           if (store !== undefined) {
@@ -959,7 +891,6 @@ export class AgentRunner {
           content: finalMessage,
           createdAt: new Date().toISOString(),
         });
-        if (store !== undefined) await this.generateSessionTitle(session, runOptions.signal);
         session.status = 'completed';
         session.usage = totalUsage;
         if (store !== undefined) {
@@ -987,7 +918,6 @@ export class AgentRunner {
         createdAt: new Date().toISOString(),
         responseId: summaryResponseId,
       });
-      if (store !== undefined) await this.generateSessionTitle(session, runOptions.signal);
       session.status = 'completed';
       session.usage = totalUsage;
       if (store !== undefined) {

@@ -41,10 +41,12 @@ function shouldDeferSession(session: SessionRecord): boolean {
 }
 
 export class SessionStore {
-  // Serialised background write chain; saves queued with `saveQueued` run in
-  // order without blocking the agent loop, and `flush` drains the chain.
+  // Serialised write chain; queued saves keep only the latest pending record
+  // per session, while `save` remains a durable checkpoint.
   private pendingWrites: Promise<void> = Promise.resolve();
   private executionMutations: Promise<void> = Promise.resolve();
+  private readonly queuedSessions = new Map<string, SessionRecord>();
+  private queuedWriteScheduled = false;
 
   // New sessions are written only once they carry a message or durable task
   // state, so opening and closing an empty TUI leaves no session file.
@@ -98,12 +100,37 @@ export class SessionStore {
   }
 
   private enqueueWrite(session: SessionRecord): Promise<void> {
+    this.queuedSessions.delete(session.id);
     const snapshot = structuredClone({ ...session, updatedAt: new Date().toISOString() });
     const write = this.pendingWrites.then(() =>
       writeJsonAtomic(sessionFile(this.directory, snapshot.id), snapshot),
     );
     this.pendingWrites = write.catch(() => undefined);
     return write;
+  }
+
+  private scheduleQueuedWrites(): void {
+    if (this.queuedWriteScheduled || this.queuedSessions.size === 0) return;
+    this.queuedWriteScheduled = true;
+    const write = this.pendingWrites.then(async () => {
+      const queued = [...this.queuedSessions.values()];
+      this.queuedSessions.clear();
+      const snapshots = queued.map((session) =>
+        structuredClone({ ...session, updatedAt: new Date().toISOString() }),
+      );
+      for (const snapshot of snapshots) {
+        try {
+          await writeJsonAtomic(sessionFile(this.directory, snapshot.id), snapshot);
+        } catch {
+          // Queued saves are best effort; durable callers use `save` and observe failures.
+        }
+      }
+    });
+    this.pendingWrites = write.catch(() => undefined);
+    void this.pendingWrites.then(() => {
+      this.queuedWriteScheduled = false;
+      if (this.queuedSessions.size > 0) this.scheduleQueuedWrites();
+    }).catch(() => undefined);
   }
 
   /** Serialise execution-state changes and acknowledge only durable writes. */
@@ -147,8 +174,8 @@ export class SessionStore {
   }
 
   /**
-   * Queue a save without blocking the caller. Writes execute sequentially
-   * in queue order; later snapshots supersede earlier ones.
+   * Queue a best-effort save without blocking the caller. Pending records are
+   * coalesced by session ID; `flush` waits until the latest queued versions are processed.
    */
   public saveQueued(session: SessionRecord): void {
     if (this.unsaved.has(session.id) && shouldDeferSession(session)) {
@@ -157,12 +184,23 @@ export class SessionStore {
       return;
     }
     this.unsaved.delete(session.id);
-    void this.enqueueWrite(session).catch(() => undefined);
+    this.queuedSessions.set(session.id, session);
+    this.scheduleQueuedWrites();
   }
 
   /** Wait for every queued background save to finish. */
   public async flush(): Promise<void> {
-    await this.pendingWrites;
+    while (true) {
+      const pending = this.pendingWrites;
+      await pending;
+      if (
+        pending === this.pendingWrites &&
+        !this.queuedWriteScheduled &&
+        this.queuedSessions.size === 0
+      ) {
+        return;
+      }
+    }
   }
 
   public async list(): Promise<SessionRecord[]> {
@@ -178,7 +216,7 @@ export class SessionStore {
   public async delete(id: string): Promise<void> {
     this.unsaved.delete(id);
     await this.executionMutations;
-    await this.pendingWrites;
+    await this.flush();
     await rm(sessionFile(this.directory, id), { force: true });
   }
 

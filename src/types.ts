@@ -314,7 +314,7 @@ export interface SessionRecord {
   title?: string;
   /** Whether the title was generated automatically or set by the user. */
   titleSource?: 'automatic' | 'custom';
-  /** Set after the model has produced the first automatic title. */
+  /** Legacy marker from earlier versions that generated automatic titles with a model. */
   titleGenerated?: boolean;
   createdAt: string;
   updatedAt: string;

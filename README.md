@@ -493,9 +493,8 @@ Sessions are pinned to the Base URL used when they are created. Start a new
 session before changing endpoints; CodeFarmer refuses to resume a stored
 `response_id` against a different service.
 
-After the first turn, the model generates a short title from the conversation.
-The first-message title remains as a fallback when generation fails, and
-`sessions rename` always takes precedence.
+Session titles are derived from the first user message. `sessions rename`
+always takes precedence.
 
 Sessions are recorded locally only once they contain at least one message:
 opening a session and quitting without sending anything leaves no session

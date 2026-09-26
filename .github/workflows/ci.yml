@@ -38,23 +38,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Lint
-        run: pnpm lint
-
-      - name: Type-check
-        run: pnpm typecheck
-
-      - name: Test
-        run: pnpm test
-
-      - name: Build
-        run: pnpm build
-
       - name: Create artifact directory
         shell: pwsh
         run: New-Item -ItemType Directory -Force -Path artifacts | Out-Null
 
-      - name: Pack npm artifact
+      # pnpm pack runs prepack, which invokes pnpm check for lint, typecheck, tests, and build.
+      - name: Check and pack npm artifact
         run: pnpm pack --pack-destination artifacts
 
       - name: Install and smoke-test packed CLI

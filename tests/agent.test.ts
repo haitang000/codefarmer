@@ -105,7 +105,7 @@ afterEach(async () => {
 });
 
 describe('AgentRunner', () => {
-  it('generates and persists a model-based title after the first turn', async () => {
+  it('derives and persists an automatic title without an extra provider call', async () => {
     const workspace = await temporaryWorkspace();
     const sessionStore = await SessionStore.create(workspace, {
       data: path.join(workspace, 'data'),
@@ -127,24 +127,16 @@ describe('AgentRunner', () => {
           outputText: '已完成登录流程修复。',
         },
       ],
-      [
-        { type: 'text_delta', delta: '修复登录流程' },
-        { type: 'response_completed', responseId: 'response-title', outputText: '修复登录流程' },
-      ],
     ]);
     const agent = await runner(workspace, provider, {}, sessionStore);
 
     const result = await agent.run('请修复登录流程并补充测试');
     const persisted = await sessionStore.get(result.sessionId);
 
-    expect(persisted.title).toBe('修复登录流程');
+    expect(persisted.title).toBe('请修复登录流程并补充测试');
     expect(persisted.titleSource).toBe('automatic');
-    expect(persisted.titleGenerated).toBe(true);
-    expect(provider.requests[1]?.tools).toBeUndefined();
-    expect(provider.requests[1]?.input).toEqual([
-      expect.objectContaining({ content: '请修复登录流程并补充测试' }),
-      expect.objectContaining({ content: '已完成登录流程修复。' }),
-    ]);
+    expect(persisted.titleGenerated).toBeUndefined();
+    expect(provider.requests).toHaveLength(1);
   });
 
   it('completes a text-only response and aggregates usage', async () => {
