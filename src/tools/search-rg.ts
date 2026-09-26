@@ -165,13 +165,48 @@ export async function searchWithRipgrep(options: {
   // 0 = matches, 1 = no matches; anything else (missing binary, bad pattern) falls back.
   if (result.exitCode !== 0 && result.exitCode !== 1) return undefined;
   const matches: RipgrepMatch[] = [];
-  for (const match of parseRipgrepJson(result.stdout, options.maxResults)) {
-    const absolute = path.resolve(options.guard.root, match.path);
-    if (!isPathInside(options.guard.root, absolute)) continue;
-    const relative = options.guard.toRelative(absolute);
-    if (options.guard.isIgnored(relative) || options.skipPath?.(relative) === true) continue;
-    matches.push({ ...match, path: relative });
-    if (matches.length >= options.maxResults) break;
+  const parsedMatches = parseRipgrepJson(result.stdout, Number.MAX_SAFE_INTEGER);
+  // Ripgrep's --follow can report a workspace-relative symlink path whose
+  // target is outside the workspace. Validate the resolved target before
+  // exposing any matching text to the model. Batch the checks to keep large
+  // (but bounded) ripgrep output from creating an unbounded number of fs ops.
+  const validationConcurrency = 32;
+  const resolvedPaths = new Map<string, Promise<string | undefined>>();
+  for (
+    let offset = 0;
+    offset < parsedMatches.length && matches.length < options.maxResults;
+    offset += validationConcurrency
+  ) {
+    const batch = parsedMatches.slice(offset, offset + validationConcurrency);
+    const validated = await Promise.all(
+      batch.map(async (match) => {
+        const absolute = path.resolve(options.guard.root, match.path);
+        if (!isPathInside(options.guard.root, absolute)) return undefined;
+        let resolvedPath = resolvedPaths.get(match.path);
+        if (resolvedPath === undefined) {
+          resolvedPath = options.guard
+            .resolveExisting(match.path, { kind: 'file' })
+            .catch(() => undefined);
+          resolvedPaths.set(match.path, resolvedPath);
+        }
+        const resolved = await resolvedPath;
+        const relative = options.guard.toRelative(absolute);
+        if (
+          resolved === undefined ||
+          !isPathInside(options.guard.root, resolved) ||
+          options.guard.isIgnored(relative) ||
+          options.skipPath?.(relative) === true
+        ) {
+          return undefined;
+        }
+        return { ...match, path: relative };
+      }),
+    );
+    for (const match of validated) {
+      if (match === undefined) continue;
+      matches.push(match);
+      if (matches.length >= options.maxResults) break;
+    }
   }
   return matches;
 }
