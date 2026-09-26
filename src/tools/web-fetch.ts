@@ -10,6 +10,8 @@ const DEFAULT_MAX_FETCH_BYTES = 512 * 1024;
 const MIN_FETCH_BYTES = 1024;
 const MAX_FETCH_BYTES = 4 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15_000;
+const MAX_REDIRECTS = 10;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 /** Browser-like UA: some hosts reject a bare "CodeFarmer" identifier. */
 export const WEB_USER_AGENT =
@@ -265,6 +267,14 @@ export async function readBounded(
   return { text: decodeUtf8(Buffer.concat(chunks)), overLimit: false };
 }
 
+async function discardResponseBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // The redirect response is discarded either way.
+  }
+}
+
 export const webFetchDefinition: ToolDefinition = {
   name: 'web_fetch',
   description:
@@ -300,43 +310,66 @@ export async function webFetch(
     MAX_FETCH_BYTES,
   );
   const url = parseFetchUrl(rawUrl);
-  await assertPublicHost(url, context.allowPrivateAddresses ?? false);
+  const allowPrivateAddresses = context.allowPrivateAddresses ?? false;
 
   const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
   const signal =
     context.signal === undefined ? timeoutSignal : AbortSignal.any([context.signal, timeoutSignal]);
 
+  let currentUrl = url;
+  let redirectsFollowed = 0;
   let response: Response;
-  try {
-    response = await fetch(url, {
-      redirect: 'follow',
-      signal,
-      headers: {
-        accept: 'text/*, application/json, application/xml, application/javascript, */*;q=0.8',
-        'user-agent': WEB_USER_AGENT,
-      },
-    });
-  } catch (error) {
-    if (
-      context.signal?.aborted === true ||
-      (error instanceof Error && error.name === 'AbortError')
-    ) {
-      throw new ToolError('CANCELLED', 'The request was cancelled.');
-    }
-    if (error instanceof Error && error.name === 'TimeoutError') {
+  for (;;) {
+    // Validate every hop before making its request. Automatic redirect
+    // handling would contact a private destination before we could inspect it.
+    await assertPublicHost(currentUrl, allowPrivateAddresses);
+    try {
+      response = await fetch(currentUrl, {
+        redirect: 'manual',
+        signal,
+        headers: {
+          accept: 'text/*, application/json, application/xml, application/javascript, */*;q=0.8',
+          'user-agent': WEB_USER_AGENT,
+        },
+      });
+    } catch (error) {
+      if (
+        context.signal?.aborted === true ||
+        (error instanceof Error && error.name === 'AbortError')
+      ) {
+        throw new ToolError('CANCELLED', 'The request was cancelled.');
+      }
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        throw new ToolError(
+          'WEB_FETCH_TIMEOUT',
+          `The request timed out after ${String(FETCH_TIMEOUT_MS)} ms.`,
+        );
+      }
       throw new ToolError(
-        'WEB_FETCH_TIMEOUT',
-        `The request timed out after ${String(FETCH_TIMEOUT_MS)} ms.`,
+        'WEB_FETCH_NETWORK',
+        `Network error fetching ${rawUrl}: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    throw new ToolError(
-      'WEB_FETCH_NETWORK',
-      `Network error fetching ${rawUrl}: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
 
-  if (response.redirected) {
-    await assertPublicHost(parseFetchUrl(response.url), context.allowPrivateAddresses ?? false);
+    const location = REDIRECT_STATUSES.has(response.status)
+      ? response.headers.get('location')
+      : null;
+    if (location === null) break;
+    if (redirectsFollowed >= MAX_REDIRECTS) {
+      await discardResponseBody(response);
+      throw new ToolError(
+        'WEB_FETCH_NETWORK',
+        `The request exceeded ${String(MAX_REDIRECTS)} redirects.`,
+      );
+    }
+    try {
+      currentUrl = parseFetchUrl(new URL(location, currentUrl).href);
+    } catch {
+      await discardResponseBody(response);
+      throw new ToolError('WEB_FETCH_NETWORK', 'The server returned an invalid redirect URL.');
+    }
+    await discardResponseBody(response);
+    redirectsFollowed += 1;
   }
 
   const contentType = response.headers.get('content-type');
@@ -344,7 +377,7 @@ export async function webFetch(
   const { text, overLimit } = await readBounded(response, maxBytes);
   const extractedHtml = isHtmlContentType(contentType);
   const readable = extractedHtml ? htmlToReadableText(text) : text;
-  const finalUrl = response.redirected ? response.url : url.href;
+  const finalUrl = currentUrl.href;
   const truncated = truncateUtf8(readable, context.maxOutputBytes);
   const data: JsonObject = {
     url: finalUrl,
