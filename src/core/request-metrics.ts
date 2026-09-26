@@ -8,7 +8,7 @@ export function measureRequestPayload(
   request: Pick<ProviderRequest, 'instructions' | 'input' | 'tools'>,
 ): TokenUsage {
   const input = request.input;
-  const serializedInput = typeof input === 'string' ? input : (JSON.stringify(input) ?? '');
+  const serializedInput = typeof input === 'string' ? input : JSON.stringify(input);
   const toolOutputChars =
     typeof input === 'string'
       ? 0

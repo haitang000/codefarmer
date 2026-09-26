@@ -175,7 +175,7 @@ describe('AgentRunner', () => {
     expect(provider.requests).toHaveLength(1);
     expect(provider.requests[0]).toMatchObject({
       model: 'gpt-5.6-sol',
-      reasoning: 'high',
+      reasoning: DEFAULT_CONFIG.reasoning,
       verbosity: 'low',
       reasoningSummary: 'none',
       input: 'Introduce yourself',
@@ -753,7 +753,7 @@ describe('AgentRunner', () => {
     });
     expect(provider.requests).toHaveLength(1);
     expect(provider.requests[0]).toMatchObject({
-      reasoning: 'high',
+      reasoning: DEFAULT_CONFIG.reasoning,
       verbosity: 'low',
       reasoningSummary: 'none',
     });

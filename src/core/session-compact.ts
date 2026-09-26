@@ -167,12 +167,7 @@ export async function compactSession(options: CompactSessionOptions): Promise<Co
     store: false,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   };
-  const usage: TokenUsage = {
-    inputTokens: 0,
-    outputTokens: 0,
-    totalTokens: 0,
-    ...measureRequestPayload(request),
-  };
+  const usage: TokenUsage = measureRequestPayload(request);
   for await (const event of options.provider.stream(request)) {
     if (event.type === 'text_delta') summary += event.delta;
     if (event.type === 'response_completed') summary = event.outputText ?? summary;

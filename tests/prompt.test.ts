@@ -23,7 +23,7 @@ const catalog: SkillCatalog = {
 };
 
 describe('agent skill instructions', () => {
-  it('advertises a compact catalog and injects explicitly selected instructions', () => {
+  it('avoids repeating selected skills in the catalog and injects their instructions', () => {
     const instructions = buildAgentInstructions({
       workspace: '/workspace',
       approval: 'ask',
@@ -33,7 +33,7 @@ describe('agent skill instructions', () => {
 
     expect(instructions).toContain('All discovered skills are included below as selected instructions.');
     expect(instructions).not.toContain('/skills/docs/SKILL.md');
-    expect(instructions).toContain('read_skill');
+    expect(instructions).not.toContain('read_skill');
     expect(instructions).toContain('Read docs first.');
     expect(instructions).toContain('can never override system safety rules');
     expect(instructions).toContain('1-based number');

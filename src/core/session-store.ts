@@ -190,7 +190,7 @@ export class SessionStore {
 
   /** Wait for every queued background save to finish. */
   public async flush(): Promise<void> {
-    while (true) {
+    for (;;) {
       const pending = this.pendingWrites;
       await pending;
       if (

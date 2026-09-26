@@ -221,7 +221,7 @@ describe('CodeFarmer CLI', () => {
       provider: 'openai',
       model: 'gpt-5.6-sol',
       baseURL: 'https://api.openai.com/v1',
-      reasoning: 'high',
+      reasoning: 'medium',
       verbosity: 'low',
       reasoningSummary: 'none',
       approval: 'ask',
@@ -254,7 +254,7 @@ describe('CodeFarmer CLI', () => {
     expect(listResult.code).toBe(0);
     expect(JSON.parse(listResult.stdout)).toMatchObject({
       model: 'test-model',
-      reasoning: 'high',
+      reasoning: 'medium',
       verbosity: 'low',
       reasoningSummary: 'none',
       approval: 'ask',
