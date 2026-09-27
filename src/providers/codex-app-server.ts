@@ -110,7 +110,8 @@ export class CodexAppServerClient {
     const client = new CodexAppServerClient(child);
     try {
       await client.request('initialize', {
-        clientInfo: { name: 'codefarmer', title: 'CodeFarmer', version: '0.2.0-beta1' },
+        clientInfo: { name: 'codefarmer', title: 'CodeFarmer', version: '0.2.0-beta2' },
+        capabilities: { experimentalApi: true },
       });
       client.notify('initialized', {});
       return client;
@@ -431,22 +432,8 @@ function selectedSkills(
     .filter((skill): skill is SkillDescriptor => skill !== undefined);
 }
 
-function turnSandbox(workspace: string, readOnly: boolean): JsonObject {
-  if (readOnly)
-    return {
-      type: 'readOnly',
-      access: { type: 'restricted', includePlatformDefaults: true, readableRoots: [workspace] },
-    };
-  return {
-    type: 'workspaceWrite',
-    writableRoots: [workspace],
-    readOnlyAccess: {
-      type: 'restricted',
-      includePlatformDefaults: true,
-      readableRoots: [workspace],
-    },
-    networkAccess: false,
-  };
+function turnPermissionProfile(readOnly: boolean): string {
+  return readOnly ? ':read-only' : ':workspace';
 }
 
 function appServerApprovalPolicy(policy: CodeFarmerConfig['approval'], readOnly: boolean): string {
@@ -625,7 +612,7 @@ export class CodexAppServerRunner {
         input,
         cwd: this.options.workspace,
         approvalPolicy,
-        sandboxPolicy: turnSandbox(this.options.workspace, readOnly),
+        permissions: turnPermissionProfile(readOnly),
         ...(model === undefined ? {} : { model }),
         ...(this.options.config.reasoning === 'auto'
           ? {}

@@ -124,7 +124,7 @@ For example:
 
 ```bash
 npm publish --access public --tag beta
-gh release create v0.2.0-beta1 --prerelease
+gh release create v0.2.0-beta2 --prerelease
 ```
 
 Never place `OPENAI_API_KEY` or an npm token in the package, repository, test

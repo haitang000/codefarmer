@@ -4,6 +4,13 @@ All notable changes to CodeFarmer are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the structure recommended by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0-beta2] - 2026-09-27
+
+### Fixed
+
+- Codex App Server ChatGPT plan mode now uses the current named permission profiles instead of
+  the removed restricted-read sandbox fields.
+
 ## [0.2.0-beta1] - 2026-09-26
 
 ### Added
