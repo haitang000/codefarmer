@@ -1237,6 +1237,10 @@ function parseConfigValue(raw: string): unknown {
   }
 }
 
+function chatGptPlanLabel(account: Record<string, unknown>): string {
+  return typeof account.planType === 'string' ? account.planType : '已登录';
+}
+
 export async function configSetAction(
   globalOptions: GlobalOptions,
   key: string,
@@ -1330,7 +1334,7 @@ export async function modelsListAction(
       }
       const models = await client.listModels();
       process.stdout.write(
-        `Codex App Server（ChatGPT ${(account.planType as string | undefined) ?? 'plan'}，${String(models.length)} 个模型）\n`,
+        `Codex App Server（ChatGPT ${chatGptPlanLabel(account)}，${String(models.length)} 个模型）\n`,
       );
       for (const model of models) {
         process.stdout.write(`${model === runtime.config.model ? '*' : ' '} ${model}\n`);
@@ -1377,7 +1381,7 @@ export async function codexAction(action: 'login' | 'status' | 'logout'): Promis
         return;
       }
       process.stdout.write(
-        `ChatGPT：${String(account.planType ?? '已登录')}${typeof account.email === 'string' ? `（${account.email}）` : ''}\n`,
+        `ChatGPT：${chatGptPlanLabel(account)}${typeof account.email === 'string' ? `（${account.email}）` : ''}\n`,
       );
       const limits = await client.request<Record<string, unknown>>('account/rateLimits/read');
       const buckets = limits.rateLimitsByLimitId;
@@ -1389,7 +1393,7 @@ export async function codexAction(action: 'login' | 'status' | 'logout'): Promis
           const usedPercent = (primary as Record<string, unknown>).usedPercent;
           const resetAt = (primary as Record<string, unknown>).resetsAt;
           process.stdout.write(
-            `${key}：${typeof usedPercent === 'number' ? `已用 ${usedPercent}%` : '配额可用'}${typeof resetAt === 'number' ? `，重置于 ${new Date(resetAt * 1000).toLocaleString()}` : ''}\n`,
+            `${key}：${typeof usedPercent === 'number' ? `已用 ${String(usedPercent)}%` : '配额可用'}${typeof resetAt === 'number' ? `，重置于 ${new Date(resetAt * 1000).toLocaleString()}` : ''}\n`,
           );
         }
       }
@@ -1429,7 +1433,7 @@ export async function codexAction(action: 'login' | 'status' | 'logout'): Promis
       throw new AuthenticationError('Codex 登录已返回，但当前账号未切换为 ChatGPT 认证。');
     }
     process.stdout.write(
-      `ChatGPT 登录成功：${String(account.planType ?? '已登录')}${typeof account.email === 'string' ? `（${account.email}）` : ''}\n`,
+      `ChatGPT 登录成功：${chatGptPlanLabel(account)}${typeof account.email === 'string' ? `（${account.email}）` : ''}\n`,
     );
   } finally {
     await client.close();
@@ -1478,7 +1482,7 @@ export async function doctorAction(globalOptions: GlobalOptions): Promise<void> 
           ok: account?.type === 'chatgpt',
           detail:
             account?.type === 'chatgpt'
-              ? `${String(account.planType ?? '已登录')}${typeof account.email === 'string' ? `，${account.email}` : ''}`
+              ? `${chatGptPlanLabel(account)}${typeof account.email === 'string' ? `，${account.email}` : ''}`
               : '未使用 ChatGPT 账号登录；运行 codefarmer codex login',
         });
         if (account?.type === 'chatgpt') {

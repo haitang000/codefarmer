@@ -87,10 +87,10 @@ export class CodexAppServerClient {
 
   private constructor(child: AppServerProcess) {
     this.child = child;
-    child.stdout?.on('data', (chunk: Buffer | string) => this.consume(String(chunk)));
+    child.stdout.on('data', (chunk: Buffer | string) => this.consume(String(chunk)));
     // Keep stderr drained without forwarding diagnostic text that might contain
     // user paths or other local context into the terminal transcript.
-    child.stderr?.on('data', () => undefined);
+    child.stderr.on('data', () => undefined);
     void child.then(
       () => this.failPending(new ProviderError('Codex App Server exited')),
       (error: unknown) => this.failPending(this.processError(error)),
@@ -161,12 +161,12 @@ export class CodexAppServerClient {
   }
 
   public async account(): Promise<JsonObject | undefined> {
-    const result = await this.request<JsonObject>('account/read', { refreshToken: false });
+    const result = await this.request('account/read', { refreshToken: false });
     return isObject(result.account) ? result.account : undefined;
   }
 
   public async listModels(): Promise<string[]> {
-    const result = await this.request<JsonObject>('model/list', {
+    const result = await this.request('model/list', {
       includeHidden: false,
       limit: 100,
     });
@@ -192,8 +192,7 @@ export class CodexAppServerClient {
 
   private write(message: JsonObject): void {
     const stdin = this.child.stdin;
-    if (stdin === null || stdin.destroyed)
-      throw new ProviderError('Codex App Server stdin is unavailable');
+    if (stdin.destroyed) throw new ProviderError('Codex App Server stdin is unavailable');
     stdin.write(`${JSON.stringify(message)}\n`);
   }
 
@@ -248,7 +247,7 @@ export class CodexAppServerClient {
       try {
         await listener({ method, params: { ...params, _requestId: id } });
         return;
-      } catch (error) {
+      } catch {
         this.respond(method, id, { decision: 'decline' });
         return;
       }
@@ -282,26 +281,27 @@ export async function beginChatGptLogin(client: CodexAppServerClient): Promise<C
   const completed = new Promise<{ success: boolean; error?: string }>((resolve) => {
     resolveCompleted = resolve;
   });
-  let loginId: string | undefined;
+  const loginIdRef: { current: string | undefined } = { current: undefined };
   const unsubscribe = client.onNotification((notification) => {
     if (notification.method !== 'account/login/completed') return;
-    if (stringField(notification.params, 'loginId') !== loginId) return;
+    if (stringField(notification.params, 'loginId') !== loginIdRef.current) return;
     const success = notification.params.success === true;
     const error = stringField(notification.params, 'error');
     resolveCompleted?.({ success, ...(error === undefined ? {} : { error }) });
     unsubscribe();
   });
-  const started = await client.request<JsonObject>('account/login/start', {
+  const started = await client.request('account/login/start', {
     type: 'chatgpt',
     useHostedLoginSuccessPage: true,
     appBrand: 'chatgpt',
   });
-  loginId = stringField(started, 'loginId');
+  const loginId = stringField(started, 'loginId');
   const authUrl = stringField(started, 'authUrl');
   if (loginId === undefined || authUrl === undefined) {
     unsubscribe();
     throw new ProviderError('Codex App Server did not return a ChatGPT login URL');
   }
+  loginIdRef.current = loginId;
   return { loginId, authUrl, completed };
 }
 
@@ -357,17 +357,13 @@ function approvalSummary(
   const reason = stringField(params, 'reason');
   const command = stringField(params, 'command');
   const cwd = stringField(params, 'cwd');
+  const grantRoot = stringField(params, 'grantRoot');
   const network = isObject(params.networkApprovalContext)
     ? params.networkApprovalContext
     : undefined;
   const fileChange = method.includes('fileChange');
   const detail = fileChange
-    ? [
-        reason,
-        stringField(params, 'grantRoot') === undefined
-          ? undefined
-          : `Path: ${stringField(params, 'grantRoot')}`,
-      ]
+    ? [reason, grantRoot === undefined ? undefined : `Path: ${grantRoot}`]
         .filter((part): part is string => part !== undefined && part.length > 0)
         .join('\n') || 'Codex requests approval for a file change.'
     : network !== undefined
@@ -523,7 +519,7 @@ export class CodexAppServerRunner {
         : this.options.config.model;
     const model = selectedModel ?? undefined;
     if (session.codexThreadId === undefined) {
-      const started = await this.options.client.request<JsonObject>('thread/start', {
+      const started = await this.options.client.request('thread/start', {
         cwd: this.options.workspace,
         ...(model === undefined ? {} : { model }),
       });
@@ -541,7 +537,6 @@ export class CodexAppServerRunner {
     }
     if (model !== undefined) session.model = model;
     const threadId = session.codexThreadId;
-    if (threadId === undefined) throw new ProviderError('Codex thread id is missing');
     const deleteThreadAfterRun =
       store === undefined && runOptions.session?.codexThreadId === undefined;
     const now = new Date().toISOString();
@@ -625,7 +620,7 @@ export class CodexAppServerRunner {
     runOptions.signal?.addEventListener('abort', abort, { once: true });
     if (signalAborted(runOptions.signal)) abort();
     try {
-      const started = await this.options.client.request<JsonObject>('turn/start', {
+      const started = await this.options.client.request('turn/start', {
         threadId,
         input,
         cwd: this.options.workspace,
@@ -686,12 +681,14 @@ export class CodexAppServerRunner {
         })),
       );
       if (store !== undefined) await store.save(session);
+      const fallbackMessage =
+        status === 'interrupted' ? 'Turn interrupted.' : 'Codex completed without a text response.';
       const message =
-        outputText ||
-        turnError ||
-        (status === 'interrupted'
-          ? 'Turn interrupted.'
-          : 'Codex completed without a text response.');
+        outputText.length > 0
+          ? outputText
+          : turnError !== undefined && turnError.length > 0
+            ? turnError
+            : fallbackMessage;
       if (turnError !== undefined)
         runOptions.onEvent?.({
           type: 'error',
