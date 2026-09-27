@@ -4,6 +4,19 @@ All notable changes to CodeFarmer are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the structure recommended by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0-beta1] - 2026-09-26
+
+### Added
+
+- Codex App Server support for ChatGPT sign-in, model selection, approval prompts, and resumable
+  Codex threads through the local Codex CLI.
+
+### Changed
+
+- Workspace-specific configuration is now stored in CodeFarmer's user configuration directory,
+  outside the project. Existing root-level `codefarmer.config.json` files remain readable for
+  compatibility; new writes use the external workspace config.
+
 ## [0.1.8] - 2026-09-26
 
 ### Added

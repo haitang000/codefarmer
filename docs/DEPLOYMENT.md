@@ -118,6 +118,15 @@ Before publishing:
 npm publish --access public
 ```
 
+For prereleases, use a separate dist-tag such as `beta` so `latest` remains on
+the stable release, and publish the matching GitHub release as a prerelease.
+For example:
+
+```bash
+npm publish --access public --tag beta
+gh release create v0.2.0-beta1 --prerelease
+```
+
 Never place `OPENAI_API_KEY` or an npm token in the package, repository, test
 fixtures, build logs, or persisted CodeFarmer configuration.
 
