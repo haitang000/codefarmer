@@ -177,6 +177,7 @@ TUI 在同一个备用屏幕中承载对话、工具状态、审批、工作区�
 | `/help`                      | 显示本地命令                                                        |
 | `/init`                      | 检查工作区并创建或更新 `AGENT.md`                                   |
 | `/status`                    | 显示会话、工作区、Git 和运行状态                                    |
+| `/limit`                     | 查询 ChatGPT 订阅剩余额度和重置时间                                 |
 | `/context`                   | 查看当前上下文消息与 Token 用量                                     |
 | `/compact`                   | 把当前会话的早期消息压缩为摘要（长会话时自动提示）                  |
 | `/export [json\|PATH]`       | 将当前会话导出为工作区内的 Markdown（默认）或 JSON 文件             |

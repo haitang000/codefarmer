@@ -48,6 +48,7 @@ import { completePathMention, expandPathMentions, mentionAtCursor } from '../too
 import { isPathInside, WorkspaceGuard } from '../tools/workspace.js';
 import type { AskUserAnswer, AskUserRequest } from '../tools/types.js';
 import { modelsForProvider } from '../providers/catalog.js';
+import { CodexAppServerClient } from '../providers/codex-app-server.js';
 import { syncProviderModels } from '../providers/model-sync.js';
 import { resolveProviderApiKey } from '../infra/credentials.js';
 import { DiffView, MarkdownLine, MarkdownView, diffLineColor } from './markdown.js';
@@ -104,6 +105,7 @@ const READ_ONLY_COMMANDS: ReadonlySet<TuiCommand['kind']> = new Set([
   'auto',
   'language',
   'status',
+  'limit',
   'stats',
   'config',
   'doctor',
@@ -134,6 +136,61 @@ Then write AGENT.md using write_file (or apply_patch) with a concise Markdown su
 agents. Include only facts you verified in the workspace. Prefer sections such as Project Overview,
 Repository Layout, Development Commands, Coding Conventions, Testing, and Important Constraints.
 Do not modify any other file. Finish by reporting the path and a short summary of what was documented.`;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function formatLimitWindow(
+  window: unknown,
+  fallbackLabel: string,
+  language: Language,
+): string | undefined {
+  if (!isRecord(window)) return undefined;
+  const zh = language === 'zh-CN';
+  const duration =
+    typeof window.windowDurationMins === 'number' && Number.isFinite(window.windowDurationMins)
+      ? window.windowDurationMins
+      : undefined;
+  let label = fallbackLabel;
+  if (duration !== undefined && duration > 0) {
+    if (duration % 1440 === 0) {
+      const days = duration / 1440;
+      label = zh ? `${days} 天窗口` : `${days}-day window`;
+    } else if (duration % 60 === 0) {
+      const hours = duration / 60;
+      label = zh ? `${hours} 小时窗口` : `${hours}-hour window`;
+    } else {
+      label = zh ? `${duration} 分钟窗口` : `${duration}-minute window`;
+    }
+  }
+
+  const used =
+    typeof window.usedPercent === 'number' && Number.isFinite(window.usedPercent)
+      ? window.usedPercent
+      : undefined;
+  const remaining =
+    used === undefined ? undefined : Math.min(100, Math.max(0, 100 - used));
+  const remainingLabel =
+    remaining === undefined
+      ? zh ? '剩余比例不可用' : 'remaining percentage unavailable'
+      : zh
+        ? `剩余 ${remaining.toFixed(remaining % 1 === 0 ? 0 : 1)}%`
+        : `${remaining.toFixed(remaining % 1 === 0 ? 0 : 1)}% remaining`;
+  const resetAt =
+    typeof window.resetsAt === 'number' && Number.isFinite(window.resetsAt)
+      ? window.resetsAt
+      : undefined;
+  const resetDate = resetAt === undefined ? undefined : new Date(resetAt * 1000);
+  const resetLabel =
+    resetDate === undefined || Number.isNaN(resetDate.getTime())
+      ? ''
+      : zh
+        ? `，重置于 ${resetDate.toLocaleString('zh-CN')}`
+        : ` · resets ${resetDate.toLocaleString('en-US')}`;
+
+  return `  ${label}  ${remainingLabel}${resetLabel}`;
+}
 
 const COMMIT_SUMMARY_PROMPT = `Write a concise Git commit message that summarizes the uncommitted changes in this workspace.
 
@@ -2710,6 +2767,67 @@ export function TuiApp({
         } else if (command.kind === 'stats') {
           const sessions = await runtimeRef.current.sessions.list();
           appendSystem(formatWorkspaceStats(computeWorkspaceStats(sessions)), 'system', 'stats');
+        } else if (command.kind === 'limit') {
+          const zh = languageRef.current === 'zh-CN';
+          const client = await CodexAppServerClient.connect();
+          try {
+            const account = await client.account();
+            if (account?.type !== 'chatgpt') {
+              appendSystem(
+                zh
+                  ? '当前没有 ChatGPT 订阅登录。请先运行 `codefarmer codex login`。'
+                  : 'No ChatGPT plan is signed in. Run `codefarmer codex login` first.',
+              );
+              return;
+            }
+
+            const limits = await client.request<Record<string, unknown>>('account/rateLimits/read');
+            const accountPlan = typeof account.planType === 'string' ? account.planType : undefined;
+            const lines = [
+              zh
+                ? `ChatGPT 订阅${accountPlan === undefined ? '' : `：${accountPlan}`}`
+                : `ChatGPT plan${accountPlan === undefined ? '' : `: ${accountPlan}`}`,
+            ];
+            const buckets: Array<[string, Record<string, unknown>]> = [];
+            if (isRecord(limits.rateLimitsByLimitId)) {
+              for (const [key, value] of Object.entries(limits.rateLimitsByLimitId)) {
+                if (isRecord(value)) buckets.push([key, value]);
+              }
+            } else if (isRecord(limits.rateLimits)) {
+              const name =
+                typeof limits.rateLimits.limitName === 'string'
+                  ? limits.rateLimits.limitName
+                  : 'ChatGPT';
+              buckets.push([name, limits.rateLimits]);
+            }
+
+            for (const [key, bucket] of buckets) {
+              const name = typeof bucket.limitName === 'string' ? bucket.limitName : key;
+              const language = languageRef.current;
+              const windows = [
+                formatLimitWindow(
+                  bucket.primary,
+                  zh ? '短期窗口' : 'Primary window',
+                  language,
+                ),
+                formatLimitWindow(
+                  bucket.secondary,
+                  zh ? '长期窗口' : 'Secondary window',
+                  language,
+                ),
+              ].filter((line): line is string => line !== undefined);
+              if (windows.length > 0) lines.push(`${name}\n${windows.join('\n')}`);
+            }
+
+            if (lines.length === 1) {
+              lines.push(
+                zh ? '当前没有可用的额度信息。' : 'No quota information is currently available.',
+              );
+            }
+            appendSystem(lines.join('\n'));
+          } finally {
+            await client.close();
+          }
         } else if (command.kind === 'context') {
           const active = runtimeRef.current;
           const session = active.session;
