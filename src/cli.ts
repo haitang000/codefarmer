@@ -17,6 +17,7 @@ import {
   configListAction,
   configPathAction,
   configSetAction,
+  codexAction,
   doctorAction,
   initAction,
   languageAction,
@@ -124,7 +125,7 @@ program
   .addOption(
     new Option(
       '--provider <provider>',
-      'AI Provider（内置 openai/gemini/grok/deepseek/kimi/opencode-go，或 customEndpoints 中定义的 id）',
+      'AI Provider（内置 openai/gemini/grok/deepseek/kimi/opencode-go/codex，或 customEndpoints 中定义的 id）',
     ),
   )
   .option('--model <model>', '模型')
@@ -150,7 +151,7 @@ program
       'detailed',
     ]),
   )
-  .option('--budget <usd>', '会话成本预算（美元）：累计估算成本达到后阻止新任务')
+  .option('--budget <usd>', 'API Provider 会话预算（美元）：达到估算费用后阻止新任务')
   .addOption(new Option('--approval <policy>', '审批策略').choices(['ask', 'auto', 'read-only']))
   .option('--no-stream', '关闭流式文本输出')
   .addOption(
@@ -347,6 +348,20 @@ sessions
     ) => sessionsExportAction(globals(command), id, options.format ?? 'markdown', options.output),
   );
 
+const codex = program.command('codex').description('管理 Codex App Server 的 ChatGPT 登录');
+codex
+  .command('login')
+  .description('通过 Codex App Server 登录 ChatGPT 订阅')
+  .action(async () => codexAction('login'));
+codex
+  .command('status')
+  .description('查看 Codex ChatGPT 登录和配额状态')
+  .action(async () => codexAction('status'));
+codex
+  .command('logout')
+  .description('退出 Codex / ChatGPT 登录')
+  .action(async () => codexAction('logout'));
+
 const config = program.command('config').description('查看或修改配置');
 config
   .command('list')
@@ -375,7 +390,7 @@ config
 
 program
   .command('models')
-  .description('列出当前 Provider 的模型（自动同步上游 /models）')
+  .description('列出当前 Provider 的模型（Codex 通过 App Server 获取）')
   .option('--refresh', '忽略缓存，重新向端点拉取')
   .action(async (options: { refresh?: boolean }, command: Command) =>
     modelsListAction(globals(command), options.refresh ?? false),

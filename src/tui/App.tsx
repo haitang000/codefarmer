@@ -615,12 +615,12 @@ export function formatUsageFooter(
   usage: TokenUsage,
   model: string,
   budgetUsd: number | undefined,
+  subscription = false,
 ): { text: string; tone: UsageFooterTone } {
   const tokens = `${formatNumber(usage.totalTokens)} tokens`;
+  if (subscription) return { text: `${tokens} · ChatGPT plan`, tone: 'ok' };
   const payloadChars =
-    (usage.instructionChars ?? 0) +
-    (usage.toolSchemaChars ?? 0) +
-    (usage.inputChars ?? 0);
+    (usage.instructionChars ?? 0) + (usage.toolSchemaChars ?? 0) + (usage.inputChars ?? 0);
   const requestDetails =
     usage.requestCount === undefined
       ? ''
@@ -629,8 +629,7 @@ export function formatUsageFooter(
   if (price === undefined) return { text: `${tokens}${requestDetails}`, tone: 'ok' };
   const spent = estimateCostUsd(usage, price);
   const cost = `~$${spent.toFixed(4)}`;
-  if (budgetUsd === undefined)
-    return { text: `${tokens}${requestDetails} · ${cost}`, tone: 'ok' };
+  if (budgetUsd === undefined) return { text: `${tokens}${requestDetails} · ${cost}`, tone: 'ok' };
   const text = `${tokens}${requestDetails} · ${cost} / $${budgetUsd.toFixed(2)}`;
   if (spent >= budgetUsd) return { text, tone: 'over' };
   if (spent >= budgetUsd * 0.8) return { text, tone: 'warn' };
@@ -673,7 +672,14 @@ export function formatWorkspaceStats(stats: WorkspaceStats): string {
     stats.byModel.length === 0
       ? ['  (no recorded token usage)']
       : stats.byModel.map((stat) => {
-          const cost = stat.priceMatched ? `$${stat.estimatedCostUsd.toFixed(4)}` : 'unknown';
+          const cost =
+            stat.provider === 'codex' && stat.estimatedCostUsd === 0
+              ? 'plan'
+              : stat.provider === 'codex'
+                ? `$${stat.estimatedCostUsd.toFixed(4)} API + plan`
+                : stat.priceMatched
+                  ? `$${stat.estimatedCostUsd.toFixed(4)}`
+                  : 'unknown';
           const model = stat.model.length > 28 ? `${stat.model.slice(0, 27)}…` : stat.model;
           return `  ${model.padEnd(28, ' ')} ${usageBar(stat.usage.totalTokens / maxTokens, 20)} ${formatNumber(stat.usage.totalTokens).padStart(10, ' ')}  ${cost}`;
         });
@@ -688,13 +694,13 @@ export function formatWorkspaceStats(stats: WorkspaceStats): string {
     `Messages    ${formatNumber(stats.totalMessages)}   Tools ${formatNumber(stats.totalToolCalls)}`,
     `Activity    7d ${formatNumber(stats.recent.last7Days)}   30d ${formatNumber(stats.recent.last30Days)}`,
     `Tokens      in ${formatNumber(stats.usage.inputTokens)} / out ${formatNumber(stats.usage.outputTokens)} / total ${formatNumber(stats.usage.totalTokens)}`,
-    `Cost        $${stats.estimatedCostUsd.toFixed(4)} estimated (matched models only)`,
+    `Cost        $${stats.estimatedCostUsd.toFixed(4)} estimated (API sessions only)`,
     '',
     'Status',
     ...statusLines,
     '',
     'Tokens by model (bar = relative usage)',
-    '  Model                        Usage                  Tokens       Cost',
+    '  Model                        Usage                  Tokens       Cost / plan',
     ...modelLines,
     ...(stats.costUnknownModels.length === 0
       ? []
@@ -2053,6 +2059,18 @@ export function TuiApp({
 
   const refreshProviderModels = useCallback(async (force = false): Promise<void> => {
     const active = runtimeRef.current;
+    if (active.runner.listModels !== undefined) {
+      const models = [...(await active.runner.listModels())];
+      if (!models.includes(active.config.model)) models.push(active.config.model);
+      syncedModelsRef.current = models;
+      setSyncedModels(models);
+      setModelPicker((selected) => {
+        if (selected === null) return selected;
+        const index = models.indexOf(active.config.model);
+        return index < 0 ? 0 : index;
+      });
+      return;
+    }
     const apiKeyEnv = active.config.customEndpoints.find(
       (endpoint) => endpoint.id === active.config.provider,
     )?.apiKeyEnv;
@@ -2084,7 +2102,9 @@ export function TuiApp({
 
   const swapRuntime = useCallback(
     (next: AgentRuntime): void => {
+      const previous = runtimeRef.current;
       runtimeRef.current = next;
+      if (previous.runner !== next.runner) void previous.runner.dispose?.();
       setRuntime(next);
       setEntries(runtimeEntries(next));
       setUsage(next.session?.usage ?? EMPTY_USAGE);
@@ -2153,13 +2173,14 @@ export function TuiApp({
       const controller = new AbortController();
       controllerRef.current = controller;
       const activeRuntime = runtimeRef.current;
-      const expanded = options?.managedTurn === undefined
-        ? await expandPathMentions(prompt, {
-            workspace: activeRuntime.workspace,
-            ignoredPaths: activeRuntime.config.ignoredPaths,
-            maxFileBytes: activeRuntime.config.maxFileSizeBytes,
-          })
-        : { prompt, attached: [] as string[] };
+      const expanded =
+        options?.managedTurn === undefined
+          ? await expandPathMentions(prompt, {
+              workspace: activeRuntime.workspace,
+              ignoredPaths: activeRuntime.config.ignoredPaths,
+              maxFileBytes: activeRuntime.config.maxFileSizeBytes,
+            })
+          : { prompt, attached: [] as string[] };
       const modelPrompt = expanded.prompt;
       if (expanded.attached.length > 0) {
         appendSystem(
@@ -2227,6 +2248,56 @@ export function TuiApp({
           setUsage(event.usage);
         } else if (event.type === 'compacted') {
           appendSystem(event.message);
+        } else if (event.type === 'codex_activity') {
+          const call = event.call;
+          if (event.status === 'running') {
+            const currentAssistantId = activeAssistant.id;
+            if (currentAssistantId !== undefined) flushDeltaBuffer(currentAssistantId);
+            activeAssistant.id = undefined;
+            activeAssistant.hasOutput = false;
+          }
+          const tool: ToolView = {
+            callId: call.callId,
+            name: call.name,
+            status:
+              event.status === 'running'
+                ? 'running'
+                : event.status === 'succeeded'
+                  ? 'succeeded'
+                  : 'failed',
+            arguments: call.arguments,
+            ...(event.status === 'succeeded' && event.output !== undefined
+              ? { output: toolOutputPreview(event.output) }
+              : {}),
+            ...(event.status === 'failed' || event.status === 'declined'
+              ? {
+                  error:
+                    event.output ??
+                    (event.status === 'declined' ? 'Approval declined' : 'Tool failed'),
+                }
+              : {}),
+          };
+          setEntries((previous) => {
+            const index = previous.findIndex((entry) => entry.tool?.callId === call.callId);
+            if (index < 0) {
+              return [
+                ...previous,
+                { id: `tool-${call.callId}`, kind: 'tool', content: call.name, tool },
+              ];
+            }
+            const next = [...previous];
+            const existing = next[index];
+            if (existing === undefined) return previous;
+            next[index] = { ...existing, tool, content: call.name };
+            return next;
+          });
+          setStatus(
+            event.status === 'running'
+              ? `Running ${call.name}`
+              : event.status === 'succeeded'
+                ? 'Tool completed'
+                : 'Tool failed',
+          );
         } else if (event.type === 'tool_call') {
           const currentAssistantId = activeAssistant.id;
           if (currentAssistantId !== undefined) flushDeltaBuffer(currentAssistantId);
@@ -2332,7 +2403,11 @@ export function TuiApp({
           appendSystem(`${result.error.code}: ${result.error.message}`, 'error');
         }
         if (!nested) ringTurnCompleteBell();
-        if (!nested && activeRuntime.session !== undefined) {
+        if (
+          !nested &&
+          activeRuntime.session !== undefined &&
+          activeRuntime.runner.compact !== undefined
+        ) {
           const session = activeRuntime.session;
           const contextChars = sessionContextChars(session);
           if (
@@ -2397,7 +2472,21 @@ export function TuiApp({
         const active = runtimeRef.current;
         const orchestrator = active.orchestrator;
         if (orchestrator === undefined) {
-          appendSystem('No task queue is available for this session.', 'error');
+          if (busyRef.current) {
+            appendSystem(
+              'Codex App Server runs one turn at a time. Wait for the current turn or cancel it.',
+              'error',
+            );
+            return;
+          }
+          applyDraft('', 0);
+          historyRef.current = [
+            ...historyRef.current.filter((entry) => entry !== command.value),
+            command.value,
+          ].slice(-50);
+          historyIndexRef.current = -1;
+          lastPromptRef.current = command.value;
+          await runPrompt(command.value);
           return;
         }
         const wasPaused = orchestrator.snapshot().paused;
@@ -2412,12 +2501,17 @@ export function TuiApp({
           });
           void queued.promise.catch(() => undefined);
           if (draftRef.current.trim() === command.value) applyDraft('', 0);
-          historyRef.current = [...historyRef.current.filter((entry) => entry !== command.value), command.value].slice(-50);
+          historyRef.current = [
+            ...historyRef.current.filter((entry) => entry !== command.value),
+            command.value,
+          ].slice(-50);
           historyIndexRef.current = -1;
           lastPromptRef.current = command.value;
-          appendSystem(languageRef.current === 'zh-CN'
-            ? `已入列第 ${String(orchestrator.snapshot().queuedTurns.length)} 条任务：${command.value}`
-            : `Queued task ${String(orchestrator.snapshot().queuedTurns.length)}: ${command.value}`);
+          appendSystem(
+            languageRef.current === 'zh-CN'
+              ? `已入列第 ${String(orchestrator.snapshot().queuedTurns.length)} 条任务：${command.value}`
+              : `Queued task ${String(orchestrator.snapshot().queuedTurns.length)}: ${command.value}`,
+          );
           if (!wasPaused) orchestrator.continueQueued();
         } catch (error) {
           appendSystem(displayError(error), 'error');
@@ -2434,35 +2528,51 @@ export function TuiApp({
           return;
         }
         if (command.action === 'continue') {
-          if (orchestrator.snapshot().queuedTurns.length === 0) appendSystem(languageRef.current === 'zh-CN' ? '队列为空。' : 'Queue is empty.');
+          if (orchestrator.snapshot().queuedTurns.length === 0)
+            appendSystem(languageRef.current === 'zh-CN' ? '队列为空。' : 'Queue is empty.');
           else {
             orchestrator.continueQueued();
-            appendSystem(languageRef.current === 'zh-CN' ? '正在继续已保存的任务队列。' : 'Continuing saved task queue.');
+            appendSystem(
+              languageRef.current === 'zh-CN'
+                ? '正在继续已保存的任务队列。'
+                : 'Continuing saved task queue.',
+            );
           }
           return;
         }
         if (command.action === 'clear') {
           try {
             const count = await orchestrator.clearQueued();
-            appendSystem(languageRef.current === 'zh-CN'
-              ? `已清空 ${String(count)} 条待执行任务。`
-              : `Cleared ${String(count)} pending task(s).`);
+            appendSystem(
+              languageRef.current === 'zh-CN'
+                ? `已清空 ${String(count)} 条待执行任务。`
+                : `Cleared ${String(count)} pending task(s).`,
+            );
           } catch (error) {
             appendSystem(displayError(error), 'error');
           }
           return;
         }
         const snapshot = orchestrator.snapshot();
-        const lines = snapshot.queuedTurns.map((turn, index) =>
-          `${String(index + 1)}. [${turn.plan === true ? 'PLAN' : turn.auto === true ? 'AUTO' : 'CODE'}] ${turn.displayPrompt ?? turn.prompt}`,
+        const lines = snapshot.queuedTurns.map(
+          (turn, index) =>
+            `${String(index + 1)}. [${turn.plan === true ? 'PLAN' : turn.auto === true ? 'AUTO' : 'CODE'}] ${turn.displayPrompt ?? turn.prompt}`,
         );
         const interrupted = runtimeRef.current.session?.execution?.interruptedTurn;
         if (interrupted !== undefined) {
-          lines.push(languageRef.current === 'zh-CN'
-            ? `已中断（不在队列中）：${interrupted.turn.displayPrompt ?? interrupted.turn.prompt}`
-            : `Interrupted (not queued): ${interrupted.turn.displayPrompt ?? interrupted.turn.prompt}`);
+          lines.push(
+            languageRef.current === 'zh-CN'
+              ? `已中断（不在队列中）：${interrupted.turn.displayPrompt ?? interrupted.turn.prompt}`
+              : `Interrupted (not queued): ${interrupted.turn.displayPrompt ?? interrupted.turn.prompt}`,
+          );
         }
-        appendSystem(lines.length === 0 ? languageRef.current === 'zh-CN' ? '队列为空。' : 'Queue is empty.' : lines.join('\n'));
+        appendSystem(
+          lines.length === 0
+            ? languageRef.current === 'zh-CN'
+              ? '队列为空。'
+              : 'Queue is empty.'
+            : lines.join('\n'),
+        );
         return;
       }
       if (command.kind === 'quit') {
@@ -2591,7 +2701,9 @@ export function TuiApp({
               `Mode       ${agentModeRef.current.toUpperCase()}`,
               `Approval   ${agentModeRef.current === 'auto' ? 'auto (protected operations still confirm)' : active.config.approval}`,
               `Skills     ${selectedSkills.length === 0 ? 'none selected' : selectedSkills.join(', ')}`,
-              `Base URL   ${active.config.baseURL}`,
+              active.config.provider === 'codex'
+                ? 'Backend    Codex App Server (local stdio)'
+                : `Base URL   ${active.config.baseURL}`,
               `Git        ${gitLine}`,
             ].join('\n'),
           );
@@ -2615,11 +2727,18 @@ export function TuiApp({
               (sum, message) => sum + estimateContextTokens(message.content),
               0,
             );
-            const ratio = Math.min(1, contextTokens / ESTIMATED_CONTEXT_WINDOW_TOKENS);
-            lines.push(
-              `Context    ${usageBar(ratio)} ${formatNumber(contextTokens)} / ${formatNumber(ESTIMATED_CONTEXT_WINDOW_TOKENS)} tokens ≈ ${(ratio * 100).toFixed(1)}%`,
-              `           ${formatNumber(contextChars)} chars across ${formatNumber(messages.length)} messages`,
-            );
+            if (active.config.provider === 'codex') {
+              lines.push(
+                'Context    managed by Codex App Server',
+                `           ${formatNumber(contextChars)} chars in ${formatNumber(messages.length)} local transcript messages`,
+              );
+            } else {
+              const ratio = Math.min(1, contextTokens / ESTIMATED_CONTEXT_WINDOW_TOKENS);
+              lines.push(
+                `Context    ${usageBar(ratio)} ${formatNumber(contextTokens)} / ${formatNumber(ESTIMATED_CONTEXT_WINDOW_TOKENS)} tokens ≈ ${(ratio * 100).toFixed(1)}%`,
+                `           ${formatNumber(contextChars)} chars across ${formatNumber(messages.length)} messages`,
+              );
+            }
             const roleChars = new Map<string, number>();
             let largestChars = 0;
             let largestIndex = -1;
@@ -2648,8 +2767,9 @@ export function TuiApp({
               );
             });
             if (
-              contextChars >= COMPACT_HINT_MIN_CHARS ||
-              messages.length >= COMPACT_HINT_MIN_MESSAGES
+              active.runner.compact !== undefined &&
+              (contextChars >= COMPACT_HINT_MIN_CHARS ||
+                messages.length >= COMPACT_HINT_MIN_MESSAGES)
             ) {
               lines.push('Tip        Run /compact to compress the early messages into a summary.');
             }
@@ -2663,14 +2783,24 @@ export function TuiApp({
           if (usage.reasoningTokens !== undefined) {
             lines.push(`           reasoning ${formatNumber(usage.reasoningTokens)}`);
           }
-          const costLine = formatUsageFooter(usage, active.config.model, active.config.budgetUsd);
+          const costLine = formatUsageFooter(
+            usage,
+            active.config.model,
+            active.config.budgetUsd,
+            active.config.provider === 'codex',
+          );
           lines.push(`Cost       ${costLine.text}`);
           appendSystem(lines.join('\n'));
         } else if (command.kind === 'compact') {
           const active = runtimeRef.current;
           const session = active.session;
+          const compact = active.runner.compact;
           if (session === undefined) {
             appendSystem('No active session; start one with /new or /resume.', 'error');
+          } else if (compact === undefined) {
+            appendSystem(
+              'Codex App Server manages its conversation history and context compaction.',
+            );
           } else if (session.messages.length <= COMPACT_KEEP_RECENT_MESSAGES + 1) {
             appendSystem(
               `Session has only ${String(session.messages.length)} messages; nothing to compress ` +
@@ -2679,7 +2809,7 @@ export function TuiApp({
             );
           } else {
             const beforeChars = sessionContextChars(session);
-            const result = await active.runner.compact(session);
+            const result = await compact(session);
             const requestPayloadChars =
               (result.usage.instructionChars ?? 0) +
               (result.usage.toolSchemaChars ?? 0) +
@@ -3456,6 +3586,7 @@ export function TuiApp({
   useEffect(
     () => () => {
       controllerRef.current?.abort();
+      void runtimeRef.current.runner.dispose?.();
       if (deltaFlushTimerRef.current !== undefined) {
         clearInterval(deltaFlushTimerRef.current);
         deltaFlushTimerRef.current = undefined;
@@ -3697,9 +3828,13 @@ export function TuiApp({
           {'> '}
           <Text dimColor>
             {busy
-              ? language === 'zh-CN'
-                ? `${String(runtime.orchestrator?.snapshot().queuedTurns.length ?? 0)} 条排队 · 回车添加`
-                : `${String(runtime.orchestrator?.snapshot().queuedTurns.length ?? 0)} queued · Enter to add`
+              ? runtime.orchestrator === undefined
+                ? language === 'zh-CN'
+                  ? 'Codex 正在执行 · 可用 /cancel 取消'
+                  : 'Codex is running · use /cancel to stop'
+                : language === 'zh-CN'
+                  ? `${String(runtime.orchestrator.snapshot().queuedTurns.length)} 条排队 · 回车添加`
+                  : `${String(runtime.orchestrator.snapshot().queuedTurns.length)} queued · Enter to add`
               : language === 'zh-CN'
                 ? '回车执行 · Shift+Enter 换行'
                 : 'Enter to run · Shift+Enter newline'}
@@ -3709,9 +3844,13 @@ export function TuiApp({
           {draft.length === 0 ? (
             <Text dimColor wrap="truncate-end">
               {busy
-                ? language === 'zh-CN'
-                  ? '输入下一条指令…'
-                  : 'Type your next instruction…'
+                ? runtime.orchestrator === undefined
+                  ? language === 'zh-CN'
+                    ? '等待当前 Codex 任务完成…'
+                    : 'Wait for the Codex turn to finish…'
+                  : language === 'zh-CN'
+                    ? '输入下一条指令…'
+                    : 'Type your next instruction…'
                 : agentMode === 'plan'
                   ? language === 'zh-CN'
                     ? '计划模式仅进行只读探索'
@@ -3750,7 +3889,12 @@ export function TuiApp({
             {modeLabel}
           </Text>
           {(() => {
-            const footer = formatUsageFooter(usage, runtime.config.model, runtime.config.budgetUsd);
+            const footer = formatUsageFooter(
+              usage,
+              runtime.config.model,
+              runtime.config.budgetUsd,
+              runtime.config.provider === 'codex',
+            );
             return (
               <Text
                 dimColor={footer.tone === 'ok'}

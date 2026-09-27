@@ -51,6 +51,15 @@ export const PROVIDER_PRESETS: Record<ProviderId, ProviderPreset> = {
     defaultBaseURL: 'https://opencode.ai/zen/go/v1',
     environmentVariables: ['OPENCODE_API_KEY'],
   },
+  codex: {
+    id: 'codex',
+    label: 'Codex App Server (ChatGPT plan)',
+    defaultModel: 'codex-default',
+    // The App Server is a local stdio process, so this legacy configuration
+    // field is not used by the provider. Keep a valid URL for config compatibility.
+    defaultBaseURL: 'https://api.openai.com/v1',
+    environmentVariables: [],
+  },
 };
 
 /**
@@ -91,6 +100,7 @@ export const PROVIDER_MODELS: Record<ProviderId, readonly string[]> = {
   ],
   kimi: ['kimi-k2-0711-preview', 'kimi-k2.5', 'kimi-k2'],
   'opencode-go': ['qwen3.7-plus'],
+  codex: [],
 };
 
 /**

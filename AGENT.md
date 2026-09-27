@@ -4,10 +4,11 @@ Project-specific guidance for coding agents working in this repository.
 
 ## Project Overview
 
-CodeFarmer is a safe, interactive coding-agent CLI (v0.1.8, MIT) powered by a
-multi-provider model boundary (OpenAI, Google Gemini, xAI Grok, DeepSeek, and
-Kimi). OpenAI defaults to the Responses API with `gpt-5.6-sol`; the other
-providers go through an OpenAI-compatible endpoint. It inspects a workspace,
+CodeFarmer is a safe, interactive coding-agent CLI (v0.1.8, MIT) powered by API
+providers (OpenAI, Google Gemini, xAI Grok, DeepSeek, and Kimi) plus the local
+Codex App Server runtime. OpenAI defaults to the Responses API with
+`gpt-5.6-sol`; the other API providers go through an OpenAI-compatible endpoint.
+The Codex runtime delegates its thread and tool loop to Codex CLI. It inspects a workspace,
 edits files through reviewable unified diffs (`apply_patch`), runs approved
 commands, exposes read-only Git tools, and can resume prior sessions. It ships
 a full-screen Ink TUI and a one-shot `run --json` mode, plus a `push` command
@@ -27,8 +28,8 @@ src/
 ├─ cli/        Commander entrypoint, script commands, completions, export
 ├─ tui/        Ink full-screen app, transcript, input, overlays
 ├─ core/       Agent loop, prompts, approvals, sessions, undo transactions
-├─ providers/  AgentProvider contract boundary, provider catalog, OpenAI +
-│              OpenAI-compatible implementations
+├─ providers/  API-provider contract, catalog, OpenAI-compatible drivers, and
+│              Codex App Server runtime adapter
 ├─ tools/      list_files/read_file/search_text, apply_patch, write-file,
 │              run-command, read-only git tools, registry, output
 └─ infra/      config, credentials, paths, persistence, logger, typed errors
@@ -88,10 +89,11 @@ using `pnpm install --frozen-lockfile`.
 
 ## Important Constraints
 
-- Preserve the `AgentProvider` boundary: provider SDK types must not leak into
-  `core/` or `tools/`. Provider support is defined by `PROVIDER_PRESETS` in
-  `src/providers/catalog.ts`; adding a provider means updating that catalog and
-  the supported env-var/API-key lists.
+- Preserve the `AgentProvider` boundary for API providers: SDK types must not
+  leak into `core/` or `tools/`. Codex App Server is a separate runtime adapter,
+  not an API provider. Provider support is defined by `PROVIDER_PRESETS` in
+  `src/providers/catalog.ts`; adding an API provider means updating that
+  catalog and the supported env-var/API-key lists.
 - Provider credentials come from the environment only
   (`OPENAI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`,
   `XAI_API_KEY`/`GROK_API_KEY`, `DEEPSEEK_API_KEY`,

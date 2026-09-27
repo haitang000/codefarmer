@@ -45,6 +45,7 @@ import { canonicalWorkspace, getAppPaths } from '../infra/paths.js';
 import { fileExists, readJsonFileIfExists, writeJsonAtomic } from '../infra/persistence.js';
 import { OpenAIProvider } from '../providers/openai.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible.js';
+import { beginChatGptLogin, CodexAppServerClient } from '../providers/codex-app-server.js';
 import { isProviderId, providerPreset } from '../providers/catalog.js';
 import { syncProviderModels } from '../providers/model-sync.js';
 import { detectGitAvailability } from '../tools/git-tools.js';
@@ -101,6 +102,7 @@ async function readPipedPrompt(): Promise<string> {
  * agent; this warning makes the CLI one-shot path announce the same crossing.
  */
 function warnIfBudgetReached(runtime: AgentRuntime, result: AgentRunResult): void {
+  if (runtime.config.provider === 'codex') return;
   const budgetUsd = runtime.config.budgetUsd;
   if (budgetUsd === undefined || result.status !== 'completed') return;
   const price = lookupModelPrice(runtime.config.model);
@@ -175,8 +177,9 @@ export async function runAction(
   if (prompt.length === 0) throw new ConfigError('run 命令需要任务描述');
   const history = runOptions.history ?? true;
   const json = runOptions.json ?? false;
+  let runtime: AgentRuntime | undefined;
   try {
-    const runtime = await createAgentRuntime(globalOptions, {
+    runtime = await createAgentRuntime(globalOptions, {
       ...(runOptions.session === undefined ? {} : { sessionId: runOptions.session }),
       history,
       ...(json ? { interactive: false } : {}),
@@ -223,6 +226,8 @@ export async function runAction(
     printJson(cliResult(result));
     process.exitCode = appError.exitCode;
     return result;
+  } finally {
+    await runtime?.runner.dispose?.();
   }
 }
 
@@ -295,7 +300,11 @@ async function showWorkspaceStatus(globalOptions: GlobalOptions): Promise<void> 
   process.stdout.write(
     `${chalk.bold('模型')} ${runtime.config.model} (${runtime.config.reasoning}, ${runtime.config.verbosity})\n`,
   );
-  process.stdout.write(`${chalk.bold('Base URL')} ${runtime.config.baseURL}\n`);
+  process.stdout.write(
+    runtime.config.provider === 'codex'
+      ? `${chalk.bold('Backend')} Codex App Server (local stdio)\n`
+      : `${chalk.bold('Base URL')} ${runtime.config.baseURL}\n`,
+  );
   process.stdout.write(`${chalk.bold('审批')} ${runtime.config.approval}\n`);
   process.stdout.write(`${chalk.bold('Git')}\n${git}\n`);
   process.stdout.write(`${chalk.bold('最近会话')}\n`);
@@ -308,77 +317,83 @@ export async function chatAction(globalOptions: GlobalOptions, sessionId?: strin
     ...(sessionId === undefined ? {} : { sessionId }),
     history: true,
   });
-  process.stdout.write(chalk.bold(`CodeFarmer 会话 ${runtime.session?.id ?? ''}\n`));
-  process.stdout.write(chalk.dim('输入 /help 查看会话命令。\n'));
+  try {
+    process.stdout.write(chalk.bold(`CodeFarmer 会话 ${runtime.session?.id ?? ''}\n`));
+    process.stdout.write(chalk.dim('输入 /help 查看会话命令。\n'));
 
-  for (;;) {
-    const answer = await text({ message: '任务' });
-    if (isCancel(answer)) break;
-    const prompt = answer.trim();
-    if (prompt.length === 0) continue;
-    if (prompt === '/exit') break;
-    if (prompt === '/help') {
-      process.stdout.write('/help /status /diff /undo /new /exit\n');
-      continue;
-    }
-    if (prompt === '/status') {
-      await showWorkspaceStatus(globalOptions);
-      continue;
-    }
-    if (prompt === '/diff') {
-      if (!(await detectGitAvailability()).available) {
-        process.stdout.write('Git 未安装或不在 PATH，无法显示差异（Git 为可选依赖）\n');
+    for (;;) {
+      const answer = await text({ message: '任务' });
+      if (isCancel(answer)) break;
+      const prompt = answer.trim();
+      if (prompt.length === 0) continue;
+      if (prompt === '/exit') break;
+      if (prompt === '/help') {
+        process.stdout.write('/help /status /diff /undo /new /exit\n');
         continue;
       }
-      const result = await execa(
-        'git',
-        [
-          '--no-pager',
-          '-c',
-          'core.fsmonitor=false',
-          'diff',
-          '--no-ext-diff',
-          '--no-textconv',
-          '--',
-          '.',
-        ],
-        {
-          cwd: runtime.workspace,
-          reject: false,
-          env: { GIT_EXTERNAL_DIFF: '', GIT_OPTIONAL_LOCKS: '0', GIT_PAGER: 'cat' },
-        },
-      );
-      if (result.exitCode !== 0) {
-        process.stdout.write(`${result.stderr.trim() || '无法显示 Git 差异'}\n`);
-      } else {
-        process.stdout.write(`${colorizeDiff(result.stdout || '(无差异)')}\n`);
+      if (prompt === '/status') {
+        await showWorkspaceStatus(globalOptions);
+        continue;
       }
-      continue;
-    }
-    if (prompt === '/undo') {
-      const transaction = await runtime.transactions.undoLatest(runtime.session?.id);
-      process.stdout.write(`已撤销 ${transaction.path}\n`);
-      continue;
-    }
-    if (prompt === '/new') {
-      runtime = await createAgentRuntime(globalOptions, { history: true });
-      process.stdout.write(`新会话 ${runtime.session?.id ?? ''}\n`);
-      continue;
-    }
+      if (prompt === '/diff') {
+        if (!(await detectGitAvailability()).available) {
+          process.stdout.write('Git 未安装或不在 PATH，无法显示差异（Git 为可选依赖）\n');
+          continue;
+        }
+        const result = await execa(
+          'git',
+          [
+            '--no-pager',
+            '-c',
+            'core.fsmonitor=false',
+            'diff',
+            '--no-ext-diff',
+            '--no-textconv',
+            '--',
+            '.',
+          ],
+          {
+            cwd: runtime.workspace,
+            reject: false,
+            env: { GIT_EXTERNAL_DIFF: '', GIT_OPTIONAL_LOCKS: '0', GIT_PAGER: 'cat' },
+          },
+        );
+        if (result.exitCode !== 0) {
+          process.stdout.write(`${result.stderr.trim() || '无法显示 Git 差异'}\n`);
+        } else {
+          process.stdout.write(`${colorizeDiff(result.stdout || '(无差异)')}\n`);
+        }
+        continue;
+      }
+      if (prompt === '/undo') {
+        const transaction = await runtime.transactions.undoLatest(runtime.session?.id);
+        process.stdout.write(`已撤销 ${transaction.path}\n`);
+        continue;
+      }
+      if (prompt === '/new') {
+        const previous = runtime;
+        runtime = await createAgentRuntime(globalOptions, { history: true });
+        await previous.runner.dispose?.();
+        process.stdout.write(`新会话 ${runtime.session?.id ?? ''}\n`);
+        continue;
+      }
 
-    const controller = new AbortController();
-    const cleanup = installInterruptHandler(controller);
-    try {
-      const result = await runtime.runner.run(prompt, {
-        ...(runtime.session === undefined ? {} : { session: runtime.session }),
-        history: true,
-        signal: controller.signal,
-        onEvent: createEventRenderer({ json: false, stream: runtime.config.stream }),
-      });
-      printResultMessage(result.message, runtime.config.stream);
-    } finally {
-      cleanup();
+      const controller = new AbortController();
+      const cleanup = installInterruptHandler(controller);
+      try {
+        const result = await runtime.runner.run(prompt, {
+          ...(runtime.session === undefined ? {} : { session: runtime.session }),
+          history: true,
+          signal: controller.signal,
+          onEvent: createEventRenderer({ json: false, stream: runtime.config.stream }),
+        });
+        printResultMessage(result.message, runtime.config.stream);
+      } finally {
+        cleanup();
+      }
     }
+  } finally {
+    await runtime.runner.dispose?.();
   }
 }
 
@@ -658,6 +673,7 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
       { value: 'deepseek', label: 'DeepSeek' },
       { value: 'kimi', label: 'Kimi' },
       { value: 'opencode-go', label: 'OpenCode Go' },
+      { value: 'codex', label: 'Codex App Server（ChatGPT 订阅）' },
       ...details.config.customEndpoints.map((endpoint) => ({
         value: endpoint.id,
         label: endpoint.label ?? endpoint.id,
@@ -691,7 +707,13 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
   // 新建端点已在向导中录入 baseURL 与 model，无需再次询问。
   let model: string;
   let baseURL: string;
-  if (newEndpoint !== undefined) {
+  if (provider === 'codex') {
+    model = providerConfig.model;
+    baseURL = preset.defaultBaseURL;
+    process.stdout.write(
+      'Codex 使用本机 App Server；请先运行 `codefarmer codex login` 完成 ChatGPT 登录。\n',
+    );
+  } else if (newEndpoint !== undefined) {
     model = newEndpoint.model;
     baseURL = newEndpoint.baseURL;
   } else {
@@ -765,14 +787,19 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
   if (isCancel(approval)) return abortSetup();
 
   const normalizedBaseUrl = baseURL.replace(/\/+$/u, '');
-  let apiKey = await resolveProviderApiKey(provider, {
-    apiKeyEnv: customEndpoints.find((endpoint) => endpoint.id === provider)?.apiKeyEnv,
-  });
+  let apiKey =
+    provider === 'codex'
+      ? undefined
+      : await resolveProviderApiKey(provider, {
+          apiKeyEnv: customEndpoints.find((endpoint) => endpoint.id === provider)?.apiKeyEnv,
+        });
   const keylessEndpoint = customEndpoints.some(
     (endpoint) => endpoint.id === provider && endpoint.apiKeyOptional === true,
   );
   const environmentKey = preset.environmentVariables.find((name) => process.env[name]?.trim());
-  if (environmentKey !== undefined) {
+  if (provider === 'codex') {
+    // Codex App Server owns ChatGPT subscription authentication.
+  } else if (environmentKey !== undefined) {
     process.stdout.write(`${chalk.green('✓')} 使用环境变量中的 ${environmentKey}。\n`);
   } else if (apiKey !== undefined) {
     process.stdout.write(`${chalk.green('✓')} 使用已保存的本地凭据 ${getCredentialsPath()}。\n`);
@@ -783,7 +810,7 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
     if (isCancel(replaceKey)) return abortSetup();
     if (replaceKey) apiKey = undefined;
   }
-  if (apiKey === undefined && !keylessEndpoint) {
+  if (provider !== 'codex' && apiKey === undefined && !keylessEndpoint) {
     const input = await password({
       message: `${preset.label} API Key（不会写入项目配置，仅保存到本地凭据文件；留空跳过）`,
       validate: () => undefined,
@@ -800,7 +827,7 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
       );
     }
   }
-  if (apiKey === undefined && keylessEndpoint) {
+  if (provider !== 'codex' && apiKey === undefined && keylessEndpoint) {
     process.stdout.write(`${chalk.blue('ℹ')} 该端点已启用 apiKeyOptional，无需 API Key。\n`);
   }
   if (apiKey !== undefined) {
@@ -1019,9 +1046,18 @@ function printWorkspaceStats(stats: WorkspaceStats): void {
   process.stdout.write(
     `${chalk.bold('近 7 天 / 30 天会话')} ${formatCount(stats.recent.last7Days)} / ${formatCount(stats.recent.last30Days)}\n`,
   );
-  process.stdout.write(`${chalk.bold('按模型')}（仅统计记录用量的会话，估算费用按公开列表价）\n`);
+  process.stdout.write(
+    `${chalk.bold('按模型')}（仅统计记录用量的会话，API 费用按公开列表价估算）\n`,
+  );
   for (const stat of stats.byModel) {
-    const cost = stat.priceMatched ? formatUsd(stat.estimatedCostUsd) : '未知';
+    const cost =
+      stat.provider === 'codex' && stat.estimatedCostUsd === 0
+        ? 'ChatGPT 订阅'
+        : stat.provider === 'codex'
+          ? `${formatUsd(stat.estimatedCostUsd)} API + ChatGPT 订阅`
+          : stat.priceMatched
+            ? formatUsd(stat.estimatedCostUsd)
+            : '未知';
     process.stdout.write(
       `  ${stat.model}\t${stat.provider}\t${String(stat.sessions)} 会话\t` +
         `${formatCount(stat.usage.totalTokens)} tokens\t${cost}\n`,
@@ -1033,7 +1069,7 @@ function printWorkspaceStats(stats: WorkspaceStats): void {
     );
   }
   process.stdout.write(
-    `${chalk.bold('估算费用')} ${formatUsd(stats.estimatedCostUsd)}（仅计已匹配模型；非账单，请以 Provider 账单为准）\n`,
+    `${chalk.bold('估算费用')} ${formatUsd(stats.estimatedCostUsd)}（仅计 API 会话；ChatGPT 订阅不按 API 列表价计费）\n`,
   );
 }
 
@@ -1086,6 +1122,9 @@ export async function sessionsCompactAction(
 ): Promise<void> {
   const runtime = await createBaseRuntime(globalOptions);
   const session = await runtime.sessions.get(id);
+  if (session.provider === 'codex' || session.codexThreadId !== undefined) {
+    throw new ConfigError('Codex 会话由 App Server 管理上下文；请在 Codex 会话中使用其自动压缩。');
+  }
   const apiKey = await resolveProviderApiKey(runtime.config.provider, {
     apiKeyEnv: runtime.config.customEndpoints.find(
       (endpoint) => endpoint.id === runtime.config.provider,
@@ -1271,6 +1310,25 @@ export async function modelsListAction(
   refresh = false,
 ): Promise<void> {
   const runtime = await createBaseRuntime(globalOptions);
+  if (runtime.config.provider === 'codex') {
+    const client = await CodexAppServerClient.connect();
+    try {
+      const account = await client.account();
+      if (account?.type !== 'chatgpt') {
+        throw new AuthenticationError('Codex 尚未登录 ChatGPT；请运行 `codefarmer codex login`。');
+      }
+      const models = await client.listModels();
+      process.stdout.write(
+        `Codex App Server（ChatGPT ${(account.planType as string | undefined) ?? 'plan'}，${String(models.length)} 个模型）\n`,
+      );
+      for (const model of models) {
+        process.stdout.write(`${model === runtime.config.model ? '*' : ' '} ${model}\n`);
+      }
+    } finally {
+      await client.close();
+    }
+    return;
+  }
   const apiKeyEnv = runtime.config.customEndpoints.find(
     (endpoint) => endpoint.id === runtime.config.provider,
   )?.apiKeyEnv;
@@ -1295,6 +1353,75 @@ export async function modelsListAction(
   for (const model of synced.models) {
     const marker = model === runtime.config.model ? '*' : ' ';
     process.stdout.write(`${marker} ${model}\n`);
+  }
+}
+
+export async function codexAction(action: 'login' | 'status' | 'logout'): Promise<void> {
+  const client = await CodexAppServerClient.connect();
+  try {
+    if (action === 'status') {
+      const account = await client.account();
+      if (account?.type !== 'chatgpt') {
+        process.stdout.write('Codex 当前没有 ChatGPT 订阅登录。运行 `codefarmer codex login`。\n');
+        return;
+      }
+      process.stdout.write(
+        `ChatGPT：${String(account.planType ?? '已登录')}${typeof account.email === 'string' ? `（${account.email}）` : ''}\n`,
+      );
+      const limits = await client.request<Record<string, unknown>>('account/rateLimits/read');
+      const buckets = limits.rateLimitsByLimitId;
+      if (buckets !== null && typeof buckets === 'object' && !Array.isArray(buckets)) {
+        for (const [key, raw] of Object.entries(buckets)) {
+          if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) continue;
+          const primary = (raw as Record<string, unknown>).primary;
+          if (primary === null || typeof primary !== 'object' || Array.isArray(primary)) continue;
+          const usedPercent = (primary as Record<string, unknown>).usedPercent;
+          const resetAt = (primary as Record<string, unknown>).resetsAt;
+          process.stdout.write(
+            `${key}：${typeof usedPercent === 'number' ? `已用 ${usedPercent}%` : '配额可用'}${typeof resetAt === 'number' ? `，重置于 ${new Date(resetAt * 1000).toLocaleString()}` : ''}\n`,
+          );
+        }
+      }
+      return;
+    }
+
+    if (action === 'logout') {
+      await client.request('account/logout');
+      process.stdout.write('已退出 Codex / ChatGPT 登录。\n');
+      return;
+    }
+
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      throw new ConfigError('`codefarmer codex login` 需要交互式终端。');
+    }
+    const login = await beginChatGptLogin(client);
+    process.stdout.write(`请在浏览器中完成 ChatGPT 登录：\n${login.authUrl}\n`);
+    const browser =
+      process.platform === 'win32'
+        ? execa('rundll32.exe', ['url.dll,FileProtocolHandler', login.authUrl], {
+            stdio: 'ignore',
+            reject: false,
+          })
+        : process.platform === 'darwin'
+          ? execa('open', [login.authUrl], { stdio: 'ignore', reject: false })
+          : execa('xdg-open', [login.authUrl], { stdio: 'ignore', reject: false });
+    void browser.catch(() => undefined);
+    process.stdout.write('等待登录完成…\n');
+    const completed = await login.completed;
+    if (!completed.success) {
+      throw new AuthenticationError(
+        `ChatGPT 登录未完成${completed.error === undefined ? '' : `：${completed.error}`}`,
+      );
+    }
+    const account = await client.account();
+    if (account?.type !== 'chatgpt') {
+      throw new AuthenticationError('Codex 登录已返回，但当前账号未切换为 ChatGPT 认证。');
+    }
+    process.stdout.write(
+      `ChatGPT 登录成功：${String(account.planType ?? '已登录')}${typeof account.email === 'string' ? `（${account.email}）` : ''}\n`,
+    );
+  } finally {
+    await client.close();
   }
 }
 
@@ -1324,6 +1451,54 @@ export async function doctorAction(globalOptions: GlobalOptions): Promise<void> 
       warn: true,
       detail: '未安装或不在 PATH（可选，仅 Git 状态与差异功能不可用）',
     });
+  }
+  if (runtime.config.provider === 'codex') {
+    try {
+      const client = await CodexAppServerClient.connect();
+      try {
+        const account = await client.account();
+        checks.push({
+          name: 'Codex App Server',
+          ok: true,
+          detail: '连接成功（本机 stdio）',
+        });
+        checks.push({
+          name: 'ChatGPT 登录',
+          ok: account?.type === 'chatgpt',
+          detail:
+            account?.type === 'chatgpt'
+              ? `${String(account.planType ?? '已登录')}${typeof account.email === 'string' ? `，${account.email}` : ''}`
+              : '未使用 ChatGPT 账号登录；运行 codefarmer codex login',
+        });
+        if (account?.type === 'chatgpt') {
+          const models = await client.listModels();
+          checks.push({
+            name: 'Codex 模型',
+            ok: models.length > 0,
+            detail: `${String(models.length)} 个可用模型`,
+          });
+        }
+      } finally {
+        await client.close();
+      }
+    } catch (error) {
+      checks.push({
+        name: 'Codex App Server',
+        ok: false,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+    checks.push({ name: 'Data', ok: true, detail: getAppPaths().data });
+    for (const check of checks) {
+      const mark = check.ok
+        ? check.warn === true
+          ? chalk.yellow('!')
+          : chalk.green('✓')
+        : chalk.red('✗');
+      process.stdout.write(`${mark} ${check.name}: ${check.detail}\n`);
+    }
+    if (checks.some((check) => !check.ok)) process.exitCode = 1;
+    return;
   }
   const preset = providerPreset(runtime.config.provider, runtime.config.customEndpoints);
   const resolvedKey = await resolveProviderApiKey(runtime.config.provider, {

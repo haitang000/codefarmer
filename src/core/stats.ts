@@ -263,6 +263,10 @@ export function computeWorkspaceStats(sessions: readonly SessionRecord[]): Works
       entry.stat.provider = session.provider;
     }
     const price = lookupModelPrice(session.model);
+    if (session.provider === 'codex') {
+      // ChatGPT subscriptions are not billed at the API list price.
+      continue;
+    }
     if (price === undefined) {
       unknownModels.add(session.model);
     } else {

@@ -24,7 +24,7 @@ Commander 负责参数解析，Clack 和 Chalk 负责终端交互，Zod 校验�
 ## 环境要求
 
 - Node.js 22 或更高版本
-- OpenAI、Google Gemini、xAI Grok、DeepSeek 或 Kimi 的 API Key
+- OpenAI、Google Gemini、xAI Grok、DeepSeek 或 Kimi 的 API Key；也可使用已登录 ChatGPT 的 Codex CLI
 - Git（可选，供只读的 Git 状态、差异、历史和提交查看工具使用）
 - 从源码构建时需要 pnpm
 
@@ -38,7 +38,7 @@ npm install -g codefarmer
 
 在当前 shell 中设置所选 Provider 的 API Key。运行 `codefarmer setup` 可以选择
 Provider、自动填入默认端点和模型，并将密钥保存到用户配置目录下的本地凭据文件
-（不会进入项目或配置文件）。
+（不会进入项目或配置文件）；仅 API Key 认证的 Provider 需要密钥。
 
 ```bash
 export OPENAI_API_KEY="sk-..."
@@ -54,6 +54,10 @@ $env:OPENAI_API_KEY = "sk-..."
 `XAI_API_KEY`（或 `GROK_API_KEY`）、`DEEPSEEK_API_KEY`、
 `MOONSHOT_API_KEY`（或 `KIMI_API_KEY`）。使用 setup 时只需填写所选
 Provider 的 API Key。
+
+选择 **Codex App Server（ChatGPT 订阅）** 时不需要 API Key。请先安装 Codex CLI，
+确保 `codex` 命令在 PATH 中，然后运行 `codefarmer codex login` 通过浏览器登录。
+App Server 会在本机启动，CodeFarmer 通过官方 stdio JSONL 协议连接它。
 
 从本仓库进行开发安装：
 
@@ -118,7 +122,10 @@ CodeFarmer 启动时所在的目录；它不会自动扩大到上层 Git 仓库�
 | `codefarmer config path`                        | 显示配置文件路径                                          |
 | `codefarmer language [language]`                | 查看或持久化界面和 Agent 回复语言                         |
 | `codefarmer doctor`                             | 检查 Node、密钥、配置、权限、Git（可选）和 API 连通性     |
-| `codefarmer models`                             | 列出当前 Provider 的模型（从上游 `/models` 自动同步）     |
+| `codefarmer models`                             | 列出当前 Provider 的模型（Codex 从 App Server 获取）      |
+| `codefarmer codex login`                        | 通过浏览器登录 ChatGPT，授权本机 Codex App Server         |
+| `codefarmer codex status`                       | 查看 ChatGPT 登录状态和 Codex 配额窗口                    |
+| `codefarmer codex logout`                       | 退出 Codex / ChatGPT 登录                                 |
 | `codefarmer completions <shell>`                | 打印 bash、zsh 或 fish 补全脚本                           |
 
 使用 `codefarmer <命令> --help` 查看命令专用参数。全局参数包括：
@@ -190,7 +197,7 @@ TUI 在同一个备用屏幕中承载对话、工具状态、审批、工作区�
 | `/push`                      | 确认后将当前分支推送到已配置的上游                                  |
 | `/undo`                      | 撤销最近一笔符合条件的文件事务                                      |
 | `/todos`                     | 显示 Agent 当前任务清单（由 `todo_write` 工具维护）                 |
-| `/queue [continue\|clear]`    | 查看待执行任务、确认继续整队或清空队列                              |
+| `/queue [continue\|clear]`   | 查看待执行任务、确认继续整队或清空队列                              |
 | `/new`                       | 开始一个新会话                                                      |
 | `/cancel`                    | 取消当前请求或工具                                                  |
 | `/quit`                      | 退出 TUI 并恢复终端                                                 |
@@ -317,13 +324,14 @@ TUI 提供 `/skills`、`/skill <ref>` 和 `/skill off`。
 `budgetUsd`（默认关闭）设置会话的成本上限（美元），使用与 `stats` 相同的
 公开列表价估算。当会话累计估算成本达到预算后，新一轮任务会被拒绝并返回
 `BUDGET_EXCEEDED` 错误，直到调高预算或 `/new` 开始新会话；跨越阈值的那一轮
-仍会正常完成。可通过 `--budget <usd>`、`CODEFARMER_BUDGET_USD` 或配置项
-`budgetUsd` 设置。
+仍会正常完成。此限制适用于 API Provider；Codex 的 ChatGPT 订阅按 OpenAI 配额
+管理，不按 API 列表价计费，因此不受 `budgetUsd` 限制。可通过 `--budget <usd>`、
+`CODEFARMER_BUDGET_USD` 或配置项 `budgetUsd` 设置 API Provider 的预算。
 
 ## Provider
 
 可通过 `--provider`、`CODEFARMER_PROVIDER`、setup 向导或配置文件选择
-`openai`、`gemini`、`grok`、`deepseek` 或 `kimi`。OpenAI 使用 Responses API；
+`openai`、`gemini`、`grok`、`deepseek`、`kimi` 或 `codex`。OpenAI 使用 Responses API；
 Gemini、Grok、DeepSeek 和 Kimi 使用官方 OpenAI Chat Completions 兼容端点，
 并通过本地显式回放会话历史来继续工具调用。setup 会自动填入各 Provider 的默认
 模型和端点；只有需要覆盖默认值时才设置 `model` 和 `baseURL`。
@@ -333,6 +341,38 @@ codefarmer --provider deepseek run "审查当前仓库"
 codefarmer config set provider gemini --project
 codefarmer setup
 ```
+
+### Codex App Server（ChatGPT 订阅）
+
+Codex Provider 将对话、模型选择、工具执行和上下文交给本机 Codex App Server，
+CodeFarmer 负责工作区入口、会话索引、界面和审批交互。它使用 Codex CLI 的
+ChatGPT 登录，不读取或保存 OpenAI API Key：
+
+```bash
+codefarmer codex login
+codefarmer config set provider codex --project
+codefarmer doctor
+codefarmer
+```
+
+当前 Codex CLI 将 `app-server` 标记为实验功能；协议可能随 CLI 版本变化，
+请保持 Codex CLI 更新。
+
+`codefarmer codex status` 可查看登录账号及 App Server 返回的配额窗口；
+`codefarmer models` 从当前账号可用的模型中读取列表。登录凭据由 Codex 管理。
+Codex 会话 ID 映射到 App Server thread，因此恢复本地会话时会恢复对应的 Codex
+对话。App Server 管理其上下文压缩；`/compact` 和 `codefarmer sessions compact`
+不适用于 Codex 会话。Codex 自己执行的文件修改不产生 CodeFarmer undo 事务，
+可通过 Git 差异查看修改。
+
+Codex TUI 任务串行执行，不使用 CodeFarmer 的持久化后续任务队列；当前任务结束或取消后
+再开始下一项。
+
+App Server 收到 CodeFarmer 的工作区根目录和沙箱策略；`read-only` 与计划模式
+不允许写入，普通写入模式只开放当前工作区并关闭网络访问。App Server 的命令与文件修改
+审批请求会交给 CodeFarmer；推送 Git 或请求网络访问仍需明确确认。
+Codex 的命令由 App Server 执行，不经过 CodeFarmer 内置 `run_command` 工具的
+命令拒绝列表，安全边界以 Codex App Server 沙箱及 CodeFarmer 的审批桥接为准。
 
 推理强度默认使用 `high`，以应对复杂任务；其余默认值偏向节省 token：低详细度正文、
 不生成可见推理摘要、每次模型请求最多 2048 个完成 token、最多 12 个工具轮次，以及每个

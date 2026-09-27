@@ -7,6 +7,7 @@ export const PROVIDER_IDS = [
   'deepseek',
   'kimi',
   'opencode-go',
+  'codex',
 ] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
@@ -194,6 +195,12 @@ export type ProviderEvent =
   // a turn, so the UI can surface a notice to the user.
   | { type: 'compacted'; message: string }
   | { type: 'tool_call'; call: ProviderToolCall }
+  | {
+      type: 'codex_activity';
+      call: ProviderToolCall;
+      status: 'running' | 'succeeded' | 'failed' | 'declined';
+      output?: string;
+    }
   | { type: 'usage'; usage: TokenUsage }
   | {
       type: 'response_completed';
@@ -326,6 +333,8 @@ export interface SessionRecord {
   createdAt: string;
   updatedAt: string;
   previousResponseId?: string;
+  /** Codex App Server thread id; Codex owns its conversation state. */
+  codexThreadId?: string;
   /** ISO timestamp of the last context compaction (`/compact`). */
   compactedAt?: string;
   messages: SessionMessage[];

@@ -16,17 +16,28 @@ approval flow.
 
 ## Approval policies
 
-| Policy          | Reads     | File changes           | Ordinary commands                    |
-| --------------- | --------- | ---------------------- | ------------------------------------ |
-| `ask` (default) | automatic | show diff and ask      | ask before execution                 |
+| Policy          | Reads     | File changes           | Ordinary commands                     |
+| --------------- | --------- | ---------------------- | ------------------------------------- |
+| `ask` (default) | automatic | show diff and ask      | ask before execution                  |
 | `auto`          | automatic | automatic in workspace | automatic if allowed; `git push` asks |
-| `read-only`     | automatic | rejected               | rejected unless classified read-only |
+| `read-only`     | automatic | rejected               | rejected unless classified read-only  |
 
-Dangerous system commands, shell-wrapper bypasses, and Git write operations
-other than `git push` remain blocked in every mode. `git push` always requires
-an explicit interactive confirmation, even under `auto`. In a non-interactive
-process, an operation that requires confirmation fails with exit code `3`;
-CodeFarmer never silently approves it.
+For API providers, dangerous system commands, shell-wrapper bypasses, and Git
+write operations other than `git push` remain blocked in every mode. `git push`
+always requires an explicit interactive confirmation, even under `auto`. In a
+non-interactive process, an operation that requires confirmation fails with
+exit code `3`; CodeFarmer never silently approves it.
+
+The Codex provider delegates commands and file changes to Codex App Server, so
+they do not pass through CodeFarmer's built-in `run_command` validation or patch
+transaction layer. CodeFarmer passes the current workspace root, a read-only or
+workspace-write sandbox policy, and a disabled network setting for normal
+workspace-write turns. App Server command and file-change approval requests are
+bridged to CodeFarmer's approval UI; network-access and Git-push requests require
+explicit confirmation. Unsupported approval request types are declined.
+The actual sandbox enforcement depends on the installed Codex CLI and platform
+configuration. Review the [Codex App Server documentation](https://learn.chatgpt.com/docs/app-server)
+and keep Codex CLI current.
 
 Approval is an application policy, not isolation. In particular, `auto` allows
 an approved executable to perform anything permitted by the current operating
@@ -66,12 +77,14 @@ This reduces accidental disclosure; it does not prevent a process from reading
 other files, using inherited user credentials, accessing the network, or
 starting additional processes.
 
-## No OS-level sandbox
+## Sandbox boundary
 
-CodeFarmer v1 does **not** provide containers, seccomp, Windows restricted
-tokens, filesystem virtualization, or network isolation. Approval dialogs,
-argument validation, environment filtering, and workspace checks are defense
-in depth, not a sandbox.
+CodeFarmer's API-provider runtime does **not** provide containers, seccomp,
+Windows restricted tokens, filesystem virtualization, or network isolation.
+Approval dialogs, argument validation, environment filtering, and workspace
+checks are defense in depth, not a sandbox. The Codex provider delegates to the
+Codex App Server sandbox; CodeFarmer passes workspace and network settings but
+does not implement that sandbox itself.
 
 For higher-risk work, run CodeFarmer inside a container or disposable virtual
 machine with a minimal filesystem mount, no ambient cloud credentials, a
@@ -86,6 +99,13 @@ workspace content, tool calls, and tool results sent to the model therefore
 leave the local machine and may be retained by OpenAI according to the API
 account's data controls and applicable OpenAI terms. Review those controls
 before processing confidential or regulated source code.
+
+The Codex App Server provider uses the signed-in ChatGPT account. Prompts,
+selected workspace content, and tool results are sent through Codex services;
+review the account's ChatGPT data controls and applicable terms before using it
+with confidential or regulated source code. Codex manages its authentication
+and conversation history; deleting the local CodeFarmer session does not delete
+that App Server thread.
 
 Deleting a local CodeFarmer session removes only the local session index and
 audit data. It does not delete a response retained by OpenAI. CodeFarmer v1

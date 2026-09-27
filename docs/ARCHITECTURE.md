@@ -19,7 +19,7 @@ src/
 ├─ cli/        Commander entrypoint, script commands, and legacy rendering
 ├─ tui/        Ink full-screen application, transcript, input, and overlays
 ├─ core/       Agent loop, prompts, sessions, approvals, and undo transactions
-├─ providers/  Provider-neutral contract and OpenAI Responses implementation
+├─ providers/  API providers and the Codex App Server runtime adapter
 ├─ tools/      Workspace files, search, patches, processes, and read-only Git
 └─ infra/      Configuration, paths, persistence, logging, and typed errors
 ```
@@ -34,12 +34,13 @@ src/
   lifecycle events, renders the transcript and approval modal, and dispatches
   local commands such as status, diff, session switching, and undo. It never
   parses human-readable stdout to infer agent state.
-- **Core** owns the model/tool loop and policy. It is the only layer that
-  coordinates provider calls, approvals, tool scheduling, session history,
-  and mutation transactions.
-- **Providers** implement `AgentProvider`. SDK-specific response objects are
-  normalized into text deltas, tool calls, token usage, completion, and error
-  events before they reach the core.
+- **Core** owns the API-provider model/tool loop and policy. It coordinates
+  provider calls, approvals, tool scheduling, session history, and mutation
+  transactions.
+- **Providers** implement `AgentProvider` for API-backed model calls. Codex is
+  a separate `RuntimeRunner` adapter over Codex App Server: the server owns its
+  model/tool loop and thread, while CodeFarmer streams its events, mirrors a
+  local session index, and bridges approval requests.
 - **Tools** receive validated structured arguments and a workspace context.
   Reads may run concurrently; commands and file mutations run serially.
 - **Infrastructure** resolves layered configuration and platform directories,
@@ -59,12 +60,14 @@ sequenceDiagram
     participant TUI
     participant Core as Agent core
     participant Provider
+    participant AppServer as Codex App Server
     participant Tool
     User->>CLI: launch interactive session
     CLI->>TUI: runtime options
     User->>TUI: prompt or local command
+    alt API provider
     TUI->>Core: run turn + effective configuration
-    Core->>Provider: Responses request
+    Core->>Provider: Responses or compatible API request
     Provider-->>Core: text deltas / tool calls
     Core-->>TUI: streamed text and lifecycle events
     Core->>Core: validate and apply approval policy
@@ -74,9 +77,18 @@ sequenceDiagram
     Provider-->>Core: final response + usage + response id
     Core->>TUI: result
     Core->>Core: persist session and audit metadata
+    else Codex provider
+    TUI->>AppServer: turn/start over local stdio JSONL
+    AppServer-->>TUI: text, tool, usage, and turn events
+    AppServer->>TUI: server approval requests
+    TUI->>User: CodeFarmer approval prompt
+    User-->>TUI: approval decision
+    TUI-->>AppServer: decision response
+    TUI->>TUI: persist local session index and thread id
+    end
 ```
 
-The OpenAI provider uses the Responses API with `store: true` by default.
+The OpenAI API provider uses the Responses API with `store: true` by default.
 Subsequent turns pass `previous_response_id`, which preserves server-side
 reasoning state without coupling the core to OpenAI response types. The loop
 stops after `maxAgentTurns` (12 by default), then makes at most one tool-free
@@ -90,9 +102,14 @@ configuration precedence and passed to the OpenAI SDK constructor. Sessions
 persist that normalized URL so a stored `previous_response_id` cannot be
 silently resumed against another endpoint.
 
+Codex App Server uses its own thread history and compaction. CodeFarmer persists
+the App Server thread ID alongside its local session record; Codex-native file
+changes do not create CodeFarmer patch transactions and therefore are not
+reverted by `undo`.
+
 ## Session orchestration
 
-Interactive turns are owned by `SessionOrchestrator`, which wraps
+API-provider interactive turns are owned by `SessionOrchestrator`, which wraps
 `AgentRunner`. It serializes one session's work, accepts follow-up prompts while
 the active turn is running, and emits a provider-neutral event stream for the
 TUI, CLI renderers, logs, and integrations. The pending queue is bounded to
@@ -104,6 +121,7 @@ Queued TUI turns and todo items are saved with the session. A restored queue sta
 replayed. The orchestrator also exposes process-local `AgentHooks` for before/after turn
 and tool integrations. Hooks are observers or explicit veto points inside the
 runtime; CodeFarmer never executes arbitrary workspace hook scripts implicitly.
+Codex App Server currently runs one turn at a time and does not use this queue.
 
 ## Layered permissions
 

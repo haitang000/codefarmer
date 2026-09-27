@@ -33,6 +33,7 @@ export async function readStoredApiKey(appPaths?: CredentialsPaths): Promise<str
 }
 
 function credentialField(provider: ProviderId): Exclude<keyof CredentialsFile, 'customApiKeys'> {
+  if (provider === 'codex') throw new Error('Codex App Server credentials are managed by Codex');
   return `${provider}ApiKey`;
 }
 
@@ -42,7 +43,10 @@ export async function readStoredProviderApiKey(
 ): Promise<string | undefined> {
   try {
     const stored = await readJsonFileIfExists(getCredentialsPath(appPaths), credentialsSchema);
-    if (isProviderId(provider)) return stored?.[credentialField(provider)];
+    if (isProviderId(provider)) {
+      if (provider === 'codex') return undefined;
+      return stored?.[credentialField(provider)];
+    }
     return stored?.customApiKeys?.[provider];
   } catch {
     return undefined;
@@ -59,6 +63,11 @@ export async function saveProviderApiKey(
   appPaths?: CredentialsPaths,
 ): Promise<string> {
   const trimmed = apiKey.trim();
+  if (provider === 'codex') {
+    throw new Error(
+      'Codex App Server authentication is managed by Codex; run codefarmer codex login',
+    );
+  }
   const credentialsPath = getCredentialsPath(appPaths);
   const existing = (await readJsonFileIfExists(credentialsPath, credentialsSchema)) ?? {};
   const next = isProviderId(provider)
@@ -97,8 +106,10 @@ export async function resolveProviderApiKey(
     deepseek: ['DEEPSEEK_API_KEY'],
     kimi: ['MOONSHOT_API_KEY', 'KIMI_API_KEY'],
     'opencode-go': ['OPENCODE_API_KEY'],
+    codex: [],
   };
   if (isProviderId(provider)) {
+    if (provider === 'codex') return undefined;
     for (const name of environmentNames[provider]) {
       const value = process.env[name];
       if (value && value.trim().length > 0) return value;

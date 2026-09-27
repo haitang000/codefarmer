@@ -25,7 +25,7 @@ structured logs, and Vitest covers the runtime.
 ## Requirements
 
 - Node.js 22 or newer
-- An API key for OpenAI, Google Gemini, xAI Grok, DeepSeek, or Kimi
+- An API key for OpenAI, Google Gemini, xAI Grok, DeepSeek, or Kimi; alternatively, a Codex CLI signed in to ChatGPT
 - Git (optional) for read-only Git status, diff, log, and show tools
 - pnpm when building from source
 
@@ -55,7 +55,12 @@ $env:OPENAI_API_KEY = "sk-..."
 `OPENAI_API_KEY`, `GEMINI_API_KEY` (or `GOOGLE_API_KEY`), `XAI_API_KEY` (or
 `GROK_API_KEY`), `DEEPSEEK_API_KEY`, and `MOONSHOT_API_KEY` (or `KIMI_API_KEY`)
 are supported. The setup wizard is the shortest path: it only asks for the
-chosen provider's API key.
+chosen provider's API key when it uses API-key authentication.
+
+The **Codex App Server (ChatGPT plan)** provider does not need an API key. Install
+the Codex CLI, make sure `codex` is on `PATH`, and run `codefarmer codex login`
+to sign in through a browser. CodeFarmer starts the local App Server and connects
+over its official stdio JSONL protocol.
 
 For development from this repository:
 
@@ -125,8 +130,11 @@ parent Git repository.
 | `codefarmer config set --project <key> <value>` | Write a project setting                                                        |
 | `codefarmer config path`                        | Print the configuration path                                                   |
 | `codefarmer language [language]`                | Show or persist the interface and agent response language                      |
-| `codefarmer doctor`                             | Check Node, key, config, permissions, optional Git, and API connectivity       |
-| `codefarmer models`                             | List models for the active provider, synced from the upstream `/models` API    |
+| `codefarmer doctor`                             | Check Node, credentials, config, permissions, optional Git, and provider link  |
+| `codefarmer models`                             | List active provider models (Codex reads them from App Server)                 |
+| `codefarmer codex login`                        | Sign in to ChatGPT in a browser for the local Codex App Server                 |
+| `codefarmer codex status`                       | Show ChatGPT sign-in and Codex quota windows                                   |
+| `codefarmer codex logout`                       | Sign out of Codex / ChatGPT                                                    |
 | `codefarmer completions <shell>`                | Print a bash, zsh, or fish completion script                                   |
 
 Use `codefarmer <command> --help` for command-specific arguments. Global
@@ -203,7 +211,7 @@ with `/plan [on|off]` and `/auto [on|off]`.
 | `/push`                      | Push the current branch to its configured upstream after confirmation                              |
 | `/undo`                      | Undo the most recent eligible file mutation                                                        |
 | `/todos`                     | Show the agent's current todo list (maintained with the `todo_write` tool)                         |
-| `/queue [continue\|clear]`    | Review pending tasks, explicitly continue the queue, or clear it                                   |
+| `/queue [continue\|clear]`   | Review pending tasks, explicitly continue the queue, or clear it                                   |
 | `/new`                       | Start a fresh session                                                                              |
 | `/cancel`                    | Cancel the active request or tool                                                                  |
 | `/quit`                      | Leave the TUI and restore the terminal                                                             |
@@ -350,12 +358,14 @@ the same behaviour.
 with the same public list prices as `stats`. Once a session's cumulative
 estimated cost reaches the budget, new turns are refused with a
 `BUDGET_EXCEEDED` error until the budget is raised or a new session starts;
-the single turn that crosses the boundary still finishes. Set it with
+the single turn that crosses the boundary still finishes. This applies to API
+providers. Codex uses ChatGPT plan quotas rather than API list-price billing, so
+`budgetUsd` does not limit Codex sessions. Set API-provider budgets with
 `--budget <usd>`, `CODEFARMER_BUDGET_USD`, or the `budgetUsd` config key.
 
 ## Providers
 
-Choose `openai`, `gemini`, `grok`, `deepseek`, `kimi`, or `opencode-go` with `--provider`,
+Choose `openai`, `gemini`, `grok`, `deepseek`, `kimi`, `opencode-go`, or `codex` with `--provider`,
 `CODEFARMER_PROVIDER`, the setup wizard, or configuration. OpenAI uses the
 Responses API. Gemini, Grok, DeepSeek, Kimi, and OpenCode Go use their official OpenAI
 Chat Completions-compatible endpoints with explicit local conversation replay
@@ -367,6 +377,42 @@ codefarmer --provider deepseek run "review this repository"
 codefarmer config set provider gemini --project
 codefarmer setup
 ```
+
+### Codex App Server (ChatGPT plan)
+
+The Codex provider delegates conversations, model selection, tool execution,
+and context management to the local Codex App Server. CodeFarmer handles the
+workspace entry point, local session index, UI, and approval prompts. It uses
+the Codex CLI's ChatGPT sign-in and does not read or store an OpenAI API key:
+
+```bash
+codefarmer codex login
+codefarmer config set provider codex --project
+codefarmer doctor
+codefarmer
+```
+
+The installed Codex CLI currently labels `app-server` experimental. The
+protocol may change across CLI releases, so keep Codex CLI updated.
+
+`codefarmer codex status` shows the signed-in account and quota windows returned
+by App Server. `codefarmer models` lists models available to that account.
+Codex manages its own login credentials and conversation compaction. A local
+CodeFarmer session maps to an App Server thread, so resuming it resumes the
+corresponding Codex conversation. `/compact` and `codefarmer sessions compact`
+are unavailable for Codex sessions. File edits made by Codex do not create
+CodeFarmer undo transactions; inspect them with Git diff.
+
+Codex TUI turns run serially and do not use CodeFarmer's persisted follow-up
+queue; wait for the active turn or cancel it before starting another.
+
+App Server receives the CodeFarmer workspace root and sandbox policy. Read-only
+and plan modes disallow writes; normal write mode permits the current workspace
+and disables network access. App Server command and file-change approval
+requests are bridged to CodeFarmer; Git pushes and network access require explicit
+confirmation. Codex commands run through App Server rather than CodeFarmer's
+built-in `run_command` blocklist, so the security boundary is the Codex App
+Server sandbox and CodeFarmer approval bridge.
 
 Reasoning defaults to `high` for deeper thinking on hard tasks. The remaining
 defaults favor efficiency: low text verbosity, no visible reasoning summary, a

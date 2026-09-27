@@ -8,7 +8,8 @@ import {
   type ApprovalDecision,
   type ApprovalRequest,
 } from '../core/approval.js';
-import { AgentRunner } from '../core/agent.js';
+import { AgentRunner, type RunTurnOptions } from '../core/agent.js';
+import type { AgentRunResult } from '../core/runtime-types.js';
 import { SessionOrchestrator } from '../core/session-orchestrator.js';
 import { PermissionStore } from '../core/permissions.js';
 import type { AgentHooks } from '../core/hooks.js';
@@ -23,6 +24,7 @@ import { createLogger } from '../infra/logger.js';
 import { canonicalWorkspace } from '../infra/paths.js';
 import { OpenAIProvider } from '../providers/openai.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible.js';
+import { CodexAppServerClient, CodexAppServerRunner } from '../providers/codex-app-server.js';
 import { isProviderId, providerPreset } from '../providers/catalog.js';
 import { createToolRegistry } from '../tools/registry.js';
 import { expandPathMentions } from '../tools/mentions.js';
@@ -68,11 +70,18 @@ export interface BaseRuntime {
 
 export interface AgentRuntime extends BaseRuntime {
   session?: SessionRecord;
-  runner: AgentRunner;
+  runner: RuntimeRunner;
   orchestrator?: SessionOrchestrator;
   permissions?: PermissionStore;
   /** Session-scoped todo list maintained by the agent (todo_write) and shown by /todos. */
   todos: TodoStore;
+}
+
+export interface RuntimeRunner {
+  run(prompt: string, options?: RunTurnOptions): Promise<AgentRunResult>;
+  compact?: AgentRunner['compact'];
+  listModels?(): Promise<readonly string[]>;
+  dispose?(): Promise<void>;
 }
 
 export interface AgentRuntimeOptions {
@@ -196,7 +205,7 @@ export async function createAgentRuntime(
         : undefined
       : await base.sessions.get(agentOptions.sessionId);
   if (session !== undefined) await base.sessions.recoverInterrupted(session);
-  const config = resolveSessionConfig(
+  let config = resolveSessionConfig(
     base.config,
     options,
     session,
@@ -211,10 +220,35 @@ export async function createAgentRuntime(
           (endpoint) => endpoint.id === config.provider && endpoint.apiKeyOptional === true,
         )
       : undefined;
-  if (apiKey === undefined && keylessEndpoint === undefined) {
+  if (config.provider !== 'codex' && apiKey === undefined && keylessEndpoint === undefined) {
     throw new AuthenticationError(
       `缺少 ${config.provider} 的 API Key（${providerPreset(config.provider, config.customEndpoints).environmentVariables[0] ?? '对应环境变量'}）；请设置对应环境变量，或运行 codefarmer setup 保存密钥到本地凭据`,
     );
+  }
+  let codexClient: CodexAppServerClient | undefined;
+  if (config.provider === 'codex') {
+    codexClient = await CodexAppServerClient.connect();
+    try {
+      const account = await codexClient.account();
+      if (account?.type !== 'chatgpt') {
+        throw new AuthenticationError(
+          'Codex 尚未使用 ChatGPT 账号登录；请运行 `codefarmer codex login` 并确认该账号具有可用的 ChatGPT 计划。',
+        );
+      }
+      if (config.model === 'codex-default') {
+        const models = await codexClient.listModels();
+        const defaultModel = models[0];
+        if (defaultModel === undefined) {
+          throw new ConfigError(
+            'Codex App Server 未返回可用模型；请检查 ChatGPT 账号或 Codex 配置。',
+          );
+        }
+        config = { ...config, model: defaultModel };
+      }
+    } catch (error) {
+      await codexClient.close();
+      throw error;
+    }
   }
   const resolvedApiKey = apiKey ?? 'codefarmer-local-endpoint';
   const runtimeBase = config === base.config ? base : { ...base, config };
@@ -227,7 +261,8 @@ export async function createAgentRuntime(
     if (history) await runtimeBase.sessions.save(session);
   }
   const permissions = await PermissionStore.create(runtimeBase.workspace);
-  const todos = new TodoStore(session?.execution?.todos ?? [],
+  const todos = new TodoStore(
+    session?.execution?.todos ?? [],
     session === undefined || !history
       ? undefined
       : async (items) => {
@@ -245,6 +280,30 @@ export async function createAgentRuntime(
   const askUser =
     agentOptions.askUser ??
     (agentOptions.interactive !== false && process.stdin.isTTY ? promptForAskUser : undefined);
+  if (codexClient !== undefined) {
+    const runner = new CodexAppServerRunner({
+      client: codexClient,
+      config,
+      workspace: runtimeBase.workspace,
+      ...(history ? { sessionStore: runtimeBase.sessions } : {}),
+      history,
+      ...(runtimeBase.skills === undefined ? {} : { skills: runtimeBase.skills }),
+      decideApproval: (request) => approval.decide(request),
+      hasPermission: (request) => permissions.has(request),
+      applyPermission: (request, decision) => permissions.apply(request, decision),
+    });
+    runtimeBase.logger.info(
+      { sessionId: session?.id, history, provider: 'codex', model: config.model },
+      'Codex App Server runtime initialized',
+    );
+    return {
+      ...runtimeBase,
+      ...(session === undefined ? {} : { session }),
+      runner,
+      permissions,
+      todos,
+    };
+  }
   const tools = await createToolRegistry({
     workspace: runtimeBase.workspace,
     maxFileBytes: config.maxFileSizeBytes,
