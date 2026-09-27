@@ -6,6 +6,13 @@ import { TuiApp } from './App.js';
 import { createTuiRuntimeFactory, TuiInteractionBridge } from './runtime.js';
 import { formatTerminalTitle, normaliseSessionTitle, TUI_PRODUCT_TITLE } from './title.js';
 
+const EXIT_MESSAGES = ['Bye!', '再见！', '下次见！', 'See you next time!'] as const;
+
+function printExitMessage(): void {
+  const index = Math.floor(Math.random() * EXIT_MESSAGES.length);
+  process.stdout.write(`${EXIT_MESSAGES[index] ?? 'Bye!'}\n`);
+}
+
 /**
  * Set the terminal window title (OSC 0: title + icon name). No-op when
  * stdout is not a TTY so piped output is never polluted by escape codes.
@@ -64,5 +71,6 @@ export async function runTui(
   } finally {
     instance.unmount();
     instance.cleanup();
+    printExitMessage();
   }
 }
