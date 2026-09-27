@@ -51,6 +51,7 @@ import { modelsForProvider } from '../providers/catalog.js';
 import { CodexAppServerClient } from '../providers/codex-app-server.js';
 import { syncProviderModels } from '../providers/model-sync.js';
 import { resolveProviderApiKey } from '../infra/credentials.js';
+import { fetchOpenCodeGoLimitDashboard, limitProviderFor, OpenCodeGoUsageError } from './limits.js';
 import { DiffView, MarkdownLine, MarkdownView, diffLineColor } from './markdown.js';
 import {
   extractCommitMessage,
@@ -159,12 +160,12 @@ function readLimitWindow(
   if (duration !== undefined && duration > 0) {
     if (duration % 1440 === 0) {
       const days = duration / 1440;
-      label = zh ? `${days} 天窗口` : `${days}-day window`;
+      label = zh ? `${String(days)} 天窗口` : `${String(days)}-day window`;
     } else if (duration % 60 === 0) {
       const hours = duration / 60;
-      label = zh ? `${hours} 小时窗口` : `${hours}-hour window`;
+      label = zh ? `${String(hours)} 小时窗口` : `${String(hours)}-hour window`;
     } else {
-      label = zh ? `${duration} 分钟窗口` : `${duration}-minute window`;
+      label = zh ? `${String(duration)} 分钟窗口` : `${String(duration)}-minute window`;
     }
   }
 
@@ -195,7 +196,7 @@ function limitDashboardLines(
   language: Language,
 ): LimitDashboardLine[] {
   const zh = language === 'zh-CN';
-  const title = zh ? 'ChatGPT 订阅额度' : 'ChatGPT plan quota';
+  const title = dashboard.title ?? (zh ? 'ChatGPT 订阅额度' : 'ChatGPT plan quota');
   const lines: LimitDashboardLine[] = [
     {
       kind: 'text',
@@ -212,14 +213,20 @@ function limitDashboardLines(
 
   lines.push({
     kind: 'text',
-    text: zh ? '可用额度以彩色条显示，灰色部分为已使用' : 'Colored bar = available quota; gray = used',
+    text: zh
+      ? '可用额度以彩色条显示，灰色部分为已使用'
+      : 'Colored bar = available quota; gray = used',
     tone: 'gray',
     dim: true,
   });
   const barWidth = Math.max(4, Math.min(18, width - 36));
   for (const bucket of dashboard.buckets) {
     lines.push({ kind: 'text', text: `◆ ${bucket.name}`, tone: 'magenta', bold: true });
-    const windows: Array<TuiLimitWindow | undefined> = [bucket.primary, bucket.secondary];
+    const windows: (TuiLimitWindow | undefined)[] = [
+      bucket.primary,
+      bucket.secondary,
+      bucket.tertiary,
+    ];
     let hasWindow = false;
     for (const window of windows) {
       if (window === undefined) continue;
@@ -283,17 +290,28 @@ function LimitDashboardLineView({
     return (
       <Text wrap="truncate-end">
         {'    '}
-        <Text color={tone} bold>{'█'.repeat(filled)}</Text>
-        <Text color="gray" dimColor>{'░'.repeat(line.width - filled)}</Text>
+        <Text color={tone} bold>
+          {'█'.repeat(filled)}
+        </Text>
+        <Text color="gray" dimColor>
+          {'░'.repeat(line.width - filled)}
+        </Text>
         <Text color={tone} bold>
           {`  ${line.remainingPercent.toFixed(line.remainingPercent % 1 === 0 ? 0 : 1)}% ${zh ? '剩余' : 'left'}`}
         </Text>
-        <Text dimColor>{` · ${line.usedPercent.toFixed(line.usedPercent % 1 === 0 ? 0 : 1)}% ${zh ? '已用' : 'used'}`}</Text>
+        <Text
+          dimColor
+        >{` · ${line.usedPercent.toFixed(line.usedPercent % 1 === 0 ? 0 : 1)}% ${zh ? '已用' : 'used'}`}</Text>
       </Text>
     );
   }
   return (
-    <Text color={line.tone} bold={line.bold} dimColor={line.dim} wrap="truncate-end">
+    <Text
+      color={line.tone}
+      {...(line.bold === undefined ? {} : { bold: line.bold })}
+      {...(line.dim === undefined ? {} : { dimColor: line.dim })}
+      wrap="truncate-end"
+    >
       {line.text}
     </Text>
   );
@@ -760,8 +778,8 @@ export function WelcomePanel({
         </Text>
         <Text color={SECONDARY_TEXT_COLOR} wrap="truncate-end">
           {zh
-            ? '排队跟进 · 分级审批 · 更安静的工作台'
-            : 'Queued follow-ups · Scoped approvals · Quieter workbench'}
+            ? 'ChatGPT 订阅支持 · 剩余额度显示'
+            : 'ChatGPT plan support · Remaining quota display'}
         </Text>
       </Box>
     </Box>
@@ -2925,75 +2943,114 @@ export function TuiApp({
           appendSystem(formatWorkspaceStats(computeWorkspaceStats(sessions)), 'system', 'stats');
         } else if (command.kind === 'limit') {
           const zh = languageRef.current === 'zh-CN';
-          const client = await CodexAppServerClient.connect();
-          try {
-            const account = await client.account();
-            if (account?.type !== 'chatgpt') {
-              appendSystem(
-                zh
-                  ? '当前没有 ChatGPT 订阅登录。请先运行 `codefarmer codex login`。'
-                  : 'No ChatGPT plan is signed in. Run `codefarmer codex login` first.',
-              );
-              return;
+          const provider = limitProviderFor(runtimeRef.current.config.provider);
+          if (provider === 'opencode-go') {
+            try {
+              const apiKey = await resolveProviderApiKey('opencode-go');
+              const dashboard = await fetchOpenCodeGoLimitDashboard(apiKey, languageRef.current);
+              appendSystem(dashboard.title ?? 'OpenCode Go', 'system', 'limit', dashboard);
+            } catch (error) {
+              const status = error instanceof OpenCodeGoUsageError ? error.status : undefined;
+              const kind = error instanceof OpenCodeGoUsageError ? error.kind : undefined;
+              const message =
+                kind === 'missing-key'
+                  ? zh
+                    ? '找不到 OpenCode Go API Key。请配置 OpenCode Go 凭据或设置 OPENCODE_API_KEY。'
+                    : 'OpenCode Go API key not found. Configure OpenCode Go credentials or set OPENCODE_API_KEY.'
+                  : status === 401
+                    ? zh
+                      ? 'OpenCode Go API Key 无效或已失效。'
+                      : 'The OpenCode Go API key is invalid or expired.'
+                    : status === 403
+                      ? zh
+                        ? '此 API Key 没有 OpenCode Go 订阅。'
+                        : 'This API key does not have an OpenCode Go subscription.'
+                      : zh
+                        ? '查询 OpenCode Go 额度失败，请检查网络或稍后重试。'
+                        : 'Could not fetch OpenCode Go quota. Check your connection or try again later.';
+              appendSystem(message, 'error');
             }
+          } else if (provider === 'unsupported') {
+            appendSystem(
+              zh
+                ? '当前 Provider 暂不支持额度查询。'
+                : 'Quota lookup is not supported for the active provider.',
+              'error',
+            );
+          } else {
+            const client = await CodexAppServerClient.connect();
+            try {
+              const account = await client.account();
+              if (account?.type !== 'chatgpt') {
+                appendSystem(
+                  zh
+                    ? '当前没有 ChatGPT 订阅登录。请先运行 `codefarmer codex login`。'
+                    : 'No ChatGPT plan is signed in. Run `codefarmer codex login` first.',
+                );
+                return;
+              }
 
-            const limits = await client.request<Record<string, unknown>>('account/rateLimits/read');
-            const accountPlan = typeof account.planType === 'string' ? account.planType : undefined;
-            const buckets: TuiLimitBucket[] = [];
-            if (isRecord(limits.rateLimitsByLimitId)) {
-              for (const [key, value] of Object.entries(limits.rateLimitsByLimitId)) {
-                if (!isRecord(value)) continue;
+              const limits =
+                await client.request<Record<string, unknown>>('account/rateLimits/read');
+              const accountPlan =
+                typeof account.planType === 'string' ? account.planType : undefined;
+              const buckets: TuiLimitBucket[] = [];
+              if (isRecord(limits.rateLimitsByLimitId)) {
+                for (const [key, value] of Object.entries(limits.rateLimitsByLimitId)) {
+                  if (!isRecord(value)) continue;
+                  const primary = readLimitWindow(
+                    value.primary,
+                    zh ? '短期窗口' : 'Primary window',
+                    languageRef.current,
+                  );
+                  const secondary = readLimitWindow(
+                    value.secondary,
+                    zh ? '长期窗口' : 'Secondary window',
+                    languageRef.current,
+                  );
+                  if (primary === undefined && secondary === undefined) continue;
+                  buckets.push({
+                    name: typeof value.limitName === 'string' ? value.limitName : key,
+                    ...(primary === undefined ? {} : { primary }),
+                    ...(secondary === undefined ? {} : { secondary }),
+                  });
+                }
+              } else if (isRecord(limits.rateLimits)) {
                 const primary = readLimitWindow(
-                  value.primary,
+                  limits.rateLimits.primary,
                   zh ? '短期窗口' : 'Primary window',
                   languageRef.current,
                 );
                 const secondary = readLimitWindow(
-                  value.secondary,
+                  limits.rateLimits.secondary,
                   zh ? '长期窗口' : 'Secondary window',
                   languageRef.current,
                 );
-                if (primary === undefined && secondary === undefined) continue;
-                buckets.push({
-                  name: typeof value.limitName === 'string' ? value.limitName : key,
-                  ...(primary === undefined ? {} : { primary }),
-                  ...(secondary === undefined ? {} : { secondary }),
-                });
+                if (primary !== undefined || secondary !== undefined) {
+                  buckets.push({
+                    name:
+                      typeof limits.rateLimits.limitName === 'string'
+                        ? limits.rateLimits.limitName
+                        : 'ChatGPT',
+                    ...(primary === undefined ? {} : { primary }),
+                    ...(secondary === undefined ? {} : { secondary }),
+                  });
+                }
               }
-            } else if (isRecord(limits.rateLimits)) {
-              const primary = readLimitWindow(
-                limits.rateLimits.primary,
-                zh ? '短期窗口' : 'Primary window',
-                languageRef.current,
+
+              const dashboard: TuiLimitDashboard = {
+                buckets,
+                ...(accountPlan === undefined ? {} : { plan: accountPlan }),
+              };
+              appendSystem(
+                zh ? 'ChatGPT 订阅额度' : 'ChatGPT plan quota',
+                'system',
+                'limit',
+                dashboard,
               );
-              const secondary = readLimitWindow(
-                limits.rateLimits.secondary,
-                zh ? '长期窗口' : 'Secondary window',
-                languageRef.current,
-              );
-              if (primary !== undefined || secondary !== undefined) {
-                buckets.push({
-                  name:
-                    typeof limits.rateLimits.limitName === 'string'
-                      ? limits.rateLimits.limitName
-                      : 'ChatGPT',
-                  ...(primary === undefined ? {} : { primary }),
-                  ...(secondary === undefined ? {} : { secondary }),
-                });
-              }
+            } finally {
+              await client.close();
             }
-            const dashboard: TuiLimitDashboard = {
-              buckets,
-              ...(accountPlan === undefined ? {} : { plan: accountPlan }),
-            };
-            appendSystem(
-              zh ? 'ChatGPT 订阅额度' : 'ChatGPT plan quota',
-              'system',
-              'limit',
-              dashboard,
-            );
-          } finally {
-            await client.close();
           }
         } else if (command.kind === 'context') {
           const active = runtimeRef.current;

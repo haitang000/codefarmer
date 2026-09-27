@@ -56,19 +56,53 @@ function mockRuntime(): AgentRuntime {
 }
 
 describe('TUI rendering', () => {
+  it('renders the OpenCode Go dashboard title and all three quota windows', () => {
+    const output = renderToString(
+      <EntryView
+        entry={{
+          id: 'opencode-go-limit',
+          kind: 'system',
+          content: 'OpenCode Go quota',
+          display: 'limit',
+          limit: {
+            title: 'OpenCode Go quota',
+            buckets: [
+              {
+                name: 'OpenCode Go',
+                primary: { label: 'Rolling 5 hours', usedPercent: 12 },
+                secondary: { label: 'Weekly', usedPercent: 34 },
+                tertiary: { label: 'Monthly', usedPercent: 56 },
+              },
+            ],
+          },
+        }}
+        width={100}
+      />,
+      { columns: 100 },
+    );
+
+    expect(output).toContain('OpenCode Go quota');
+    expect(output).toContain('Rolling 5 hours');
+    expect(output).toContain('Weekly');
+    expect(output).toContain('Monthly');
+    expect(output).toContain('88% left');
+  });
+
   it('shows saved pending work and interrupted turns when a session is reopened', () => {
     const runtime = mockRuntime();
     const session = runtime.session;
     if (session === undefined) throw new Error('missing session fixture');
     session.execution = {
       todos: [{ content: 'Inspect', status: 'pending' }],
-      queuedTurns: [{
-        id: 'queued-1',
-        prompt: 'Run tests',
-        mode: 'code',
-        skills: [],
-        createdAt: new Date(0).toISOString(),
-      }],
+      queuedTurns: [
+        {
+          id: 'queued-1',
+          prompt: 'Run tests',
+          mode: 'code',
+          skills: [],
+          createdAt: new Date(0).toISOString(),
+        },
+      ],
       interruptedTurn: {
         turn: {
           id: 'interrupted-1',
@@ -102,7 +136,7 @@ describe('TUI rendering', () => {
     expect(output).toContain('QUICK START');
     expect(output).toContain('01  /init');
     expect(output).toContain('03  /help');
-    expect(output).toContain('Queued follow-ups · Scoped approvals · Quieter workbench');
+    expect(output).toContain('ChatGPT plan support · Remaining quota display');
   });
 
   it('stacks the welcome panel sections in a narrow terminal', () => {

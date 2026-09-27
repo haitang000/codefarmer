@@ -193,7 +193,7 @@ with `/plan [on|off]` and `/auto [on|off]`.
 | `/help`                      | Show local commands                                                                                |
 | `/init`                      | Inspect the workspace and create or update `AGENT.md`                                              |
 | `/status`                    | Show session, workspace, Git, and runtime                                                          |
-| `/limit`                     | Show remaining ChatGPT plan quota and reset times                                                   |
+| `/limit`                     | Show quota and reset times for the active supported provider (Codex or OpenCode Go)                |
 | `/context`                   | Show context messages and token usage                                                              |
 | `/compact`                   | Compress early messages of the current session into a summary (suggested on long sessions)         |
 | `/export [json\|PATH]`       | Export the current session to a Markdown (default) or JSON file in the workspace                   |

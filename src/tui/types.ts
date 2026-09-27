@@ -74,9 +74,11 @@ export interface TuiLimitBucket {
   name: string;
   primary?: TuiLimitWindow;
   secondary?: TuiLimitWindow;
+  tertiary?: TuiLimitWindow;
 }
 
 export interface TuiLimitDashboard {
+  title?: string;
   plan?: string;
   buckets: TuiLimitBucket[];
   emptyMessage?: string;
@@ -129,7 +131,7 @@ const TUI_HELP_EN = [
   '  Shift+Tab       cycle CODE, PLAN, and AUTO modes',
   '  /config     show the effective configuration',
   'DEBUG',
-  '  /limit      show remaining ChatGPT plan quota',
+  '  /limit      show quota for the active supported provider',
   '  /context    show context and token usage',
   '  /stats      show usage charts and estimated cost',
   '  /effort     open the reasoning effort picker (←/→ + Enter)',
@@ -172,7 +174,7 @@ const TUI_HELP_ZH = [
   '  Shift+Tab       循环切换 CODE、PLAN、AUTO 模式',
   '  /config     显示生效配置',
   '调试',
-  '  /limit      查询 ChatGPT 订阅剩余额度',
+  '  /limit      查询当前支持的 Provider 额度',
   '  /context    显示上下文和 Token 用量',
   '  /stats      显示用量图表和估算费用',
   '  /effort     打开推理强度选择器（←/→ + Enter）',
