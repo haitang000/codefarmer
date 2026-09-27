@@ -110,7 +110,7 @@ export class CodexAppServerClient {
     const client = new CodexAppServerClient(child);
     try {
       await client.request('initialize', {
-        clientInfo: { name: 'codefarmer', title: 'CodeFarmer', version: '0.2.0-beta2' },
+        clientInfo: { name: 'codefarmer', title: 'CodeFarmer', version: '0.2.0' },
         capabilities: { experimentalApi: true },
       });
       client.notify('initialized', {});

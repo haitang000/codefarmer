@@ -4,7 +4,7 @@ Project-specific guidance for coding agents working in this repository.
 
 ## Project Overview
 
-CodeFarmer is a safe, interactive coding-agent CLI (v0.2.0-beta2, MIT) powered by API
+CodeFarmer is a safe, interactive coding-agent CLI (v0.2.0, MIT) powered by API
 providers (OpenAI, Google Gemini, xAI Grok, DeepSeek, and Kimi) plus the local
 Codex App Server runtime. OpenAI defaults to the Responses API with
 `gpt-5.6-sol`; the other API providers go through an OpenAI-compatible endpoint.

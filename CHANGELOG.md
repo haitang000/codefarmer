@@ -4,6 +4,18 @@ All notable changes to CodeFarmer are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the structure recommended by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] - 2026-09-27
+
+### Added
+
+- Quota dashboards show usage windows, remaining limits, and reset times for ChatGPT plans
+  and OpenCode Go. The `/limit` command opens the dashboard for supported providers.
+- The TUI prints a random farewell when it exits.
+
+### Fixed
+
+- Codex App Server ChatGPT plan mode uses the current named permission profiles.
+
 ## [0.2.0-beta2] - 2026-09-27
 
 ### Fixed
