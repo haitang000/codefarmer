@@ -57,10 +57,29 @@ export interface TranscriptEntry {
   kind: TranscriptEntryKind;
   content: string;
   /** Optional renderer hint for structured local command output. */
-  display?: 'stats' | 'diff';
+  display?: 'stats' | 'diff' | 'limit';
+  limit?: TuiLimitDashboard;
   tool?: ToolView;
   /** 助手消息的推理摘要（思考过程），Ctrl+O 切换显示。 */
   reasoning?: string;
+}
+
+export interface TuiLimitWindow {
+  label: string;
+  usedPercent?: number;
+  resetsAt?: number;
+}
+
+export interface TuiLimitBucket {
+  name: string;
+  primary?: TuiLimitWindow;
+  secondary?: TuiLimitWindow;
+}
+
+export interface TuiLimitDashboard {
+  plan?: string;
+  buckets: TuiLimitBucket[];
+  emptyMessage?: string;
 }
 
 export interface ApprovalView {

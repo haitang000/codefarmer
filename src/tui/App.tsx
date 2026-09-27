@@ -79,6 +79,9 @@ import {
   type ToolView,
   type ToolViewStatus,
   type TranscriptEntry,
+  type TuiLimitBucket,
+  type TuiLimitDashboard,
+  type TuiLimitWindow,
   type TuiCommand,
   type TuiToolEvent,
 } from './types.js';
@@ -141,11 +144,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function formatLimitWindow(
+function readLimitWindow(
   window: unknown,
   fallbackLabel: string,
   language: Language,
-): string | undefined {
+): TuiLimitWindow | undefined {
   if (!isRecord(window)) return undefined;
   const zh = language === 'zh-CN';
   const duration =
@@ -165,31 +168,155 @@ function formatLimitWindow(
     }
   }
 
-  const used =
+  const usedPercent =
     typeof window.usedPercent === 'number' && Number.isFinite(window.usedPercent)
       ? window.usedPercent
       : undefined;
-  const remaining =
-    used === undefined ? undefined : Math.min(100, Math.max(0, 100 - used));
-  const remainingLabel =
-    remaining === undefined
-      ? zh ? '剩余比例不可用' : 'remaining percentage unavailable'
-      : zh
-        ? `剩余 ${remaining.toFixed(remaining % 1 === 0 ? 0 : 1)}%`
-        : `${remaining.toFixed(remaining % 1 === 0 ? 0 : 1)}% remaining`;
   const resetAt =
     typeof window.resetsAt === 'number' && Number.isFinite(window.resetsAt)
       ? window.resetsAt
       : undefined;
-  const resetDate = resetAt === undefined ? undefined : new Date(resetAt * 1000);
-  const resetLabel =
-    resetDate === undefined || Number.isNaN(resetDate.getTime())
-      ? ''
-      : zh
-        ? `，重置于 ${resetDate.toLocaleString('zh-CN')}`
-        : ` · resets ${resetDate.toLocaleString('en-US')}`;
+  return {
+    label,
+    ...(usedPercent === undefined ? {} : { usedPercent }),
+    ...(resetAt === undefined ? {} : { resetsAt: resetAt }),
+  };
+}
 
-  return `  ${label}  ${remainingLabel}${resetLabel}`;
+type LimitLineTone = 'cyan' | 'green' | 'yellow' | 'red' | 'magenta' | 'gray';
+
+type LimitDashboardLine =
+  | { kind: 'text'; text: string; tone: LimitLineTone; bold?: boolean; dim?: boolean }
+  | { kind: 'bar'; remainingPercent: number; usedPercent: number; width: number };
+
+function limitDashboardLines(
+  dashboard: TuiLimitDashboard,
+  width: number,
+  language: Language,
+): LimitDashboardLine[] {
+  const zh = language === 'zh-CN';
+  const title = zh ? 'ChatGPT 订阅额度' : 'ChatGPT plan quota';
+  const lines: LimitDashboardLine[] = [
+    {
+      kind: 'text',
+      text: `${title}${dashboard.plan === undefined ? '' : `  ·  ${dashboard.plan}`}`,
+      tone: 'cyan',
+      bold: true,
+    },
+  ];
+
+  if (dashboard.emptyMessage !== undefined) {
+    lines.push({ kind: 'text', text: dashboard.emptyMessage, tone: 'yellow' });
+    return lines;
+  }
+
+  lines.push({
+    kind: 'text',
+    text: zh ? '可用额度以彩色条显示，灰色部分为已使用' : 'Colored bar = available quota; gray = used',
+    tone: 'gray',
+    dim: true,
+  });
+  const barWidth = Math.max(4, Math.min(18, width - 36));
+  for (const bucket of dashboard.buckets) {
+    lines.push({ kind: 'text', text: `◆ ${bucket.name}`, tone: 'magenta', bold: true });
+    const windows: Array<TuiLimitWindow | undefined> = [bucket.primary, bucket.secondary];
+    let hasWindow = false;
+    for (const window of windows) {
+      if (window === undefined) continue;
+      hasWindow = true;
+      lines.push({ kind: 'text', text: `  ${window.label}`, tone: 'gray' });
+      if (window.usedPercent !== undefined) {
+        const usedPercent = Math.min(100, Math.max(0, window.usedPercent));
+        const remainingPercent = 100 - usedPercent;
+        lines.push({ kind: 'bar', remainingPercent, usedPercent, width: barWidth });
+      } else {
+        lines.push({
+          kind: 'text',
+          text: zh ? '    剩余比例不可用' : '    Remaining percentage unavailable',
+          tone: 'yellow',
+        });
+      }
+      if (window.resetsAt !== undefined) {
+        const resetDate = new Date(window.resetsAt * 1000);
+        if (!Number.isNaN(resetDate.getTime())) {
+          lines.push({
+            kind: 'text',
+            text: zh
+              ? `    ↻ 重置于 ${resetDate.toLocaleString('zh-CN')}`
+              : `    ↻ Resets ${resetDate.toLocaleString('en-US')}`,
+            tone: 'gray',
+            dim: true,
+          });
+        }
+      }
+    }
+    if (!hasWindow) {
+      lines.push({
+        kind: 'text',
+        text: zh ? '  没有窗口额度数据' : '  No quota window data',
+        tone: 'yellow',
+      });
+    }
+  }
+  if (dashboard.buckets.length === 0) {
+    lines.push({
+      kind: 'text',
+      text: zh ? '当前没有可用的额度信息。' : 'No quota information is currently available.',
+      tone: 'yellow',
+    });
+  }
+  return lines;
+}
+
+function LimitDashboardLineView({
+  line,
+  language,
+}: {
+  line: LimitDashboardLine;
+  language: Language;
+}): React.ReactElement {
+  if (line.kind === 'bar') {
+    const tone: LimitLineTone =
+      line.remainingPercent > 50 ? 'green' : line.remainingPercent > 20 ? 'yellow' : 'red';
+    const filled = Math.round((line.remainingPercent / 100) * line.width);
+    const zh = language === 'zh-CN';
+    return (
+      <Text wrap="truncate-end">
+        {'    '}
+        <Text color={tone} bold>{'█'.repeat(filled)}</Text>
+        <Text color="gray" dimColor>{'░'.repeat(line.width - filled)}</Text>
+        <Text color={tone} bold>
+          {`  ${line.remainingPercent.toFixed(line.remainingPercent % 1 === 0 ? 0 : 1)}% ${zh ? '剩余' : 'left'}`}
+        </Text>
+        <Text dimColor>{` · ${line.usedPercent.toFixed(line.usedPercent % 1 === 0 ? 0 : 1)}% ${zh ? '已用' : 'used'}`}</Text>
+      </Text>
+    );
+  }
+  return (
+    <Text color={line.tone} bold={line.bold} dimColor={line.dim} wrap="truncate-end">
+      {line.text}
+    </Text>
+  );
+}
+
+function LimitDashboardView({
+  dashboard,
+  width,
+  language,
+  marginBottom = 0,
+}: {
+  dashboard: TuiLimitDashboard;
+  width: number;
+  language: Language;
+  marginBottom?: number;
+}): React.ReactElement {
+  return (
+    <Box paddingLeft={2} flexDirection="column" marginBottom={marginBottom}>
+      {limitDashboardLines(dashboard, width, language).map((line, index) => (
+        <LimitDashboardLineView key={index} line={line} language={language} />
+      ))}
+    </Box>
+  );
 }
 
 const COMMIT_SUMMARY_PROMPT = `Write a concise Git commit message that summarizes the uncommitted changes in this workspace.
@@ -1197,6 +1324,17 @@ export function EntryView({
     );
   }
 
+  if (entry.display === 'limit' && entry.limit !== undefined) {
+    return (
+      <LimitDashboardView
+        dashboard={entry.limit}
+        width={width}
+        language={language}
+        marginBottom={marginBottom}
+      />
+    );
+  }
+
   if (entry.display === 'stats') {
     return <StatsView content={entry.content} marginBottom={marginBottom} />;
   }
@@ -1298,6 +1436,9 @@ function estimateEntryLines(
       lines += wrapToLines(entry.tool.error, Math.max(1, width - 3)).length;
     }
     return margin + lines;
+  }
+  if (entry.display === 'limit' && entry.limit !== undefined) {
+    return margin + limitDashboardLines(entry.limit, width, 'en').length;
   }
   if (entry.display === 'diff') {
     return (
@@ -1455,6 +1596,10 @@ function ClippedEntryImpl({
         </Text>
       ));
     }
+  } else if (entry.display === 'limit' && entry.limit !== undefined) {
+    takeLines(limitDashboardLines(entry.limit, width, language), (line, index) => (
+      <LimitDashboardLineView key={index} line={line} language={language} />
+    ));
   } else if (entry.display === 'stats') {
     const lines = entry.content.split('\n').flatMap((line) => wrapToLines(line, width));
     takeLines(lines, (line, index) => (
@@ -1495,7 +1640,7 @@ function ClippedEntryImpl({
     <Box
       flexDirection="column"
       marginBottom={trailingGap ? 1 : 0}
-      paddingLeft={entry.kind === 'tool' ? 1 : 0}
+      paddingLeft={entry.display === 'limit' ? 2 : entry.kind === 'tool' ? 1 : 0}
     >
       {rows}
     </Box>
@@ -2079,10 +2224,21 @@ export function TuiApp({
   }, [bridge, handleToolEvent]);
 
   const appendSystem = useCallback(
-    (content: string, kind: 'system' | 'error' = 'system', display?: 'stats' | 'diff'): void => {
+    (
+      content: string,
+      kind: 'system' | 'error' = 'system',
+      display?: TranscriptEntry['display'],
+      limit?: TuiLimitDashboard,
+    ): void => {
       setEntries((previous) => [
         ...previous,
-        { id: id(kind), kind, content, ...(display === undefined ? {} : { display }) },
+        {
+          id: id(kind),
+          kind,
+          content,
+          ...(display === undefined ? {} : { display }),
+          ...(limit === undefined ? {} : { limit }),
+        },
       ]);
     },
     [],
@@ -2783,48 +2939,59 @@ export function TuiApp({
 
             const limits = await client.request<Record<string, unknown>>('account/rateLimits/read');
             const accountPlan = typeof account.planType === 'string' ? account.planType : undefined;
-            const lines = [
-              zh
-                ? `ChatGPT 订阅${accountPlan === undefined ? '' : `：${accountPlan}`}`
-                : `ChatGPT plan${accountPlan === undefined ? '' : `: ${accountPlan}`}`,
-            ];
-            const buckets: Array<[string, Record<string, unknown>]> = [];
+            const buckets: TuiLimitBucket[] = [];
             if (isRecord(limits.rateLimitsByLimitId)) {
               for (const [key, value] of Object.entries(limits.rateLimitsByLimitId)) {
-                if (isRecord(value)) buckets.push([key, value]);
+                if (!isRecord(value)) continue;
+                const primary = readLimitWindow(
+                  value.primary,
+                  zh ? '短期窗口' : 'Primary window',
+                  languageRef.current,
+                );
+                const secondary = readLimitWindow(
+                  value.secondary,
+                  zh ? '长期窗口' : 'Secondary window',
+                  languageRef.current,
+                );
+                if (primary === undefined && secondary === undefined) continue;
+                buckets.push({
+                  name: typeof value.limitName === 'string' ? value.limitName : key,
+                  ...(primary === undefined ? {} : { primary }),
+                  ...(secondary === undefined ? {} : { secondary }),
+                });
               }
             } else if (isRecord(limits.rateLimits)) {
-              const name =
-                typeof limits.rateLimits.limitName === 'string'
-                  ? limits.rateLimits.limitName
-                  : 'ChatGPT';
-              buckets.push([name, limits.rateLimits]);
-            }
-
-            for (const [key, bucket] of buckets) {
-              const name = typeof bucket.limitName === 'string' ? bucket.limitName : key;
-              const language = languageRef.current;
-              const windows = [
-                formatLimitWindow(
-                  bucket.primary,
-                  zh ? '短期窗口' : 'Primary window',
-                  language,
-                ),
-                formatLimitWindow(
-                  bucket.secondary,
-                  zh ? '长期窗口' : 'Secondary window',
-                  language,
-                ),
-              ].filter((line): line is string => line !== undefined);
-              if (windows.length > 0) lines.push(`${name}\n${windows.join('\n')}`);
-            }
-
-            if (lines.length === 1) {
-              lines.push(
-                zh ? '当前没有可用的额度信息。' : 'No quota information is currently available.',
+              const primary = readLimitWindow(
+                limits.rateLimits.primary,
+                zh ? '短期窗口' : 'Primary window',
+                languageRef.current,
               );
+              const secondary = readLimitWindow(
+                limits.rateLimits.secondary,
+                zh ? '长期窗口' : 'Secondary window',
+                languageRef.current,
+              );
+              if (primary !== undefined || secondary !== undefined) {
+                buckets.push({
+                  name:
+                    typeof limits.rateLimits.limitName === 'string'
+                      ? limits.rateLimits.limitName
+                      : 'ChatGPT',
+                  ...(primary === undefined ? {} : { primary }),
+                  ...(secondary === undefined ? {} : { secondary }),
+                });
+              }
             }
-            appendSystem(lines.join('\n'));
+            const dashboard: TuiLimitDashboard = {
+              buckets,
+              ...(accountPlan === undefined ? {} : { plan: accountPlan }),
+            };
+            appendSystem(
+              zh ? 'ChatGPT 订阅额度' : 'ChatGPT plan quota',
+              'system',
+              'limit',
+              dashboard,
+            );
           } finally {
             await client.close();
           }
