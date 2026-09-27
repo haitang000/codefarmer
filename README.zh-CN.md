@@ -87,8 +87,8 @@ CI 请使用 `run --json`。
 “仅本次 / 本会话 / 当前工作区”授权；工作区授权保存在用户数据目录中，不会
 扩大现有工作区边界。`/help` 按会话、工作区、权限和调试分组显示常用命令。
 
-`init` 会在当前工作区生成带 JSON Schema 引用的
-`codefarmer.config.json`。如需引导式配置，可运行 `codefarmer setup`，
+`init` 会将工作区专属配置保存在 CodeFarmer 的系统用户配置目录中，不会放进项目。
+运行 `codefarmer config path` 可查看具体位置。如需引导式配置，可运行 `codefarmer setup`，
 它会交互式询问 Provider、模型、Base URL、推理强度和审批策略，并可在写入前测试
 所选 Provider 连接。工作区边界严格等于 `--cwd` 指定的目录，或
 CodeFarmer 启动时所在的目录；它不会自动扩大到上层 Git 仓库。
@@ -257,11 +257,14 @@ TUI 提供 `/skills`、`/skill <ref>` 和 `/skill off`。
 
 1. CLI 参数
 2. 环境变量
-3. 工作区 `codefarmer.config.json`
+3. 系统用户配置目录中的工作区专属配置
 4. 操作系统用户配置文件
 5. 内置默认值
 
-项目配置示例：
+为兼容旧版本，如果外部工作区配置不存在，仍会读取项目根目录中的
+`codefarmer.config.json`；之后的新配置写入系统用户配置目录。
+
+工作区配置示例：
 
 ```json
 {

@@ -213,9 +213,11 @@ describe('CodeFarmer CLI', () => {
     const result = await runCli(['--cwd', workspace, 'init'], workspace, environmentRoot);
 
     expect(result.code).toBe(0);
-    const written = JSON.parse(
-      await readFile(path.join(workspace, 'codefarmer.config.json'), 'utf8'),
-    ) as Record<string, unknown>;
+    const projectConfigPath = result.stdout.trim().replace(/^已创建 /u, '');
+    const written = JSON.parse(await readFile(projectConfigPath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
     expect(written).toEqual({
       $schema: 'https://unpkg.com/codefarmer@0.1.8/schemas/codefarmer.config.schema.json',
       provider: 'openai',
@@ -311,9 +313,11 @@ describe('CodeFarmer CLI', () => {
     );
 
     expect(result.code).toBe(0);
-    const written = JSON.parse(
-      await readFile(path.join(workspace, 'codefarmer.config.json'), 'utf8'),
-    ) as Record<string, unknown>;
+    const projectConfigPath = result.stdout.trim().replace(/^已更新 /u, '');
+    const written = JSON.parse(await readFile(projectConfigPath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
     expect(written).toMatchObject({
       provider: 'gemini',
       model: 'gemini-2.5-pro',

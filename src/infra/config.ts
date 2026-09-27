@@ -14,7 +14,7 @@ import type {
 } from '../types.js';
 import { findCustomEndpoint, isProviderId, providerPreset } from '../providers/catalog.js';
 import { ConfigError } from './errors.js';
-import { getAppPaths } from './paths.js';
+import { canonicalWorkspace, getAppPaths, workspaceHash } from './paths.js';
 import { fileExists, writeJsonAtomic } from './persistence.js';
 
 export const DEFAULT_IGNORED_PATHS = [
@@ -209,6 +209,7 @@ export interface LoadConfigOptions {
 export interface LoadedConfig {
   config: CodeFarmerConfig;
   projectConfigPath: string;
+  legacyProjectConfigPath?: string;
   userConfigPath: string;
   loadedProjectConfig: boolean;
   loadedUserConfig: boolean;
@@ -445,14 +446,27 @@ function validateMergedConfig(value: unknown): CodeFarmerConfig {
 export async function loadConfigDetails(options: LoadConfigOptions = {}): Promise<LoadedConfig> {
   const cwd = path.resolve(options.cwd ?? process.cwd());
   const appPaths = getAppPaths();
+  const workspace = await canonicalWorkspace(cwd);
   const projectConfigPath = path.resolve(
-    options.projectConfigPath ?? path.join(cwd, 'codefarmer.config.json'),
+    options.projectConfigPath ??
+      path.join(appPaths.config, 'workspaces', `${workspaceHash(workspace)}.json`),
   );
+  const legacyProjectConfigPath =
+    options.projectConfigPath === undefined
+      ? path.join(workspace, 'codefarmer.config.json')
+      : undefined;
   const userConfigPath = path.resolve(options.userConfigPath ?? appPaths.userConfigFile);
-  const [userConfig, projectConfig] = await Promise.all([
+  const [userConfig, currentProjectConfig] = await Promise.all([
     readConfigFile(userConfigPath),
     readConfigFile(projectConfigPath),
   ]);
+  // Continue reading configs created by older CodeFarmer versions. Any future
+  // writes go to the per-workspace file in the user's config directory.
+  const projectConfig =
+    currentProjectConfig ??
+    (legacyProjectConfigPath === undefined
+      ? undefined
+      : await readConfigFile(legacyProjectConfigPath));
   const userOverrides = withoutSchema(userConfig);
   const projectOverrides = withoutSchema(projectConfig);
   const environmentOverrides = configFromEnvironment(options.env);
@@ -488,10 +502,22 @@ export async function loadConfigDetails(options: LoadConfigOptions = {}): Promis
   return {
     config,
     projectConfigPath,
+    ...(legacyProjectConfigPath === undefined ? {} : { legacyProjectConfigPath }),
     userConfigPath,
     loadedProjectConfig: projectConfig !== undefined,
     loadedUserConfig: userConfig !== undefined,
   };
+}
+
+/** Read the active project config or its legacy workspace-root location for updates. */
+export async function readProjectConfigForUpdate(
+  details: LoadedConfig,
+): Promise<ConfigFile | undefined> {
+  const current = await readConfigFile(details.projectConfigPath);
+  if (current !== undefined) return current;
+  return details.legacyProjectConfigPath === undefined
+    ? undefined
+    : readConfigFile(details.legacyProjectConfigPath);
 }
 
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<CodeFarmerConfig> {

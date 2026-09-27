@@ -156,16 +156,18 @@ Effective configuration is resolved in this order, from highest to lowest:
 
 1. CLI flags
 2. `CODEFARMER_*` environment variables
-3. workspace `codefarmer.config.json`
+3. per-workspace config in the platform user configuration directory
 4. user `codefarmer.config.json`
 5. built-in defaults
 
 `OPENAI_API_KEY` is read directly from the process environment and is never a
 configuration property. Platform paths come from `env-paths` with the
-unsuffixed application name `codefarmer`: user configuration lives in its
-config directory, sessions and transactions under its data directory, and
-daily JSONL files in its log directory. Workspace-specific records are keyed
-by a hash of the canonical workspace path.
+unsuffixed application name `codefarmer`: user and per-workspace configuration
+live in its config directory, sessions and transactions under its data
+directory, and daily JSONL files in its log directory. Workspace-specific
+files are keyed by a hash of the canonical workspace path. A legacy
+`codefarmer.config.json` at the workspace root is read as a fallback for
+backward compatibility; new writes go to the user config directory.
 
 ## Skills
 

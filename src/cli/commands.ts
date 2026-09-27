@@ -1,6 +1,5 @@
 import { constants } from 'node:fs';
 import { access, writeFile } from 'node:fs/promises';
-import path from 'node:path';
 
 import {
   cancel,
@@ -38,6 +37,7 @@ import {
   endpointIdFromBaseURL,
   loadConfigDetails,
   providerDefaults,
+  readProjectConfigForUpdate,
   writeConfigFile,
   type ConfigFile,
 } from '../infra/config.js';
@@ -401,8 +401,9 @@ const SETUP_SCHEMA_URL = 'https://unpkg.com/codefarmer@0.1.8/schemas/codefarmer.
 
 export async function initAction(globalOptions: GlobalOptions, force = false): Promise<void> {
   const workspace = await canonicalWorkspace(globalOptions.cwd ?? process.cwd());
-  const projectConfigPath = path.join(workspace, 'codefarmer.config.json');
-  if ((await fileExists(projectConfigPath)) && !force) {
+  const details = await loadConfigDetails({ cwd: workspace });
+  const projectConfigPath = details.projectConfigPath;
+  if (details.loadedProjectConfig && !force) {
     throw new ConflictError(`配置已存在: ${projectConfigPath}；使用 --force 覆盖`);
   }
   const initial: ConfigFile = {
@@ -648,7 +649,7 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
 
   intro('CodeFarmer Setup');
 
-  if ((await fileExists(projectConfigPath)) && !force) {
+  if (details.loadedProjectConfig && !force) {
     const overwrite = await confirm({
       message: `检测到已有项目配置 ${projectConfigPath}，是否更新？（已保存的自定义端点与其他设置会保留）`,
       initialValue: false,
@@ -662,7 +663,7 @@ export async function setupAction(globalOptions: GlobalOptions, force = false): 
 
   // 读取现有项目配置以便合并，而不是整体覆盖：这样 setup 之后
   // customEndpoints 中已保存的 Provider 与语言等设置仍然保留。
-  const currentProject = (await readJsonFileIfExists<ConfigFile>(projectConfigPath)) ?? {};
+  const currentProject = (await readProjectConfigForUpdate(details)) ?? {};
 
   const selectedProvider = await select({
     message: 'AI Provider',
@@ -1215,7 +1216,9 @@ export async function languageAction(
     throw new ConfigError('语言必须是 en 或 zh-CN（也支持 zh、中文、English）。');
   }
   const target = project ? details.projectConfigPath : details.userConfigPath;
-  const current = (await readJsonFileIfExists<ConfigFile>(target)) ?? {};
+  const current = project
+    ? ((await readProjectConfigForUpdate(details)) ?? {})
+    : ((await readJsonFileIfExists<ConfigFile>(target)) ?? {});
   await writeConfigFile(target, { ...current, language });
   process.stdout.write(`已将语言设置为 ${language}（${target}）\n`);
 }
@@ -1247,7 +1250,9 @@ export async function configSetAction(
   }
   const details = await loadConfigDetails({ cwd: globalOptions.cwd ?? process.cwd() });
   const target = project ? details.projectConfigPath : details.userConfigPath;
-  const current = (await readJsonFileIfExists<ConfigFile>(target)) ?? {};
+  const current = project
+    ? ((await readProjectConfigForUpdate(details)) ?? {})
+    : ((await readJsonFileIfExists<ConfigFile>(target)) ?? {});
   const value = parseConfigValue(raw);
   if (key === 'provider') {
     if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
@@ -1303,6 +1308,12 @@ export async function configSetAction(
 export async function configPathAction(globalOptions: GlobalOptions): Promise<void> {
   const details = await loadConfigDetails({ cwd: globalOptions.cwd ?? process.cwd() });
   process.stdout.write(`user\t${details.userConfigPath}\nproject\t${details.projectConfigPath}\n`);
+  if (
+    details.legacyProjectConfigPath !== undefined &&
+    (await fileExists(details.legacyProjectConfigPath))
+  ) {
+    process.stdout.write(`legacy-project\t${details.legacyProjectConfigPath}\n`);
+  }
 }
 
 export async function modelsListAction(

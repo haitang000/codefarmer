@@ -110,13 +110,16 @@ using `pnpm install --frozen-lockfile`.
   `git_log`, `git_show`), except for explicitly confirmed `git push` commands
   through `run_command`; do not add other Git writes or shell-string execution
   without separate security design and review.
-- Config precedence: CLI flags > `CODEFARMER_*` env vars > workspace
-  `codefarmer.config.json` > user config > built-in defaults. Do not commit
+- Config precedence: CLI flags > `CODEFARMER_*` env vars > per-workspace config
+  in the platform user config directory > user config > built-in defaults.
+  The legacy workspace-root `codefarmer.config.json` is read as a fallback.
+  Do not commit
   `.env*`, `dist/`, `coverage/`, logs, session data, or undo snapshots
   (`.gitignore` covers these; `.env.example` stays readable).
 - Exit codes: 0 success, 1 agent/API/tool failure, 2 invalid args/config,
   3 approval rejected or no TTY, 4 authentication failure, 130 interrupted.
 - `app-hex.txt` at the repo root is a hex-dump artifact (not source); leave it
-  alone. `codefarmer.config.json` at the root is local project config.
+  alone. Workspace configs belong in the platform user config directory, not
+  in the repository.
 - See `docs/SECURITY.md` before enabling `--approval auto`: CodeFarmer's
   approval and path checks are not an OS-level sandbox.

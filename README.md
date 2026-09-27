@@ -94,8 +94,9 @@ approvals support one-time, current
 session, and current workspace grants. Workspace grants are stored under the
 user data directory and never expand the workspace boundary.
 
-`init` creates `codefarmer.config.json` in the current workspace with a JSON
-Schema reference. Prefer a guided flow? `codefarmer setup` walks through
+`init` creates a workspace-scoped configuration in CodeFarmer's platform user
+configuration directory, outside the workspace. Use `codefarmer config path`
+to see its location. Prefer a guided flow? `codefarmer setup` walks through
 provider, model, Base URL, reasoning effort, and approval policy interactively,
 and can test the selected provider connection before writing the file. The workspace boundary is
 exactly the `--cwd` value, or the
@@ -285,11 +286,15 @@ Configuration uses this precedence, with the first source winning:
 
 1. CLI options
 2. environment variables
-3. workspace `codefarmer.config.json`
+3. per-workspace configuration in the platform user configuration directory
 4. the platform user configuration file
 5. built-in defaults
 
-Example project configuration:
+Existing workspace-root `codefarmer.config.json` files are still read when no
+external workspace configuration exists. New configuration writes stay in
+the platform user configuration directory.
+
+Example workspace configuration:
 
 ```json
 {
